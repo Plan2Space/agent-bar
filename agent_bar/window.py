@@ -263,7 +263,9 @@ def queue_html(q) -> str:
     stale = f" <span style='color:#ffc233'>(desatualizado desde {hhmm(q.synced)}; erro: {esc(q.error)})</span>" if q.error else ""
     head = f"<b>PRs</b> {len(q.rows)} abertos · " + " · ".join(parts) + stale
     acts = [r for r in q.rows if r.state in ("pronto", "corrigir", "conflito", "ci")][:6]
-    lines = [f"&bull; <a href=\"{esc(r.url)}\" style='color:#8fb4ff'>#{r.number}</a> <span style='color:{QUEUE_LABEL[r.state][0]}'>{QUEUE_LABEL[r.state][1].format(s='')}</span> "
+    def link(r) -> str:                                                           # so abre links https://github.com/ (mesma lista de permissao do botao "PR atual")
+        return f"<a href=\"{esc(r.url)}\" style='color:#8fb4ff'>#{r.number}</a>" if r.url.startswith("https://github.com/") else f"#{r.number}"
+    lines = [f"&bull; {link(r)} <span style='color:{QUEUE_LABEL[r.state][0]}'>{QUEUE_LABEL[r.state][1].format(s='')}</span> "
              f"<span style='color:#9a9aa2'>{esc(r.title[:44])}</span>" for r in acts]
     return head + ("<br>" + "<br>".join(lines) if lines else "")
 

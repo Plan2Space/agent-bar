@@ -13,7 +13,7 @@ def main(argv: list[str] | None = None) -> int:
     ns = ap.parse_args(argv)
     if ns.once_json:
         from agent_bar import collectors as col
-        print(col.collect_snapshot().diagnostic())
+        print(col.collect_snapshot(claude_login=col.claude_login_state, codex_login=col.codex_login_state).diagnostic())
         return 0
     try:
         from PySide6.QtCore import QTimer

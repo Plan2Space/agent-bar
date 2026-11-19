@@ -427,3 +427,14 @@ def test_the_panel_explains_the_colors_and_marks_working_agents_with_a_glyph(gui
     legend = bar.details.legend.text().lower()
     assert "conectado" in legend and "desconectado" in legend and "logo animado" in legend and "trabalhando" in legend
     assert "&#10043;" in bar.details.agents.text()                                         # glifo de trabalho no lugar da bolinha azul
+
+
+def test_pr_links_are_rendered_only_for_github_urls():
+    from agent_bar import window as w
+    from agent_bar.models import PrQueue, PrRow
+    q = PrQueue(rows=[PrRow(1, "ok", "https://github.com/o/r/pull/1", "corrigir"), PrRow(2, "mau", "javascript:alert(1)", "corrigir"),
+                      PrRow(3, "file", "file:///C:/Windows/System32/calc.exe", "ci")], synced="2026-11-04T12:00:00Z")
+    html = w.queue_html(q)
+    assert 'href="https://github.com/o/r/pull/1"' in html
+    assert "javascript:" not in html and "file:///" not in html                              # nunca vira link clicavel
+    assert "#2" in html and "#3" in html                                                     # mas o PR continua listado, como texto

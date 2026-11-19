@@ -63,7 +63,7 @@ def default_gov_dir() -> Path:
     env = os.environ.get("AGENT_BAR_GOV_DIR")
     if env:
         return Path(env)
-    here = Path(__file__).resolve().parents[3]
+    here = Path(__file__).resolve().parents[1]                                       # raiz do repositorio (agent_bar/ fica na raiz)
     try:
         r = subprocess.run(["git", "rev-parse", "--git-common-dir"], cwd=here, capture_output=True, text=True, timeout=10, creationflags=NO_WINDOW)
         common = Path(r.stdout.strip())
