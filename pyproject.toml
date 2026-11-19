@@ -1,0 +1,26 @@
+[project]
+name = "agent-bar"
+version = "0.1.0"
+description = "Barra flutuante do Windows que observa Claude Code, Codex, GPT, o laco de revisao e o GitHub"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+gui = ["PySide6-Essentials>=6.7,<7.0"]
+dev = ["pytest>=8.3,<9.0", "ruff>=0.6", "PySide6-Essentials>=6.7,<7.0"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = [".venv", "venv", "runs", "__pycache__", "build", "dist", "*.egg-info"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["F401", "F811"]
