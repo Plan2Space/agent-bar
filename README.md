@@ -2,6 +2,8 @@
 
 Barra flutuante do Windows (PySide6) que mostra, num relance, se **Claude Code, Codex, GPT, a automação (laço de revisão / listener) e o GitHub** estão conectados, e quando um deles está **trabalhando**. É só observação: não faz merge, não faz push e não altera o que os agentes estão fazendo (a única ação é o botão de "dar andamento", abaixo, sempre com confirmação).
 
+> **Documentação completa:** [`docs/README.md`](docs/README.md): arquitetura, fontes de dados, regras exatas de cada estado, interface, fila de PRs, passo do Claude, segurança, testes, limitações/roadmap e [ADRs](docs/adr/README.md) (13 decisões), com diagramas Mermaid.
+
 ## Como ler a barra
 
 | Visual | Significa |
@@ -47,7 +49,6 @@ Requer Windows, Python 3.11+ e, para os estados reais, as CLIs `claude`, `codex`
 | `AGENT_BAR_ICONS` | pasta com logos próprios |
 | `AGENT_BAR_OBSERVE_ONLY=1` | desativa todos os controles (parar/reiniciar listener, dar andamento) |
 | `AGENT_BAR_DEMO=1` | usa uma fixture rotulada "DEMONSTRAÇÃO" (nunca confundir com dado real) |
-| `GH_BIN` | caminho do `gh`, se não estiver no PATH |
 
 ## Testes
 

@@ -1,6 +1,8 @@
 # Agent bar (FP-058)
 
-> Evolução FP-061: [SPEC Agent Bar 2.0](../specs/FP-061_agent_bar_control_center.md). O modo completo lê o Event Store em SQLite somente leitura; `AGENT_BAR_DEMO=1` rotula fixtures demonstrativas.
+> **Documento histórico (FP-058).** A referência atual e completa está em [`docs/README.md`](README.md). Este texto descreve a versão original da barra e pode divergir do comportamento atual (por exemplo: a semântica das cores, o botão de passo, a fila de PRs e o terminal embutido).
+>
+> Evolução FP-061: [SPEC Agent Bar 2.0](specs/FP-061_agent_bar_control_center.md). O modo completo lê o Event Store em SQLite somente leitura; `AGENT_BAR_DEMO=1` rotula fixtures demonstrativas.
 
 Barra flutuante do Windows que **observa** Claude Code, Codex CLI, o listener/orquestrador (FP-057/#589) e o GitHub.
 Painel de observabilidade e controle seguro, **nao** um segundo orquestrador.
