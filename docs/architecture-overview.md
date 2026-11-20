@@ -61,7 +61,7 @@ Solid arrows describe conceptual responsibilities; dotted arrows describe observ
 | Launch | `launchers/run_agent_bar.ps1` starts `python -m agent_bar.app` in the project environment | Desktop shortcut / installation is machine-local; repository presence alone does not prove one exists. |
 | Tests | `tests/test_agent_bar*.py` and fixtures | A green unit/offscreen test is not a verified Windows desktop E2E. |
 
-Source details: [README](../README.md), [Agent Bar guide](agent_bar.md), [FP-061 specification](specs/FP-061_agent_bar_control_center.md).
+Source details: [README](../README.md), [Agent Bar guide](agent_bar.md), [FP-061 specification](https://github.com/Plan2Space/engineering-specs/blob/40b76f9ce10ab7e9a51e2a1e03495a9cd1ba2b72/agent-bar/FP-061_agent_bar_control_center.md).
 
 ## 3. Responsibility boundaries
 

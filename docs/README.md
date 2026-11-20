@@ -51,5 +51,5 @@ flowchart LR
 ## Documentos históricos neste repositório
 
 - [`agent_bar.md`](agent_bar.md): documento original da FP-058 (barra do listener). Mantido por histórico; **a referência atual é esta pasta**.
-- [`specs/FP-061_agent_bar_control_center.md`](specs/FP-061_agent_bar_control_center.md): especificação da evolução FP-061 (central de observabilidade).
+- [`FP-061_agent_bar_control_center.md`](https://github.com/Plan2Space/engineering-specs/blob/40b76f9ce10ab7e9a51e2a1e03495a9cd1ba2b72/agent-bar/FP-061_agent_bar_control_center.md): especificação da evolução FP-061 (central de observabilidade).
 - [`reports/fp061/`](reports/fp061/README.md): evidência visual (capturas *offscreen* de fixture) da FP-061.

@@ -67,6 +67,30 @@ class PrRow:
     repo: str = ""                    # owner/name quando a fila cobre a org inteira
 
 
+@dataclass(frozen=True)
+class BoardItem:
+    task_id: str
+    title: str
+    status: str
+    ref: str                         # repo#n, ou "rascunho" para DraftIssue
+
+
+@dataclass
+class Board:
+    """Leitura do Project v2 NO MOMENTO da consulta. `error` preenchido => contagens None e itens vazios (nunca numero antigo)."""
+    org: str = ""
+    number: int = 0
+    board: str = "rebuild"
+    title: str | None = None
+    url: str | None = None
+    node_id: str | None = None
+    total: int | None = None
+    counts: dict[str, int | None] = field(default_factory=dict)
+    items: list[BoardItem] = field(default_factory=list)
+    error: str | None = "nao coletado"
+    synced: str | None = None
+
+
 @dataclass
 class PrQueue:
     """Fila de PRs abertos do repositorio. `error` preenchido = leitura falhou: a lista vazia NAO significa "sem PRs"."""
@@ -94,6 +118,7 @@ class Snapshot:
     pr_queue: PrQueue = field(default_factory=lambda: PrQueue(error="nao coletada"))
     runs: RunsView = field(default_factory=lambda: RunsView("sem_fonte", "nao coletado"))
     benchmark: BenchmarkStatus = field(default_factory=benchmark_status)
+    board: Board = field(default_factory=Board)
     pr: int | None = None
     pr_url: str | None = None
     mode: str = "indisponivel"                         # DRY_RUN | EXECUTE | indisponivel
@@ -137,6 +162,9 @@ class Snapshot:
                  f"executor: {self.executor_summary}",
                  "backlog: " + (", ".join(f"{k}={n(v)}" for k, v in self.backlog.items()) if self.backlog else "indisponivel")
                  + (f" (erro: {self.backlog_error})" if self.backlog_error else f" (sync {self.backlog_synced or 'nunca'})"),
+                 f"Project: {self.board.title or '?'} · {self.board.url or '?'} · {self.board.node_id or '?'}"
+                 + (" (LEGADO)" if self.board.board == "legacy" else "") + (f" · erro: {self.board.error}" if self.board.error else f" · {self.board.total} itens"),
+                 *[f"  {i.task_id or '-'} {i.status} {i.ref}" for i in self.board.items],
                  "PRs abertos: " + (f"indisponivel (erro: {self.pr_queue.error})" if self.pr_queue.error and not self.pr_queue.rows else
                                     ", ".join(f"{r.repo or '?'}#{r.number}={r.state}" for r in self.pr_queue.rows) or "nenhum")
                  + (f" (sync {self.pr_queue.synced})" if self.pr_queue.synced else ""),

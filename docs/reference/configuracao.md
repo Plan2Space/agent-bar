@@ -15,7 +15,13 @@ Tudo é opcional: sem nenhuma configuração a barra abre e mostra o que consegu
 | `AGENT_BAR_ICONS` | `%APPDATA%\agent_bar\icons` | pasta de logos próprios (`claude.png`, `codex.png`, `gpt.png`, `listener.png`, `github.png`) |
 | `AGENT_BAR_OBSERVE_ONLY` | desligado | com `1`, desativa **todos** os controles (parar/reiniciar listener, dar andamento, ▶) |
 | `AGENT_BAR_DEMO` | desligado | com `1`, rotula o EventStore lido como "DEMONSTRAÇÃO" |
+| `AGENT_BAR_BOARD` | `rebuild` | `rebuild` = Plan2Space Project #2 (`PVT_kwDOFV8G784BsjNn`). `legacy` = board antigo `GFCDOTA` Project #1, inteiro (org, número e colunas dele), marcado **LEGADO** na tela e nunca misturado com o rebuild |
+| `AGENT_BAR_ORG` | `Plan2Space` | org do GitHub da fila de PRs (todos os repos dela) e do Project. Nome fora da regra de login do GitHub é recusado e cai no padrão |
+| `AGENT_BAR_PROJECT` | `2` | número do Project (v2). Valor não inteiro cai no padrão, com aviso |
+| `AGENT_BAR_COLUMNS` | `Backlog,Ready,In Progress,Review,Blocked,Done` | colunas do board, em ordem. Status fora delas é contado à parte, não some |
 | `QT_QPA_PLATFORM` | do Qt | `offscreen` nos testes e na geração de capturas |
+
+O board é lido **no momento da consulta**: nome, URL, id, `Task ID` e `Status` de cada item, 100 por página até o fim. Falha de auth, falta de acesso, erro GraphQL ou resposta com menos itens que o `totalCount` aparecem como **INDISPONÍVEL** com o motivo. A barra nunca recorre a números antigos ou ao cache como fallback.
 
 > O `gh` e os CLIs `claude`/`codex` são achados **pelo PATH**. Não há variável para apontar outro caminho.
 

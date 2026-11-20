@@ -20,6 +20,8 @@ from typing import Callable
 from agent_bar.models import (
     PR_STATE_ORDER,
     AgentStatus,
+    Board,
+    BoardItem,
     Event,
     GroupedEvent,
     Level,
@@ -583,44 +585,81 @@ def recent_events(gov: Path, n: int = 200) -> list[Event]:
     return list(reversed(ev))
 
 
-GRAPHQL = ("query($after:String){organization(login:\"%s\"){projectV2(number:%d){items(first:100,after:$after){"
-           "pageInfo{hasNextPage endCursor} nodes{fieldValueByName(name:\"Status\"){... on ProjectV2ItemFieldSingleSelectValue{name}}}}}}}")
+BOARD_QUERY = ("query($after:String){organization(login:\"%s\"){projectV2(number:%d){id title url items(first:100,after:$after){"
+               "totalCount pageInfo{hasNextPage endCursor} nodes{"
+               "status:fieldValueByName(name:\"Status\"){... on ProjectV2ItemFieldSingleSelectValue{name}} "
+               "task:fieldValueByName(name:\"Task ID\"){... on ProjectV2ItemFieldTextValue{text}} "
+               "content{__typename ... on Issue{number title repository{nameWithOwner}} "
+               "... on PullRequest{number title repository{nameWithOwner}} ... on DraftIssue{title}}}}}}}")
+
+
+def _board_item(node: dict) -> BoardItem:
+    status = ((node.get("status") or {}).get("name")) or "(sem status)"
+    task = ((node.get("task") or {}).get("text")) or ""
+    c = node.get("content") or {}
+    if c.get("__typename") == "DraftIssue" or "number" not in c:
+        ref = "rascunho"
+    else:
+        ref = f"{str((c.get('repository') or {}).get('nameWithOwner') or '?').split('/')[-1]}#{c.get('number')}"
+    return BoardItem(task, str(c.get("title") or ""), status, ref)
+
+
+def collect_board(gh: Callable[[list[str]], tuple[int, str]] = run_gh, targets: Targets | None = None,
+                  now: dt.datetime | None = None, max_pages: int = 10) -> Board:
+    """O Project v2 selecionado NO MOMENTO da consulta: nome, URL, id, Task ID e Status de cada item, 100 por pagina ate o fim.
+    Qualquer falha (auth, sem acesso, GraphQL, resposta ilegivel, itens faltando) => `error` e contagens None. Nunca numero velho."""
+    t = targets or load_targets()
+    failed = Board(org=t.org, number=t.project, board=t.board, counts={k: None for k in t.columns})
+    meta: dict = {}
+    items: list[BoardItem] = []
+    total = None
+    after = None
+    for _ in range(max_pages):
+        args = ["api", "graphql", "-f", "query=" + BOARD_QUERY % (t.org, t.project)] + (["-f", f"after={after}"] if after else [])
+        rc, out = gh(args)
+        if rc != 0:
+            first = (out.splitlines() or ["sem saida"])[0]
+            hint = " (token sem escopo 'read:project'? rode: gh auth refresh -s read:project)" if "scope" in out.lower() else ""
+            failed.error = f"gh api graphql rc={rc}: {first[:160]}{hint}"
+            return failed
+        try:
+            data = json.loads(out)
+            if data.get("errors"):
+                failed.error = "GraphQL: " + str(data["errors"][0].get("message", "erro"))[:160]
+                return failed
+            proj = data["data"]["organization"]["projectV2"]
+            if proj is None:
+                failed.error = f"Project {t.org}/{t.project} nao encontrado ou sem acesso para este login"
+                return failed
+            meta = {"title": proj.get("title"), "url": proj.get("url"), "node_id": proj.get("id")}
+            page = proj["items"]
+            total = page.get("totalCount")
+            items += [_board_item(n) for n in page["nodes"] if isinstance(n, dict)]
+            if not page["pageInfo"]["hasNextPage"]:
+                break
+            after = page["pageInfo"]["endCursor"]
+        except (ValueError, TypeError, KeyError, AttributeError) as exc:
+            failed.error = f"resposta do GraphQL ilegivel: {type(exc).__name__}: {exc}"[:200]
+            return failed
+    else:
+        failed.error = f"Project com mais de {max_pages * 100} itens: contagem incompleta recusada"
+        return failed
+    if isinstance(total, int) and total != len(items):
+        failed.error = f"resposta incompleta: {len(items)} de {total} itens; contagem recusada"
+        return failed
+    counts: dict[str, int | None] = {k: 0 for k in t.columns}
+    for i in items:
+        counts[i.status] = (counts.get(i.status) or 0) + 1                  # status fora das colunas: aparece, nao some
+    return Board(org=t.org, number=t.project, board=t.board, total=len(items), counts=counts, items=items, error=None,
+                 synced=_now(now).strftime("%Y-%m-%dT%H:%M:%SZ"), **meta)
 
 
 def collect_backlog(gh: Callable[[list[str]], tuple[int, str]] = run_gh, owner: str = "Plan2Space", number: int = 2,
                     now: dt.datetime | None = None, max_pages: int = 10, columns: tuple[str, ...] = BACKLOG_COLUMNS
                     ) -> tuple[dict[str, int | None], str | None, str | None]:
-    """(contagens por coluna, erro tecnico especifico, sync ISO). Uma consulta GraphQL enxuta (so o campo Status, 100 itens/pagina:
-    custa ~1 ponto, ao contrario de `gh project item-list` que baixa corpo de todas as Issues). Falha => erro explicito, nunca numero."""
-    empty: dict[str, int | None] = {k: None for k in columns}
-    counts: dict[str, int] = {}
-    after = None
-    for _ in range(max_pages):
-        args = ["api", "graphql", "-f", "query=" + GRAPHQL % (owner, number)] + (["-f", f"after={after}"] if after else [])
-        rc, out = gh(args)
-        if rc != 0:
-            first = (out.splitlines() or ["sem saida"])[0]
-            hint = " (token sem escopo 'read:project'? rode: gh auth refresh -s read:project)" if "scope" in out.lower() else ""
-            return empty, f"gh api graphql rc={rc}: {first[:160]}{hint}", None
-        try:
-            data = json.loads(out)
-            if data.get("errors"):
-                return empty, "GraphQL: " + str(data["errors"][0].get("message", "erro"))[:160], None
-            items = data["data"]["organization"]["projectV2"]["items"]
-            for node in items["nodes"]:
-                fv = (node or {}).get("fieldValueByName") or {}
-                name = fv.get("name") or "(sem status)"
-                counts[name] = counts.get(name, 0) + 1
-            if not items["pageInfo"]["hasNextPage"]:
-                break
-            after = items["pageInfo"]["endCursor"]
-        except (ValueError, TypeError, KeyError, AttributeError) as exc:
-            return empty, f"resposta do GraphQL ilegivel: {type(exc).__name__}: {exc}"[:200], None
-    else:
-        return empty, f"Project com mais de {max_pages * 100} itens: contagem incompleta recusada", None
-    out: dict[str, int | None] = {k: counts.get(k, 0) for k in columns}
-    out.update({k: v for k, v in counts.items() if k not in columns and k != "(sem status)"})   # status fora das colunas: aparece, nao some
-    return out, None, _now(now).strftime("%Y-%m-%dT%H:%M:%SZ")
+    """(contagens por coluna, erro, sync ISO): visao resumida de `collect_board`. Itens sem status nao entram nas contagens."""
+    b = collect_board(gh, Targets(org=owner, project=number, columns=columns), now=now, max_pages=max_pages)
+    return {k: v for k, v in b.counts.items() if k != "(sem status)"}, b.error, b.synced
 
 
 PR_QUEUE_QUERY = ("query($owner:String!,$name:String!,$after:String){repository(owner:$owner,name:$name){pullRequests(states:OPEN,first:50,after:$after){"
@@ -731,13 +770,10 @@ def collect_snapshot(gov: Path | None = None, procs_fn=list_processes, task_fn=t
     pr = current_pr(bridge)
     fetch = lambda: collect_github(pr, gh)  # noqa: E731
     github, gx = cache.get(f"pr{pr}", fetch) if cache else fetch()
-    bfetch = lambda: collect_backlog(gh, owner=t.org, number=t.project, now=n, columns=t.columns)  # noqa: E731
-    counts, berr, bsync = backlog_cache.get("backlog", bfetch) if backlog_cache else bfetch()
-    if backlog_cache is not None:
-        if berr is None:
-            backlog_cache.last_good = (counts, bsync)
-        elif getattr(backlog_cache, "last_good", None):                         # erro agora, mas ha leitura anterior: mostra E sinaliza
-            counts, bsync = backlog_cache.last_good
+    bfetch = lambda: collect_board(gh, t, now=n)  # noqa: E731
+    board = backlog_cache.get(f"board:{t.org}/{t.project}", bfetch) if backlog_cache else bfetch()     # falha = erro na tela, sem numero antigo
+    counts = {k: v for k, v in board.counts.items() if k != "(sem status)"}
+    berr, bsync = board.error, board.synced
     qfetch = lambda: collect_org_pr_queue(gh, owner=t.org, now=n)  # noqa: E731
     pr_queue = queue_cache.get("pr_queue", qfetch) if queue_cache else qfetch()
     if queue_cache is not None:
@@ -759,7 +795,7 @@ def collect_snapshot(gov: Path | None = None, procs_fn=list_processes, task_fn=t
                     lock_status=lock_status(ex["lock_holder"], procs, ex["roots"]), last_error=ex["last_error"],
                     events=group_events(recent_events(g)), backlog=counts, backlog_error=berr, backlog_synced=bsync,
                     github_checks=gx.get("checks", "indisponivel"), executor_summary=summary, work=work, review_ref=ref,
-                    log_path=str(log) if log else None, observation=observation, pr_queue=pr_queue, runs=runs)
+                    log_path=str(log) if log else None, observation=observation, pr_queue=pr_queue, runs=runs, board=board)
 
 
 def _latest_log(gov: Path) -> Path | None:
