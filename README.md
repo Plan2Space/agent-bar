@@ -43,6 +43,8 @@ python -m venv .venv
 powershell -File launchers\run_agent_bar.ps1          # atalho para o mesmo
 ```
 
+Pelo Explorer, use um duplo clique em `launchers\AGENT-BAR.cmd`. Ele abre a barra com o `.venv` deste checkout e não abre uma segunda se já houver uma aberta. Os caminhos da máquina (EventStore, pasta `runs/` do motor) ficam em `launchers\local.cmd`, fora do git; o modelo é `launchers\local.example.cmd`. Para demonstrar o Sprint 00, siga [`docs/demo/S00_demo_script.md`](docs/demo/S00_demo_script.md).
+
 Requer Windows, Python 3.11+ e, para os estados reais, as CLIs `claude`, `codex` e `gh` no PATH.
 
 ## Configuração (variáveis de ambiente, todas opcionais)

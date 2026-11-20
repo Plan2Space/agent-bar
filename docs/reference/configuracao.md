@@ -15,6 +15,10 @@ Tudo é opcional: sem nenhuma configuração a barra abre e mostra o que consegu
 | `AGENT_BAR_ICONS` | `%APPDATA%\agent_bar\icons` | pasta de logos próprios (`claude.png`, `codex.png`, `gpt.png`, `listener.png`, `github.png`) |
 | `AGENT_BAR_OBSERVE_ONLY` | desligado | com `1`, desativa **todos** os controles (parar/reiniciar listener, dar andamento, ▶) |
 | `AGENT_BAR_DEMO` | desligado | com `1`, rotula o EventStore lido como "DEMONSTRAÇÃO" |
+| `AGENT_BAR_ORG` | `Plan2Space` | org do GitHub da fila de PRs (todos os repos dela) e do Project. Nome fora da regra de login do GitHub é recusado e cai no padrão |
+| `AGENT_BAR_PROJECT` | `2` | número do Project (v2) do backlog. Valor não inteiro cai no padrão, com aviso |
+| `AGENT_BAR_COLUMNS` | `Backlog,Ready,In Progress,Review,Blocked,Done` | colunas do backlog, em ordem. Status fora delas é contado à parte, não some |
+| `AGENT_BAR_RUNS_DIR` | (sem padrão: **SEM FONTE**) | pasta `runs/` do motor (`runs/<run_id>/manifest.json`, S00-02 C3/C10), lida para o card "Execuções do motor" |
 | `QT_QPA_PLATFORM` | do Qt | `offscreen` nos testes e na geração de capturas |
 
 > O `gh` e os CLIs `claude`/`codex` são achados **pelo PATH**. Não há variável para apontar outro caminho.
