@@ -10,6 +10,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--once-json", action="store_true", help="imprime o diagnostico da coleta e sai (sem GUI)")
     ap.add_argument("--screenshot", help="grava um PNG da barra (e do painel expandido) apos a 1a coleta e sai")
     ap.add_argument("--open-panel", action="store_true", help="abre o painel expandido ao iniciar (evidencia/teste)")
+    ap.add_argument("--full", action="store_true", help="com --screenshot: grava tambem a Central completa (ARQ_full.png)")
     ns = ap.parse_args(argv)
     if ns.once_json:
         from agent_bar import collectors as col
@@ -36,8 +37,17 @@ def main(argv: list[str] | None = None) -> int:
         def shot() -> None:
             bar.details.show()
             bar._sync_details()                                               # noqa: SLF001
-            QTimer.singleShot(400, lambda: (bar.grab().save(ns.screenshot), bar.details.grab().save(ns.screenshot.replace(".png", "_panel.png")),
-                                            bar.close_app()))
+            def save() -> None:
+                bar.grab().save(ns.screenshot)
+                bar.details.grab().save(ns.screenshot.replace(".png", "_panel.png"))
+                if ns.full:                                                   # Central completa: execucoes do motor, benchmark, EventStore
+                    bar.details.toggle_full_mode()
+                    QTimer.singleShot(400, lambda: (bar.details.grab().save(ns.screenshot.replace(".png", "_full.png")),
+                                                    bar.details.operations.grab().save(ns.screenshot.replace(".png", "_ops.png")),   # cards abaixo da dobra
+                                                    bar.close_app()))
+                else:
+                    bar.close_app()
+            QTimer.singleShot(400, save)
         QTimer.singleShot(7000, shot)
     return app.exec()
 
