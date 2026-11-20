@@ -1,0 +1,22 @@
+Agent bar snapshot 2026-11-20T23:08:09.483595+00:00
+Claude: Conectado - logado (claude.ai); 4 sessao(oes) interativa(s) viva(s) fora do orquestrador (pid 8988, 15768, 16688); app Desktop: 11 processo(s) auxiliar(es), nao sao execucao
+Codex: Limite de uso - PR #641 2742ab1: revisor suspenso ate o reset da conta; RATE_LIMITED: limite de uso da conta do revisor: ’ve hit your usage limit. Upgrade to Pro (https://c
+GPT: Indisponível - Nenhuma fonte de estado GPT contratada pelo Harness
+Listener: Desligado - tarefa: Ready
+GitHub: Conectado - login <usuario>; sem PR em andamento
+modo: modo indisponível
+trabalho: indisponivel
+PR atual: indisponivel
+review/SHA: indisponivel
+checks: sem PR
+heartbeat: indisponivel
+kill switch: inativo
+instancias do executor: 0
+lock: 38288 (pid 38288 NAO existe (lock velho; o SO libera o lock real))
+executor: indisponivel
+backlog: Ready=3, In Progress=15, GPT Review=10, Blocked=31, Done=29 (sync 2026-11-20T23:08:09Z)
+ultimo erro: nenhum observado
+log: E:\Claude\data\runs\fp060_lifecycle\gov\executor\review_5914522576_667_c667f077e8713d92d0f7337dd0d23ea33ad138ff.log
+Event Store: real (Event Store FP-060, leitura SQLite)
+fila: {'DLQ': 2, 'DONE': 281, 'PENDING': 2, 'RECORDED': 3, 'SUPERSEDED': 48}
+mensagens: Mensagens entre agentes indisponíveis: sem contrato persistido

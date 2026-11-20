@@ -8,6 +8,7 @@ Painel operacional somente leitura do agent-runtime. Mostra estado; não é font
 
 ## Escopo atual
 - `src/agent_bar/store_reader.py`: leitura do EventStore em modo `mode=ro`, com redação de credenciais. Portado do sketchup-mcp (PR #663, FP-060 MT-09).
+- Inventário funcional da UI (linha `develop`) e proposta de Mission Control: [`docs/audit/S00-07_inventario_agent_bar.md`](docs/audit/S00-07_inventario_agent_bar.md).
 - Não inclui ainda: resolução do caminho do banco por variável de ambiente, janela de UI, controles (pause, resume, kill switch).
 
 ## Fronteiras
