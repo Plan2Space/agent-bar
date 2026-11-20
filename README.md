@@ -59,7 +59,7 @@ $env:QT_QPA_PLATFORM = "offscreen"; .venv\Scripts\python -m pytest -q
 
 ## Origem e limites
 
-Extraído do repositório [GFCDOTA/sketchup-mcp](https://github.com/GFCDOTA/sketchup-mcp) (frentes FP-058 e FP-061). Veja `docs/agent_bar.md`, `docs/specs/FP-061_agent_bar_control_center.md` e as capturas de demonstração em `docs/reports/fp061/`.
+Extraído do repositório [GFCDOTA/sketchup-mcp](https://github.com/GFCDOTA/sketchup-mcp) (frentes FP-058 e FP-061). Veja `docs/agent_bar.md`, a [SPEC FP-061](https://github.com/Plan2Space/engineering-specs/blob/40b76f9ce10ab7e9a51e2a1e03495a9cd1ba2b72/agent-bar/FP-061_agent_bar_control_center.md) (no repo privado `Plan2Space/engineering-specs`, índice em `docs/specs/INDEX.md`) e as capturas de demonstração em `docs/reports/fp061/`.
 
 - **GPT**: ainda sem fonte de estado; aparece cinza ("sem integração").
 - **Mensagens entre agentes** (por exemplo, ChatGPT para Claude Code sem copiar e colar): ainda **não existem**; dependem de um contrato persistido e de uma API de comandos com autorização.
