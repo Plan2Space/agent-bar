@@ -5,16 +5,29 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "agent-bar"
 version = "0.1.0"
-description = "Agent Bar: read-only operational view over the agent-runtime store."
+description = "Agent Bar: barra do Windows que observa Claude Code, Codex, GPT, o laco de revisao, o GitHub e o EventStore do agent-runtime (somente leitura)"
 requires-python = ">=3.11"
 dependencies = []
 
 [project.optional-dependencies]
-dev = ["pytest>=8"]
+gui = ["PySide6-Essentials>=6.7,<7.0"]
+dev = ["pytest>=8.3,<9.0", "ruff>=0.6", "PySide6-Essentials>=6.7,<7.0"]
 
 [tool.setuptools.packages.find]
-where = ["src"]
+include = ["agent_bar*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["src"]
+pythonpath = ["."]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = [".venv", "venv", "runs", "__pycache__", "build", "dist", "*.egg-info"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["F401", "F811"]

@@ -15,7 +15,7 @@ from agent_bar import store_reader as sr
 
 REPO = Path(__file__).resolve().parents[1]
 CONTRACT = (REPO / "docs" / "contracts" / "READER_CONTRACT.md").read_text(encoding="utf-8")
-SOURCE = (REPO / "src" / "agent_bar" / "store_reader.py").read_text(encoding="utf-8")
+SOURCE = (REPO / "agent_bar" / "store_reader.py").read_text(encoding="utf-8")
 
 
 def documented_columns() -> dict[str, set[str]]:

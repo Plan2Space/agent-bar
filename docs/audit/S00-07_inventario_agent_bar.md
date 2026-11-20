@@ -113,3 +113,14 @@ Legenda: **OK** = visto funcionando com dado real · **OK\*** = funciona, com d�
 | **M4 — aprovação humana** | Tela de aprovação presa ao **HEAD exato** (SHA mostrado e conferido no momento do clique; HEAD mudou = aprovação invalidada). A ação passa pelo GitHub (review) ou pela API do runtime, **nunca** por escrita no EventStore | critérios de `agent-runtime#58` (parte UI) | S00-14 (UI) |
 
 Permanece **fora** do Mission Control: merge pela barra (ADR-0001), terminal interativo, canal ChatGPT→Claude (sem contrato).
+
+## 6. M0 executado (`feat/s00-07-unify-develop`)
+
+- `develop` entrou no `main` com merge (histórico preservado). O leitor `store_reader.py` foi de `src/agent_bar/` para `agent_bar/`: agora há **um pacote só**.
+- **D1 resolvido:** `[tool.setuptools.packages.find] include = ["agent_bar*"]`; `pip install -e .[dev]` funciona num venv limpo.
+- **D2 resolvido:** o teste dependente da worktree foi trocado por dois testes que descrevem o comportamento real: checkout principal via `git --git-common-dir` e fallback sem git.
+- **D7 resolvido:** `--once-json` força UTF-8 (`test_once_json_writes_utf8_even_when_stdout_is_cp1252`, vermelho antes do fix).
+- **D10 resolvido:** a CI roda em `windows-latest` (3.11 e 3.12) com `QT_QPA_PLATFORM=offscreen`, `ruff` e a suíte inteira.
+- **D9 parcial:** os dois leitores estão no mesmo pacote e testados juntos; fundir as duas projeções fica para M2.
+- Suíte local no HEAD do M0: **160 passed**; `ruff` limpo. Smoke real com a configuração do atalho: `--once-json` em UTF-8 e Central completa igual à captura `06`.
+- M0b (repontar o atalho da área de trabalho) continua aguardando o OK do Felipe.

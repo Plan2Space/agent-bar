@@ -10,11 +10,15 @@ permissions:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    # A UI e Windows-only (CIM/PowerShell, Win32). Os testes de GUI rodam com Qt offscreen.
+    runs-on: windows-latest
     strategy:
       fail-fast: false
       matrix:
         python-version: ["3.11", "3.12"]
+    env:
+      QT_QPA_PLATFORM: offscreen
+      PYTHONUTF8: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -22,5 +26,8 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - name: Install
         run: python -m pip install -e ".[dev]"
+      - name: Lint
+        run: python -m ruff check .
       - name: Test
         run: python -m pytest -q
+        timeout-minutes: 15
