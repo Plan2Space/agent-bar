@@ -254,6 +254,24 @@ def age_text(s: int) -> str:
     return f"{s // 86400}d" if s >= 86400 else f"{s // 3600}h" if s >= 3600 else f"{s // 60}min" if s >= 60 else f"{s}s"
 
 
+def board_html(b) -> str:
+    """Project selecionado (nome, link, id), contagens e itens lidos AGORA. Erro = INDISPONIVEL com o motivo, sem numero nenhum."""
+    tag = " <span style='color:#ffc233'><b>LEGADO</b></span>" if b.board == "legacy" else ""
+    url = b.url or f"https://github.com/orgs/{b.org}/projects/{b.number}"
+    name = esc(b.title or f"{b.org} Project #{b.number}")
+    head = (f"<b>Board</b>{tag} <a href=\"{esc(url)}\" style='color:#8fb4ff'>{name}</a> "
+            f"<span style='color:#6d6d75'>#{b.number} · {esc(b.node_id or 'id ?')}</span>")
+    if b.error:
+        return head + f"<br><b style='color:#ff6b6d'>INDISPONÍVEL</b> <span style='color:#ff9a9b'>{esc(b.error)}</span>"
+    cols = " &middot; ".join(f"{esc(k)} <b>{v}</b>" for k, v in b.counts.items())
+    order = {k: i for i, k in enumerate(b.counts)}
+    rows = sorted(b.items, key=lambda i: (order.get(i.status, 99), i.task_id or "~", i.ref))
+    items = "<br>".join(f"&bull; <b>{esc(i.task_id or '-')}</b> <span style='color:#9a9aa2'>{esc(i.status)} · {esc(i.ref)}</span>" for i in rows[:30])
+    more = f"<br><span style='color:#6d6d75'>+{len(rows) - 30} itens</span>" if len(rows) > 30 else ""
+    return (head + f"<br>{cols} <span style='color:#6d6d75'>({b.total} itens · lido {hhmm(b.synced)})</span>"
+            + (f"<br>{items}{more}" if items else ""))
+
+
 def queue_html(q) -> str:
     """Fila de PRs: contagens por situacao, os que pedem acao com link e o erro explicito quando a leitura falha (nunca um 0 inventado)."""
     if q.error and not q.rows:
@@ -383,6 +401,8 @@ class Details(QWidget):
         self.queue.setTextFormat(Qt.TextFormat.RichText)
         self.queue.setWordWrap(True)
         self.queue.setOpenExternalLinks(True)                    # links dos PRs abrem no navegador
+        self.backlog.setOpenExternalLinks(True)                  # link do Project selecionado
+        self.backlog.setTextFormat(Qt.TextFormat.RichText)
         self.queue.setStyleSheet("color:#e6e6e6;font-size:11px;padding:4px 0")
         lay.addWidget(self.queue)
         self.terminal_title = QLabel("<b>Terminal do passo</b> <span style='color:#6d6d75'>(somente leitura; &quot;Parar passo&quot; interrompe)</span>")
@@ -593,15 +613,7 @@ class Details(QWidget):
                             f"{'?' if s.concurrent_instances is None else s.concurrent_instances}<br>lock: {esc(s.lock_status)}<br>"
                             f"executor: {esc(s.executor_summary)}{err}")
         self.queue.setText(queue_html(s.pr_queue))
-        known = any(v is not None for v in s.backlog.values())
-        cols = " &middot; ".join(f"{k} <b>{'?' if v is None else v}</b>" for k, v in s.backlog.items())
-        if s.backlog_error and known:
-            self.backlog.setText(f"<b>Backlog</b> {cols} <span style='color:#ffc233'>(desatualizado desde {hhmm(s.backlog_synced)})</span>"
-                                 f"<br><span style='color:#ff9a9b'>erro: {esc(s.backlog_error)}</span>")
-        elif s.backlog_error:
-            self.backlog.setText(f"<b>Backlog</b> <span style='color:#ff9a9b'>erro: {esc(s.backlog_error)}</span>")
-        else:
-            self.backlog.setText(f"<b>Backlog</b> {cols} <span style='color:#6d6d75'>(sync {hhmm(s.backlog_synced)})</span>")
+        self.backlog.setText(board_html(s.board))
         top = s.events[0].last_at if s.events else None
         self.events.clear()
         for e in s.events[:20]:

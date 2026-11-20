@@ -224,8 +224,8 @@ def test_snapshot_end_to_end_with_fakes_and_diagnostic_has_no_secrets(tmp_path):
 
 # ------------------------------------------------------------------------------------------------------------- backlog
 def gql(counts, more=False, cursor=None):
-    nodes = [{"fieldValueByName": {"name": k}} for k, n in counts.items() for _ in range(n)]
-    nodes.append({"fieldValueByName": None})                                      # item sem status
+    nodes = [{"status": {"name": k}} for k, n in counts.items() for _ in range(n)]
+    nodes.append({"status": None})                                                # item sem status
     return json.dumps({"data": {"organization": {"projectV2": {"items": {
         "pageInfo": {"hasNextPage": more, "endCursor": cursor}, "nodes": nodes}}}}})
 
@@ -262,7 +262,8 @@ def test_backlog_error_is_specific_never_a_bare_indisponivel():
     assert "Could not resolve" in err
 
 
-def test_snapshot_keeps_the_last_good_backlog_but_flags_the_error():
+def test_snapshot_shows_the_backlog_error_and_never_the_last_good_numbers():
+    # Mudou de proposito (pedido do Felipe, S00-13): falha na leitura do board = erro e indisponivel, sem numero antigo/cache.
     cache = col.GithubCache(ttl_s=0)
     ok = {"state": "good"}
 
@@ -280,7 +281,7 @@ def test_snapshot_keeps_the_last_good_backlog_but_flags_the_error():
         g = gov(Path(d))
         s2 = col.collect_snapshot(g, procs_fn=lambda: LISTENER_OK, task_fn=lambda: "Running", gh=gh, backlog_cache=cache, now=NOW)
     assert s1.backlog["Ready"] == 7 and s1.backlog_error is None
-    assert s2.backlog["Ready"] == 7 and "rate limit" in s2.backlog_error and s2.backlog_synced == s1.backlog_synced
+    assert s2.backlog["Ready"] is None and "rate limit" in s2.backlog_error and s2.backlog_synced is None
 
 
 # -------------------------------------------------------------------------------------------------------- historico

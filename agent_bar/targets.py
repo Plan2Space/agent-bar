@@ -13,6 +13,7 @@ from dataclasses import dataclass
 DEFAULT_ORG = "Plan2Space"
 DEFAULT_PROJECT = 2
 DEFAULT_COLUMNS = ("Backlog", "Ready", "In Progress", "Review", "Blocked", "Done")
+LEGACY = ("GFCDOTA", 1, ("Ready", "In Progress", "GPT Review", "Blocked", "Done"))   # board antigo: SO com AGENT_BAR_BOARD=legacy
 _ORG_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$")    # regra de login do GitHub: entra numa consulta GraphQL
 
 
@@ -22,6 +23,7 @@ class Targets:
     project: int = DEFAULT_PROJECT
     columns: tuple[str, ...] = DEFAULT_COLUMNS
     warning: str = ""
+    board: str = "rebuild"                       # rebuild (padrao) | legacy (selecao explicita; a UI marca LEGADO)
 
     @property
     def org_url(self) -> str:
@@ -35,6 +37,12 @@ class Targets:
 def load_targets(env: Mapping[str, str] | None = None) -> Targets:
     e = os.environ if env is None else env
     warnings: list[str] = []
+    choice = (e.get("AGENT_BAR_BOARD") or "").strip().lower() or "rebuild"
+    if choice == "legacy":                                                   # board antigo inteiro (org, numero e colunas dele), nunca misturado
+        org, number, cols = LEGACY
+        return Targets(org=org, project=number, columns=cols, board="legacy")
+    if choice != "rebuild":
+        warnings.append(f"AGENT_BAR_BOARD invalido ({choice[:20]!r}); usando rebuild")
     org = (e.get("AGENT_BAR_ORG") or "").strip() or DEFAULT_ORG
     if not _ORG_RE.match(org):
         warnings.append(f"AGENT_BAR_ORG invalido ({org[:40]!r}); usando {DEFAULT_ORG}")
