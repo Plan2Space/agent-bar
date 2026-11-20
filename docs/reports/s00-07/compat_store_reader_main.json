@@ -1,0 +1,35 @@
+{
+ "state": "ok",
+ "outbox": {
+  "counts": {},
+  "zombies": 0,
+  "retries": 0,
+  "dlq": []
+ },
+ "counts": {
+  "RUNNING": 1,
+  "DLQ": 1,
+  "RECORDED": 1
+ },
+ "backoff": 0,
+ "live_leases": [
+  {
+   "key": "compat-s00-07-a",
+   "owner": "compat-owner",
+   "seconds_left": 575
+  }
+ ],
+ "zombies": 0,
+ "dlq": [
+  {
+   "id": 2,
+   "key": "compat-s00-07-b",
+   "error": "COMPAT: falha sintetica para exercitar DLQ"
+  }
+ ],
+ "retries": 0,
+ "last_error": {
+  "key": "compat-s00-07-b",
+  "error": "COMPAT: falha sintetica para exercitar DLQ"
+ }
+}

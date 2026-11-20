@@ -1,0 +1,22 @@
+Agent bar snapshot 2026-11-20T23:01:57.149263+00:00
+Claude: Conectado - logado (claude.ai); 4 sessao(oes) interativa(s) viva(s) fora do orquestrador (pid 8988, 30888, 15768); app Desktop: 10 processo(s) auxiliar(es), nao sao execucao
+Codex: Analise manual pid 20064 - fora do orquestrador, ha 1716s; revisor automatico NAO operacional (E2E Claude<->Codex nao comprovado) | cmd: "C:\Program Files\WindowsApps\OpenAI.Codex_26.1117.3838.0_x64__2p2nqsd0c76g0\app\resources\codex.exe" -c features.prefe… | inicio: 2026-11-20T22:33:20.3964260Z
+GPT: Indisponível - Nenhuma fonte de estado GPT contratada pelo Harness
+Listener: Desligado - tarefa: Ready
+GitHub: Conectado - login <usuario>; sem PR em andamento
+modo: modo indisponível
+trabalho: indisponivel
+PR atual: indisponivel
+review/SHA: indisponivel
+checks: sem PR
+heartbeat: indisponivel
+kill switch: indisponivel
+instancias do executor: 0
+lock: indisponivel (sem lock (ninguem consome a fila))
+executor: indisponivel
+backlog: Ready=3, In Progress=15, GPT Review=10, Blocked=31, Done=29 (sync 2026-11-20T23:01:57Z)
+ultimo erro: nenhum observado
+log: indisponivel
+Event Store: indisponível (Event Store não encontrado)
+fila: {}
+mensagens: Mensagens entre agentes indisponíveis: sem contrato persistido
