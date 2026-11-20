@@ -69,7 +69,7 @@ flowchart LR
 | 7 | **Invalidar o cache de login em "Atualizar"** | refletir um login recém-feito sem esperar o TTL | nenhuma |
 | 8 | **Notificação de "limite de uso" com a hora do reset** | avisar quando o Codex volta | ler a hora do reset do log do laço |
 
-> O item 5 é a motivação original da FP-061 ("Agent Bar / Taskbar"): ver [`specs/FP-061_agent_bar_control_center.md`](specs/FP-061_agent_bar_control_center.md). Ele está **fora** do que a barra faz hoje.
+> O item 5 é a motivação original da FP-061 ("Agent Bar / Taskbar"): ver [`FP-061_agent_bar_control_center.md`](https://github.com/Plan2Space/engineering-specs/blob/40b76f9ce10ab7e9a51e2a1e03495a9cd1ba2b72/agent-bar/FP-061_agent_bar_control_center.md). Ele está **fora** do que a barra faz hoje.
 
 ## Como propor mudanças
 Toda decisão estrutural deve virar um [ADR](adr/README.md). Comportamento novo precisa de teste (red → green) e de atualização da página de referência correspondente.
