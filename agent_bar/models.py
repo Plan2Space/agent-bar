@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 
 from agent_bar.observability import Observation
+from agent_bar.runs import BenchmarkStatus, RunsView, benchmark_status
 
 
 class Level(str, Enum):
@@ -91,6 +92,8 @@ class Snapshot:
         "GPT", Level.GRAY, "Indisponível", "Nenhuma fonte de estado GPT contratada pelo Harness"))
     observation: Observation = field(default_factory=Observation)
     pr_queue: PrQueue = field(default_factory=lambda: PrQueue(error="nao coletada"))
+    runs: RunsView = field(default_factory=lambda: RunsView("sem_fonte", "nao coletado"))
+    benchmark: BenchmarkStatus = field(default_factory=benchmark_status)
     pr: int | None = None
     pr_url: str | None = None
     mode: str = "indisponivel"                         # DRY_RUN | EXECUTE | indisponivel
@@ -141,5 +144,9 @@ class Snapshot:
         rows += [f"  {e.last_at} {e.action} {e.pr_label()} x{e.count} {e.reason}".rstrip() for e in self.events[:10]]
         rows += [f"Event Store: {self.observation.source} ({self.observation.reason})",
                  f"fila: {self.observation.counts}",
-                 f"mensagens: {self.observation.messages_status}"]
+                 f"mensagens: {self.observation.messages_status}",
+                 f"execucoes do motor: {self.runs.state} ({self.runs.reason})"]
+        rows += [f"  {r.run_id} {r.status} verdict={r.verdict or 'sem relatorio'} visual={r.visual_verdict or '?'} HEAD={r.engine_commit[:12] or '?'}"
+                 + (f" problemas: {'; '.join(r.problems)}" if r.problems else " evidencia conferida (sha256)") for r in self.runs.runs[:5]]
+        rows += [f"benchmark: {self.benchmark.state} ({self.benchmark.reason})"]
         return "\n".join(rows)

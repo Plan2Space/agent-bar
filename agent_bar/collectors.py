@@ -750,13 +750,16 @@ def collect_snapshot(gov: Path | None = None, procs_fn=list_processes, task_fn=t
     from agent_bar.observability import collect_observation
 
     observation = collect_observation(g, now=n.timestamp())
+    from agent_bar.runs import collect_runs, runs_dir_from_env
+
+    runs = collect_runs(runs_dir_from_env())
     return Snapshot(at=n.isoformat(), claude=claude, codex=codex, listener=listener, github=github, pr=pr,
                     pr_url=gx.get("pr_url"), mode=ex["mode"], heartbeat_age_s=ex["heartbeat_age_s"], kill_switch=ex["kill_switch"],
                     concurrent_instances=ex["concurrent_instances"], lock_holder=ex["lock_holder"],
                     lock_status=lock_status(ex["lock_holder"], procs, ex["roots"]), last_error=ex["last_error"],
                     events=group_events(recent_events(g)), backlog=counts, backlog_error=berr, backlog_synced=bsync,
                     github_checks=gx.get("checks", "indisponivel"), executor_summary=summary, work=work, review_ref=ref,
-                    log_path=str(log) if log else None, observation=observation, pr_queue=pr_queue)
+                    log_path=str(log) if log else None, observation=observation, pr_queue=pr_queue, runs=runs)
 
 
 def _latest_log(gov: Path) -> Path | None:

@@ -6,9 +6,19 @@ import html
 import time
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QGridLayout, QGroupBox, QLabel, QTextEdit, QVBoxLayout, QWidget
+from PySide6.QtGui import QPixmap
+from PySide6.QtWidgets import (
+    QGridLayout,
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QTextEdit,
+    QVBoxLayout,
+    QWidget,
+)
 
 from agent_bar.observability import Observation
+from agent_bar.runs import BenchmarkStatus, RunsView
 
 
 def _time(epoch: float) -> str:
@@ -64,6 +74,81 @@ class OperationsView(QWidget):
         self.terminal.setStyleSheet("background:#11151c;color:#b8d7c8;border:0;font:11px Consolas")
         terminal_layout.addWidget(self.terminal)
         grid.addWidget(terminal_box, 4, 0, 1, 2)
+        runs_box = self._box("Execuções do motor · runs/<run_id>/ (manifest, relatórios, preview)")
+        runs_row = QHBoxLayout()
+        runs_box.layout().addLayout(runs_row)
+        self.cards["runs"] = self._label("Não coletado")
+        self.cards["runs"].setOpenExternalLinks(True)
+        runs_row.addWidget(self.cards["runs"], 3)
+        preview_col = QVBoxLayout()
+        self.preview = QLabel()
+        self.preview.setFixedSize(240, 160)
+        self.preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.preview.setStyleSheet("background:#11151c;border:1px solid #323947;color:#9aa5b5;font-size:11px")
+        self.preview_caption = self._label("")
+        preview_col.addWidget(self.preview)
+        preview_col.addWidget(self.preview_caption)
+        runs_row.addLayout(preview_col, 2)
+        grid.addWidget(runs_box, 5, 0, 1, 2)
+        bench_box = self._box("Benchmark Claude | Qwen | Llama")
+        self.cards["benchmark"] = self._label("Não coletado")
+        bench_box.layout().addWidget(self.cards["benchmark"])
+        grid.addWidget(bench_box, 6, 0, 1, 2)
+
+    @staticmethod
+    def _box(title: str) -> QGroupBox:
+        box = QGroupBox(title)
+        box.setStyleSheet("QGroupBox{color:#aeb5c3;background:#20242d;border:1px solid #323947;"
+                          "border-radius:10px;margin-top:9px;padding-top:8px;font-size:11px;font-weight:600}"
+                          "QGroupBox::title{subcontrol-origin:margin;left:10px;padding:0 5px}")
+        QVBoxLayout(box)
+        return box
+
+    @staticmethod
+    def _label(text: str) -> QLabel:
+        label = QLabel(text)
+        label.setWordWrap(True)
+        label.setTextFormat(Qt.TextFormat.RichText)
+        label.setStyleSheet("color:#e0e5ef;font-size:11px;line-height:1.3")
+        return label
+
+    def update_runs(self, v: RunsView, bench: BenchmarkStatus) -> None:
+        """Só o que está em disco e confere com o manifest. Sem fonte/sem dados/sem evidência ficam escritos, nunca omitidos."""
+        cols = " | ".join(f"<b>{_clean(c.agent)}</b>: sem dados" if c.result is None else f"<b>{_clean(c.agent)}</b>: lido" for c in bench.columns)
+        self.cards["benchmark"].setText(f"{cols}<br><span style='color:#9aa5b5'>{_clean(bench.reason)}</span>")
+        first_preview = next((r for r in v.runs if r.preview_path is not None), None)
+        if first_preview is None:
+            self.preview.clear()
+            self.preview.setText("sem imagem")
+            self.preview_caption.setText("Nenhum preview com sha256 conferido")
+        else:
+            pix = QPixmap(str(first_preview.preview_path))
+            if pix.isNull():
+                self.preview.clear()
+                self.preview.setText("preview ilegível")
+                self.preview_caption.setText(_clean(first_preview.run_id))
+            else:
+                self.preview.setPixmap(pix.scaled(self.preview.size(), Qt.AspectRatioMode.KeepAspectRatio,
+                                                  Qt.TransformationMode.SmoothTransformation))
+                self.preview_caption.setText(f"{_clean(first_preview.run_id)} · HEAD {_clean(first_preview.engine_commit[:12])}"
+                                             f" · <a href=\"{first_preview.preview_path.as_uri()}\" style='color:#8fb4ff'>abrir</a>")
+                self.preview_caption.setOpenExternalLinks(True)
+        if v.state != "lido":
+            tag = "SEM FONTE" if v.state == "sem_fonte" else "SEM DADOS"
+            self.cards["runs"].setText(f"<b>{tag}</b><br>{_clean(v.reason)}")
+            return
+        rows = [f"<span style='color:#9aa5b5'>{_clean(v.reason)} · lido não comprova produção</span>"]
+        for r in v.runs[:6]:
+            color = "#3ddc84" if r.verdict == "PASS" and not r.problems else "#ff6b6d" if r.verdict in ("FAIL", "BLOCKED") or r.status not in ("OK", "?") else "#ffc233"
+            links = " ".join(f"<a href=\"{path.as_uri()}\" style='color:#8fb4ff'>{_clean(name)}</a>" for name, path in r.report_paths.items())
+            dur = "" if r.duration_s is None else f" · {r.duration_s}s"
+            steps = ", ".join(f"{_clean(st.name)} {_clean(st.status)}" for st in r.steps[:7])
+            rows.append(f"<b>{_clean(r.run_id)}</b> · {_clean(r.status)} · <span style='color:{color}'><b>{_clean(r.verdict or 'sem relatório')}</b></span>"
+                        f" · visual {_clean(r.visual_verdict or '?')}<br>&nbsp;&nbsp;HEAD {_clean(r.engine_repo)}@{_clean(r.engine_commit[:12] or '?')}"
+                        f"{dur} · {steps}<br>&nbsp;&nbsp;{links or 'nenhum arquivo conferido'}")
+            if r.problems:
+                rows.append("&nbsp;&nbsp;<span style='color:#ff9a9b'>sem evidência / problema: " + _clean("; ".join(r.problems)[:400]) + "</span>")
+        self.cards["runs"].setText("<br>".join(rows))
 
     def update_observation(self, o: Observation) -> None:
         if o.source not in ("lido", "demonstração"):
