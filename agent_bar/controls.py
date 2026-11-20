@@ -15,9 +15,11 @@ from typing import Callable
 
 from agent_bar import collectors as col
 from agent_bar.models import Snapshot
+from agent_bar.targets import load_targets
 
-REPO_URL = "https://github.com/GFCDOTA/sketchup-mcp"
-PROJECT_URL = "https://github.com/orgs/GFCDOTA/projects/1"
+_TARGETS = load_targets()
+REPO_URL = _TARGETS.org_url                       # botao "Repositorio": a org (a fila cobre todos os repos dela)
+PROJECT_URL = _TARGETS.project_url
 
 
 @dataclass(frozen=True)

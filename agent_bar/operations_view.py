@@ -66,7 +66,7 @@ class OperationsView(QWidget):
         grid.addWidget(terminal_box, 4, 0, 1, 2)
 
     def update_observation(self, o: Observation) -> None:
-        if o.source not in ("real", "demonstração"):
+        if o.source not in ("lido", "demonstração"):
             self.cards["timeline"].setText(f"<b>INDISPONÍVEL</b><br>{_clean(o.reason)}")
             for key in ("pipeline", "tasks", "workers", "failures", "metrics"):
                 self.cards[key].setText("Indisponível · Event Store não observado")

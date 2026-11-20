@@ -27,7 +27,7 @@ def test_read_only_projection_uses_existing_store_and_bounded_log(tmp_path):
     gov, path, task_id = fixture_store(tmp_path)
     before = path.stat().st_mtime_ns
     o = collect_observation(gov, now=1_800_000_010.0)
-    assert o.source == "real" and o.counts["PENDING"] == 1
+    assert o.source == "lido" and o.counts["PENDING"] == 1
     assert o.tasks[0].event_id == task_id and o.tasks[0].parent_event_id is not None
     assert o.timeline[0].event_type == "REVIEW_REQUESTED"
     assert o.pipeline[0].job_id == "pr:17"
@@ -105,7 +105,8 @@ def test_full_view_renders_observed_facts_and_unavailable_channels(gui):
     assert "pr:17" in cards["pipeline"].text()
     assert "indisponíveis" in cards["messages"].text()
     assert "observed result" in bar.details.operations.terminal.toPlainText()
-    assert "REAL" in bar.details.overview.text()
+    assert "LIDO" in bar.details.overview.text() and "REAL" not in bar.details.overview.text()
+    assert "lido não comprova produção" in bar.details.overview.text()
 
 
 def test_observe_only_guards_legacy_control_actions(gui, monkeypatch):

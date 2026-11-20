@@ -250,6 +250,10 @@ QUEUE_LABEL = {"pronto": ("#3ddc84", "pronto{s} para você mergear"), "corrigir"
                "ci": ("#ff6b6d", "com CI falhando"), "aguarda": ("#8fb4ff", "aguardando revisão"), "rascunho": ("#8a8f98", "rascunho")}
 
 
+def age_text(s: int) -> str:
+    return f"{s // 86400}d" if s >= 86400 else f"{s // 3600}h" if s >= 3600 else f"{s // 60}min" if s >= 60 else f"{s}s"
+
+
 def queue_html(q) -> str:
     """Fila de PRs: contagens por situacao, os que pedem acao com link e o erro explicito quando a leitura falha (nunca um 0 inventado)."""
     if q.error and not q.rows:
@@ -264,7 +268,8 @@ def queue_html(q) -> str:
     head = f"<b>PRs</b> {len(q.rows)} abertos · " + " · ".join(parts) + stale
     acts = [r for r in q.rows if r.state in ("pronto", "corrigir", "conflito", "ci")][:6]
     def link(r) -> str:                                                           # so abre links https://github.com/ (mesma lista de permissao do botao "PR atual")
-        return f"<a href=\"{esc(r.url)}\" style='color:#8fb4ff'>#{r.number}</a>" if r.url.startswith("https://github.com/") else f"#{r.number}"
+        name = f"{r.repo.split('/')[-1]}#{r.number}" if r.repo else f"#{r.number}"
+        return f"<a href=\"{esc(r.url)}\" style='color:#8fb4ff'>{esc(name)}</a>" if r.url.startswith("https://github.com/") else esc(name)
     lines = [f"&bull; {link(r)} <span style='color:{QUEUE_LABEL[r.state][0]}'>{QUEUE_LABEL[r.state][1].format(s='')}</span> "
              f"<span style='color:#9a9aa2'>{esc(r.title[:44])}</span>" for r in acts]
     return head + ("<br>" + "<br>".join(lines) if lines else "")
@@ -424,7 +429,7 @@ class Details(QWidget):
         grid = QGridLayout()
         grid.setSpacing(4)
         self.buttons: dict[str, QPushButton] = {}
-        specs = [("repo", "Reposit\u00f3rio", bar.action_repo), ("project", "Project #1", bar.action_project), ("pr", "PR atual", bar.action_pr),
+        specs = [("repo", "Org GitHub", bar.action_repo), ("project", f"Project #{ctl._TARGETS.project}", bar.action_project), ("pr", "PR atual", bar.action_pr),
                  ("logs", "Logs", bar.action_logs), ("diag", "Copiar diagn\u00f3stico", bar.action_copy_diag),
                  ("refresh", "Atualizar", bar.action_refresh), ("restart", "Reiniciar DRY_RUN", bar.action_restart), ("stop", "Parar", bar.action_stop),
                  ("progress", "Dar andamento (Claude)", bar.action_progress)]
@@ -617,9 +622,12 @@ class Details(QWidget):
             self.titlebar.title.setText(("Harness Control Center" if self.full_mode else "Agent Control") + " · DEMONSTRAÇÃO")
         else:
             self.titlebar.title.setText("Harness Control Center" if self.full_mode else "Agent Control")
-        if obs.source in ("real", "demonstração"):
+        if obs.source in ("lido", "demonstração"):
             counts = " · ".join(f"{k} {obs.counts.get(k, 0)}" for k in ("PENDING", "RUNNING", "DLQ"))
+            age = "sem eventos" if obs.last_event_age_s is None else f"último evento há {age_text(obs.last_event_age_s)}"
             self.overview.setText(f"<b>Event Store · {esc(obs.source.upper())}</b>  {counts} · outbox {obs.outbox_pending}"
+                                  f"<br><span style='color:#8f8f98'>{esc(obs.db_path)} · schema {esc(obs.schema_version or '?')} · {age}"
+                                  f" · lido não comprova produção</span>"
                                   f"<br>{esc(obs.messages_status)}")
         else:
             self.overview.setText(f"<b>Event Store · INDISPONÍVEL</b>  {esc(obs.reason)}"

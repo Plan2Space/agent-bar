@@ -63,6 +63,7 @@ class PrRow:
     title: str
     url: str
     state: str                       # um de PR_STATE_ORDER
+    repo: str = ""                    # owner/name quando a fila cobre a org inteira
 
 
 @dataclass
@@ -133,6 +134,9 @@ class Snapshot:
                  f"executor: {self.executor_summary}",
                  "backlog: " + (", ".join(f"{k}={n(v)}" for k, v in self.backlog.items()) if self.backlog else "indisponivel")
                  + (f" (erro: {self.backlog_error})" if self.backlog_error else f" (sync {self.backlog_synced or 'nunca'})"),
+                 "PRs abertos: " + (f"indisponivel (erro: {self.pr_queue.error})" if self.pr_queue.error and not self.pr_queue.rows else
+                                    ", ".join(f"{r.repo or '?'}#{r.number}={r.state}" for r in self.pr_queue.rows) or "nenhum")
+                 + (f" (sync {self.pr_queue.synced})" if self.pr_queue.synced else ""),
                  f"ultimo erro: {self.last_error or 'nenhum observado'}", f"log: {self.log_path or 'indisponivel'}"]
         rows += [f"  {e.last_at} {e.action} {e.pr_label()} x{e.count} {e.reason}".rstrip() for e in self.events[:10]]
         rows += [f"Event Store: {self.observation.source} ({self.observation.reason})",

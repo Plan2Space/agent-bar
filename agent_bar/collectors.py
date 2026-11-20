@@ -27,6 +27,7 @@ from agent_bar.models import (
     PrRow,
     Snapshot,
 )
+from agent_bar.targets import DEFAULT_COLUMNS, Targets, load_targets
 
 TASK_NAME = "sketchup-mcp event bridge"
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)   # Windows: subprocesso da barra nunca abre janela de console
@@ -417,8 +418,9 @@ def collect_codex(procs: list[Proc] | None = None, listener_roots: list[int] | N
     if rec and rec["status"] == "failed":
         err = str(rec.get("error", "sem detalhe"))
         where = f"PR #{rec.get('pr', '?')} {str(rec.get('sha', ''))[:7]}"
+        age = _age_text(rec.get("at"), n)
         if err.startswith("RATE_LIMITED"):                                    # limite de uso da conta do revisor: nao e erro nem desconexao; volta sozinho no reset
-            return AgentStatus("Codex", Level.YELLOW, "Limite de uso", f"{where}: revisor suspenso ate o reset da conta; {err[:100]}")
+            return AgentStatus("Codex", Level.YELLOW, "Limite de uso", f"{where}: revisor suspenso ate o reset da conta; {age}{err[:100]}")
         return AgentStatus("Codex", Level.RED, "Falhou", f"{where}: {err[:100]}")
     if procs is None:
         return AgentStatus("Codex", Level.GRAY, "Indisponivel", "tabela de processos nao observavel")
@@ -447,6 +449,16 @@ def collect_codex(procs: list[Proc] | None = None, listener_roots: list[int] | N
     if rec and rec["status"] == "done":
         return AgentStatus("Codex", Level.YELLOW, "Ocioso", f"ultimo parecer: PR #{rec.get('pr', '?')} {rec.get('verdict', '?')}")
     return AgentStatus("Codex", Level.GRAY, "Nao integrado", ("CLI instalada; " if installed else "CLI nao encontrada; ") + note)
+
+
+def _age_text(iso: object, now: dt.datetime) -> str:
+    """Idade de um registro em cache ("registrado ha 2d; "), para estado velho nao passar por atual. Sem data => diz isso."""
+    at = parse_iso(iso)
+    if at is None:
+        return "registrado sem data; "
+    s = int((now - at).total_seconds())
+    unit = f"{s // 86400}d" if s >= 86400 else f"{s // 3600}h" if s >= 3600 else f"{max(s, 0) // 60}min"
+    return f"registrado ha {unit}; "
 
 
 def lock_status(holder: str | None, procs: list[Proc] | None, roots: list[int]) -> str:
@@ -549,8 +561,7 @@ def collect_github(pr: int | None, gh: Callable[[list[str]], tuple[int, str]] = 
 
 
 ERROR_RE = re.compile(r"FAIL|FATAL|ERROR|BLOCKED|LOST|REFUSED|SUPERSEDED", re.I)
-BACKLOG_COLUMNS = ("Ready", "In Progress", "GPT Review", "Blocked", "Done")
-_UNUSED_JQ = "[.items[].status] | group_by(.) | map({key: (.[0] // \"(sem status)\"), value: length}) | from_entries"
+BACKLOG_COLUMNS = DEFAULT_COLUMNS                                                # colunas do Plan2Space Project #2 (configuravel: targets.py)
 
 
 def group_events(events: list[Event], limit: int = 20) -> list[GroupedEvent]:
@@ -576,11 +587,12 @@ GRAPHQL = ("query($after:String){organization(login:\"%s\"){projectV2(number:%d)
            "pageInfo{hasNextPage endCursor} nodes{fieldValueByName(name:\"Status\"){... on ProjectV2ItemFieldSingleSelectValue{name}}}}}}}")
 
 
-def collect_backlog(gh: Callable[[list[str]], tuple[int, str]] = run_gh, owner: str = "GFCDOTA", number: int = 1,
-                    now: dt.datetime | None = None, max_pages: int = 10) -> tuple[dict[str, int | None], str | None, str | None]:
+def collect_backlog(gh: Callable[[list[str]], tuple[int, str]] = run_gh, owner: str = "Plan2Space", number: int = 2,
+                    now: dt.datetime | None = None, max_pages: int = 10, columns: tuple[str, ...] = BACKLOG_COLUMNS
+                    ) -> tuple[dict[str, int | None], str | None, str | None]:
     """(contagens por coluna, erro tecnico especifico, sync ISO). Uma consulta GraphQL enxuta (so o campo Status, 100 itens/pagina:
     custa ~1 ponto, ao contrario de `gh project item-list` que baixa corpo de todas as Issues). Falha => erro explicito, nunca numero."""
-    empty: dict[str, int | None] = {k: None for k in BACKLOG_COLUMNS}
+    empty: dict[str, int | None] = {k: None for k in columns}
     counts: dict[str, int] = {}
     after = None
     for _ in range(max_pages):
@@ -606,7 +618,9 @@ def collect_backlog(gh: Callable[[list[str]], tuple[int, str]] = run_gh, owner: 
             return empty, f"resposta do GraphQL ilegivel: {type(exc).__name__}: {exc}"[:200], None
     else:
         return empty, f"Project com mais de {max_pages * 100} itens: contagem incompleta recusada", None
-    return {k: counts.get(k, 0) for k in BACKLOG_COLUMNS}, None, _now(now).strftime("%Y-%m-%dT%H:%M:%SZ")
+    out: dict[str, int | None] = {k: counts.get(k, 0) for k in columns}
+    out.update({k: v for k, v in counts.items() if k not in columns and k != "(sem status)"})   # status fora das colunas: aparece, nao some
+    return out, None, _now(now).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 PR_QUEUE_QUERY = ("query($owner:String!,$name:String!,$after:String){repository(owner:$owner,name:$name){pullRequests(states:OPEN,first:50,after:$after){"
@@ -663,12 +677,48 @@ def collect_pr_queue(gh: Callable[[list[str]], tuple[int, str]] = run_gh, owner:
     return PrQueue(rows=rows, synced=_now(now).strftime("%Y-%m-%dT%H:%M:%SZ"))
 
 
+ORG_PR_QUERY = ("query($q:String!,$after:String){search(query:$q,type:ISSUE,first:50,after:$after){pageInfo{hasNextPage endCursor} "
+                "nodes{... on PullRequest{number title url isDraft mergeable headRefOid repository{nameWithOwner} "
+                "reviews(last:1){nodes{state commit{oid}}} commits(last:1){nodes{commit{statusCheckRollup{state}}}}}}}}")
+
+
+def collect_org_pr_queue(gh: Callable[[list[str]], tuple[int, str]] = run_gh, owner: str = "Plan2Space",
+                         now: dt.datetime | None = None, max_pages: int = 4) -> PrQueue:
+    """PRs abertos de TODOS os repos da org numa busca GraphQL (50/pagina). Mesmas regras de `collect_pr_queue`: falha => erro, nunca lista vazia."""
+    nodes: list[dict] = []
+    after = None
+    for _ in range(max_pages):
+        args = ["api", "graphql", "-f", "query=" + ORG_PR_QUERY, "-f", f"q=org:{owner} is:pr is:open archived:false"] + (["-f", f"after={after}"] if after else [])
+        rc, out = gh(args)
+        if rc != 0:
+            return PrQueue(error=f"gh api graphql rc={rc}: {(out.splitlines() or ['sem saida'])[0][:160]}")
+        try:
+            data = json.loads(out)
+            if data.get("errors"):
+                return PrQueue(error="GraphQL: " + str(data["errors"][0].get("message", "erro"))[:160])
+            page = data["data"]["search"]
+            nodes += [n for n in page["nodes"] if isinstance(n, dict) and isinstance(n.get("number"), int)]
+            if not page["pageInfo"]["hasNextPage"]:
+                break
+            after = page["pageInfo"]["endCursor"]
+        except (ValueError, TypeError, KeyError, AttributeError) as exc:
+            return PrQueue(error=f"resposta do GraphQL ilegivel: {type(exc).__name__}: {exc}"[:200])
+    else:
+        return PrQueue(error=f"mais de {max_pages * 50} PRs abertos: contagem incompleta recusada")
+    rows = [PrRow(int(n["number"]), str(n.get("title") or ""), str(n.get("url") or ""), classify_pr(n),
+                  str((n.get("repository") or {}).get("nameWithOwner") or "")) for n in nodes]
+    rows.sort(key=lambda r: (PR_STATE_ORDER.index(r.state), r.repo, r.number))
+    return PrQueue(rows=rows, synced=_now(now).strftime("%Y-%m-%dT%H:%M:%SZ"))
+
+
 def collect_snapshot(gov: Path | None = None, procs_fn=list_processes, task_fn=task_state, gh=run_gh, cache: GithubCache | None = None,
                      backlog_cache: GithubCache | None = None, now: dt.datetime | None = None, queue_cache: GithubCache | None = None,
-                     claude_login: Callable[[], bool | None] | None = None, codex_login: Callable[[], bool | None] | None = None) -> Snapshot:
+                     claude_login: Callable[[], bool | None] | None = None, codex_login: Callable[[], bool | None] | None = None,
+                     targets: Targets | None = None) -> Snapshot:
     """Uma coleta completa. Chamar FORA da thread de UI."""
     g = gov or default_gov_dir()
     n = _now(now)
+    t = targets or load_targets()
     procs = procs_fn()
     listener, ex = collect_listener(g, procs, task_fn(), n)
     loop = review_loop(procs)
@@ -681,14 +731,14 @@ def collect_snapshot(gov: Path | None = None, procs_fn=list_processes, task_fn=t
     pr = current_pr(bridge)
     fetch = lambda: collect_github(pr, gh)  # noqa: E731
     github, gx = cache.get(f"pr{pr}", fetch) if cache else fetch()
-    bfetch = lambda: collect_backlog(gh, now=n)  # noqa: E731
+    bfetch = lambda: collect_backlog(gh, owner=t.org, number=t.project, now=n, columns=t.columns)  # noqa: E731
     counts, berr, bsync = backlog_cache.get("backlog", bfetch) if backlog_cache else bfetch()
     if backlog_cache is not None:
         if berr is None:
             backlog_cache.last_good = (counts, bsync)
         elif getattr(backlog_cache, "last_good", None):                         # erro agora, mas ha leitura anterior: mostra E sinaliza
             counts, bsync = backlog_cache.last_good
-    qfetch = lambda: collect_pr_queue(gh, now=n)  # noqa: E731
+    qfetch = lambda: collect_org_pr_queue(gh, owner=t.org, now=n)  # noqa: E731
     pr_queue = queue_cache.get("pr_queue", qfetch) if queue_cache else qfetch()
     if queue_cache is not None:
         if pr_queue.error is None:

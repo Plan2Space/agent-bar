@@ -214,7 +214,8 @@ def test_snapshot_end_to_end_with_fakes_and_diagnostic_has_no_secrets(tmp_path):
         return gh_with([{"conclusion": "SUCCESS"}])(args)
     s = col.collect_snapshot(g, procs_fn=lambda: LISTENER_OK, task_fn=lambda: "Running", gh=gh, now=NOW)
     assert s.pr == 7 and s.listener.level is Level.GREEN and s.codex.label == "Nao integrado"
-    assert s.backlog == {"Ready": 5, "In Progress": 8, "GPT Review": 10, "Blocked": 32, "Done": 26} and s.backlog_error is None
+    # colunas do Project #2 em ordem; "GPT Review" (coluna do board antigo) aparece como extra, nao some
+    assert s.backlog == {"Backlog": 0, "Ready": 5, "In Progress": 8, "Review": 0, "Blocked": 32, "Done": 26, "GPT Review": 10} and s.backlog_error is None
     assert s.mode_banner().startswith("DRY_RUN") and "desligada" in s.mode_banner() and "monitorando" in s.work
     d = s.diagnostic()
     assert "PR atual: 7" in d and "review:9" in d and "aaaaaaa" in d and "heartbeat: 30s" in d and "pid 20" in d
