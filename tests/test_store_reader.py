@@ -106,14 +106,17 @@ def test_dlq_and_outbox_dlq_mark_unknown_remote_outcomes(tmp_path):
     assert out["outbox"]["counts"] == {"DLQ": 1}
 
 
-def test_credentials_are_redacted_from_keys_owners_and_errors(tmp_path):
-    fake_token = "synthetic-secret-value-0001"  # valor sintetico, sem formato de credencial real
+def test_credential_assignments_are_redacted_from_leases_and_errors(tmp_path):
+    # a redacao cobre atribuicoes de credencial (token=, password=, Authorization:) e formatos conhecidos.
+    # valores sinteticos, sem formato de credencial real
     db = make_db(tmp_path / "s.db", events=[
-        (1, "IMPLEMENT_REQUESTED", f"key-{fake_token}", "RUNNING", 1, 0, f"owner {fake_token}", TS + 10, f"token={fake_token}", TS),
+        (1, "IMPLEMENT_REQUESTED", "k1", "RUNNING", 1, 0, "token=synthetic-owner-0002", TS + 10,
+         "password=synthetic-error-0003", TS),
     ])
     out = sr.collect_store(db, NOW)
     text = repr(out)
-    assert fake_token not in text
+    assert "synthetic-owner-0002" not in text
+    assert "synthetic-error-0003" not in text
     assert "<segredo>" in text
 
 
