@@ -1,5 +1,8 @@
 # agent-bar
 
+> **Política de SPECs e skills:** as SPECs e skills do ecossistema Plan2Space são mantidas exclusivamente em
+> `Plan2Space/claude-engineering-skills`. Nenhuma SPEC nova é criada neste repositório. Ver `CLAUDE.md`.
+
 Painel operacional somente leitura do agent-runtime. Mostra estado; não é fonte autoritativa.
 
 ## Escopo atual
