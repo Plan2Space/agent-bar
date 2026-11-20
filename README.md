@@ -1,5 +1,9 @@
 # agent-bar
 
+> **Conhecimento compartilhado:** skills reutilizáveis e contratos entre repositórios ficam em
+> `Plan2Space/claude-engineering-skills`; SPECs e testes da interface permanecem aqui.
+> Ver `CLAUDE.md` e `AGENTS.md` para a referência versionada e os próximos passos.
+
 Painel operacional somente leitura do agent-runtime. Mostra estado; não é fonte autoritativa.
 
 ## Escopo atual
