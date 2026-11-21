@@ -43,6 +43,17 @@ py -3.12 -m venv .venv                                  # o python global desta 
 powershell -NoProfile -File launchers\run_agent_bar.ps1 # o mesmo, sem console; sem .venv explica e sai com 2
 ```
 
+### Atualizar depois de um `git pull`
+
+O `agent-runtime` é fixado por SHA no `pyproject.toml`. **`pip install -e .[gui]` não o atualiza quando só o SHA muda**, porque a versão continua `0.1.0`. Depois de um pull que mude essa linha, rode, a partir do checkout:
+
+```powershell
+.venv\Scripts\python -m pip install -e .[gui]
+.venv\Scripts\python -m pip install --force-reinstall --no-deps "agent-runtime @ git+https://github.com/Plan2Space/agent-runtime@<SHA do pyproject>"
+```
+
+Feche e reabra a barra. Ao iniciar, ela confere o SHA instalado (`direct_url.json` do pip) contra o do `pyproject.toml`. Se forem diferentes, mostra um aviso vermelho no topo do painel com o comando exato, já com o SHA certo, e registra no log (`%LOCALAPPDATA%\agent_bar\logs\agent_bar.log`). O tooltip da engrenagem também mostra a conferência.
+
 ### Atalho na Área de Trabalho
 
 ```powershell

@@ -40,6 +40,8 @@ def main(argv: list[str] | None = None) -> int:
         log = logging.getLogger(startup.LOGGER)
         applied = startup.load_local_env(LOCAL_ENV)
         log.info("iniciando pid=%s exe=%s cwd=%s repo=%s local.env=%s", os.getpid(), sys.executable, os.getcwd(), ROOT, applied or "nenhum")
+        from agent_bar import runtime_pin
+        runtime_pin.log_status(runtime_pin.check())
         return _run_gui(ns, log)
     except Exception as exc:                                                  # noqa: BLE001 - qualquer falha antes/fora da UI tem de aparecer
         startup.report_fatal(exc, log_path)
