@@ -12,6 +12,7 @@ import os
 import re
 import shutil
 import subprocess
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -504,6 +505,44 @@ def executor_summary(bridge: dict | None, now: dt.datetime) -> tuple[str, str, s
     return "; ".join(parts), work, ref
 
 
+class BackgroundCache:
+    """Como GithubCache, mas a coleta roda numa thread propria: `get` nunca espera. Sem valor ainda => `placeholder`;
+    vencido => serve o anterior e atualiza em fundo. Uma coleta por vez. Falha => `on_error(exc)` vira o valor (nunca some calada)."""
+
+    def __init__(self, ttl_s: float = 60.0, clock: Callable[[], float] = time.monotonic, placeholder: object = None,
+                 spawn: Callable[[Callable[[], None]], object] | None = None, on_done: Callable[[], None] | None = None,
+                 on_error: Callable[[BaseException], object] | None = None):
+        self.ttl, self.clock, self.placeholder = ttl_s, clock, placeholder
+        self.spawn = spawn or (lambda fn: threading.Thread(target=fn, name="agent-bar-background", daemon=True).start())
+        self.on_done, self.on_error = on_done, on_error
+        self._lock = threading.Lock()
+        self._key, self._val, self._at, self._running = None, None, None, False
+
+    def invalidate(self) -> None:
+        with self._lock:
+            self._at = None
+
+    def get(self, key: str, fetch: Callable[[], object]) -> object:
+        with self._lock:
+            stale = self._val is None or self._key != key or self._at is None or self.clock() - self._at >= self.ttl
+            start = stale and not self._running
+            if start:
+                self._running = True
+            current = self._val
+        if start:
+            def run() -> None:
+                try:
+                    value = fetch()
+                except Exception as exc:                                      # noqa: BLE001 - erro vira valor exibido
+                    value = self.on_error(exc) if self.on_error else None
+                with self._lock:
+                    self._key, self._val, self._at, self._running = key, value, self.clock(), False
+                if self.on_done:
+                    self.on_done()
+            self.spawn(run)
+        return current if current is not None else self.placeholder
+
+
 class GithubCache:
     """Cache com TTL para nao consultar o GitHub a cada ciclo local."""
 
@@ -753,7 +792,7 @@ def collect_org_pr_queue(gh: Callable[[list[str]], tuple[int, str]] = run_gh, ow
 def collect_snapshot(gov: Path | None = None, procs_fn=list_processes, task_fn=task_state, gh=run_gh, cache: GithubCache | None = None,
                      backlog_cache: GithubCache | None = None, now: dt.datetime | None = None, queue_cache: GithubCache | None = None,
                      claude_login: Callable[[], bool | None] | None = None, codex_login: Callable[[], bool | None] | None = None,
-                     targets: Targets | None = None) -> Snapshot:
+                     targets: Targets | None = None, approval_cache: GithubCache | None = None) -> Snapshot:
     """Uma coleta completa. Chamar FORA da thread de UI."""
     g = gov or default_gov_dir()
     n = _now(now)
@@ -789,13 +828,19 @@ def collect_snapshot(gov: Path | None = None, procs_fn=list_processes, task_fn=t
     from agent_bar.runs import collect_runs, runs_dir_from_env
 
     runs = collect_runs(runs_dir_from_env())
+    from agent_bar.approvals import collect_approvals
+
+    refs = [(r.repo, r.number) for r in pr_queue.rows if r.repo and r.state != "rascunho"]
+    afetch = lambda: collect_approvals(gh, refs, runs=runs, store_path=Path(observation.db_path) if observation.db_path else None)  # noqa: E731
+    approvals = approval_cache.get("approvals:" + ",".join(f"{a}#{b}" for a, b in refs), afetch) if approval_cache else afetch()
     return Snapshot(at=n.isoformat(), claude=claude, codex=codex, listener=listener, github=github, pr=pr,
                     pr_url=gx.get("pr_url"), mode=ex["mode"], heartbeat_age_s=ex["heartbeat_age_s"], kill_switch=ex["kill_switch"],
                     concurrent_instances=ex["concurrent_instances"], lock_holder=ex["lock_holder"],
                     lock_status=lock_status(ex["lock_holder"], procs, ex["roots"]), last_error=ex["last_error"],
                     events=group_events(recent_events(g)), backlog=counts, backlog_error=berr, backlog_synced=bsync,
                     github_checks=gx.get("checks", "indisponivel"), executor_summary=summary, work=work, review_ref=ref,
-                    log_path=str(log) if log else None, observation=observation, pr_queue=pr_queue, runs=runs, board=board)
+                    log_path=str(log) if log else None, observation=observation, pr_queue=pr_queue, runs=runs, board=board,
+                    approvals=approvals)
 
 
 def _latest_log(gov: Path) -> Path | None:

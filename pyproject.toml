@@ -7,7 +7,8 @@ name = "agent-bar"
 version = "0.1.0"
 description = "Agent Bar: barra do Windows que observa Claude Code, Codex, GPT, o laco de revisao, o GitHub e o EventStore do agent-runtime (somente leitura)"
 requires-python = ">=3.11"
-dependencies = []
+# risco, aprovacao C9 e decisao de merge vem do runtime (S00-14), fixado por SHA completo (agent-runtime main, PR #60)
+dependencies = ["agent-runtime @ git+https://github.com/Plan2Space/agent-runtime@92acdcdd8cd8dd6a69152c79f5bd304280733235"]
 
 [project.optional-dependencies]
 gui = ["PySide6-Essentials>=6.7,<7.0"]
