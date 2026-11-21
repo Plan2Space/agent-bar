@@ -20,8 +20,9 @@ from PySide6.QtWidgets import (
 )
 
 from agent_bar.approvals import ApprovalBoard, PrApproval
+from agent_bar.benchmark import BenchmarkView
 from agent_bar.observability import Observation
-from agent_bar.runs import BenchmarkStatus, RunsView
+from agent_bar.runs import RunsView
 
 
 def _time(epoch: float) -> str:
@@ -95,7 +96,18 @@ class OperationsView(QWidget):
         grid.addWidget(runs_box, 5, 0, 1, 2)
         bench_box = self._box("Benchmark Claude | Qwen | Llama")
         self.cards["benchmark"] = self._label("Não coletado")
+        self.cards["benchmark"].setOpenExternalLinks(True)
         bench_box.layout().addWidget(self.cards["benchmark"])
+        bench_row = QHBoxLayout()
+        bench_box.layout().addLayout(bench_row)
+        self.bench_columns: dict[str, QLabel] = {}
+        for name in ("Claude", "Qwen", "Llama"):                                 # tres colunas lado a lado, mesma ordem sempre
+            col = self._label(f"<b>{name}</b>")
+            col.setOpenExternalLinks(True)
+            col.setAlignment(Qt.AlignmentFlag.AlignTop)
+            col.setStyleSheet("color:#e0e5ef;font-size:11px;background:#1a1e26;border:1px solid #2c3340;border-radius:8px;padding:6px")
+            self.bench_columns[name] = col
+            bench_row.addWidget(col, 1)
         grid.addWidget(bench_box, 6, 0, 1, 2)
         approval_box = self._box("Aprovação humana no HEAD exato (S00-14) · risco e decisão do agent-runtime")
         self.cards["approval"] = self._label("Não coletado")
@@ -203,10 +215,43 @@ class OperationsView(QWidget):
         self._observe_only = observe_only
         self._refresh_button()
 
-    def update_runs(self, v: RunsView, bench: BenchmarkStatus) -> None:
+    def update_benchmark(self, v: BenchmarkView) -> None:
+        """Benchmark do runtime: cabecalho com fonte e commit de origem; uma coluna por backend. Falha = INDISPONIVEL, sem numero."""
+        origin = f"commit de origem {_clean(v.origin_commit[:12])}" if v.origin_commit else "commit de origem não informado (AGENT_BAR_BENCHMARK_COMMIT)"
+        if v.state != "lido":
+            tag = "SEM FONTE" if v.state == "sem_fonte" else "INDISPONÍVEL"
+            self.cards["benchmark"].setText(f"<b>{tag}</b> {_clean(v.reason)}")
+            for name, col in self.bench_columns.items():
+                col.setText(f"<b>{name}</b><br>sem dados")
+            return
+        md = f" · <a href=\"{v.comparison_md.as_uri()}\" style='color:#8fb4ff'>comparison.md</a>" if v.comparison_md else " · comparison.md ausente"
+        self.cards["benchmark"].setText(f"<span style='color:#9aa5b5'>{_clean(v.reason)} · {origin}{md} · lido não comprova produção</span>")
+        rec_color = {"autonomo_controlado": "#3ddc84", "assistente_supervisionado": "#4aa8ff", "so_tarefas_simples": "#ffc233", "inadequado": "#ff6b6d"}
+
+        def val(x, unit=""):
+            return "?" if x is None else f"{x:g}{unit}" if isinstance(x, float) else f"{x}{unit}"
+        for b in v.backends:
+            col = self.bench_columns.get(b.title)
+            if col is None:
+                continue
+            if b.success is None:
+                col.setText(f"<b>{_clean(b.title)}</b><br>sem dados<br><span style='color:#ff9a9b'>{_clean('; '.join(b.problems))}</span>")
+                continue
+            links = " ".join(f"<a href=\"{r.path.as_uri()}\" style='color:#8fb4ff'>{_clean(r.scenario.split('_')[0])}r{r.repeat or '?'}</a>"
+                             for r in b.results)
+            rec = b.recommendation or "?"
+            col.setText(f"<b>{_clean(b.title)}</b> <span style='color:#9aa5b5'>{_clean(b.model or '?')}</span>"
+                        f"<br>sucesso <b>{val(b.success)}/{val(b.runs)}</b> · visíveis {val(b.visible_pass)}/{val(b.runs)} · ocultos {val(b.hidden_pass)}/{val(b.runs)}"
+                        f"<br>tentativas (mediana) {val(b.median_attempts)} · tempo {val(b.median_duration_s, ' s')}"
+                        f"<br>ferramentas {val(b.median_tool_calls)} · erro de ferramenta {val(b.tool_error_rate)}"
+                        f"<br>tokens {val(b.median_prompt_tokens)}/{val(b.median_completion_tokens)} · GPU {val(b.max_gpu_mem_mib, ' MiB')} (sistema)"
+                        f"<br>falha de infra {val(b.infra_failures)} · violação de contrato {val(b.contract_violations)}"
+                        f"<br>recomendação <b style='color:{rec_color.get(rec, '#e0e5ef')}'>{_clean(rec)}</b>"
+                        f"<br>result.json: {links or 'nenhum'}"
+                        + (f"<br><span style='color:#ff9a9b'>{_clean('; '.join(b.problems)[:300])}</span>" if b.problems else ""))
+
+    def update_runs(self, v: RunsView) -> None:
         """Só o que está em disco e confere com o manifest. Sem fonte/sem dados/sem evidência ficam escritos, nunca omitidos."""
-        cols = " | ".join(f"<b>{_clean(c.agent)}</b>: sem dados" if c.result is None else f"<b>{_clean(c.agent)}</b>: lido" for c in bench.columns)
-        self.cards["benchmark"].setText(f"{cols}<br><span style='color:#9aa5b5'>{_clean(bench.reason)}</span>")
         first_preview = next((r for r in v.runs if r.preview_path is not None), None)
         if first_preview is None:
             self.preview.clear()

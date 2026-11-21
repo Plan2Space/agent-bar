@@ -4,8 +4,7 @@ Somente leitura: nunca cria pasta nem arquivo. Evidencia so conta quando o arqui
 bate com o manifest. Qualquer falta vira um item em `problems`, mostrado na UI ("sem evidencia"), nunca um sucesso presumido.
 O veredito visual e sempre do humano: `visual_verdict` diferente de PENDING_HUMAN e sinalizado.
 
-O resultado do benchmark Claude | Qwen | Llama depende do contrato `benchmark_result` v1 do agent-runtime (Frente B), ainda nao
-publicado: ate la a UI mostra "sem dados" e nao le formato nenhum.
+O benchmark Claude | Qwen | Llama tem leitor proprio: `agent_bar/benchmark.py`.
 """
 from __future__ import annotations
 
@@ -72,19 +71,6 @@ class RunsView:
     reason: str
     source_dir: str = ""
     runs: list[RunView] = field(default_factory=list)
-
-
-@dataclass(frozen=True)
-class BenchmarkColumn:
-    agent: str
-    result: dict | None = None
-
-
-@dataclass
-class BenchmarkStatus:
-    state: str
-    reason: str
-    columns: list[BenchmarkColumn] = field(default_factory=list)
 
 
 def _iso(text: object) -> dt.datetime | None:
@@ -248,7 +234,3 @@ def collect_runs(runs_dir: Path | None, limit: int = 10) -> RunsView:
     runs.sort(key=lambda r: (r.started_at, r.run_id), reverse=True)
     return RunsView("lido", f"{len(runs)} execucao(oes) lida(s) de {runs_dir}", str(runs_dir), runs[:limit])
 
-
-def benchmark_status() -> BenchmarkStatus:
-    return BenchmarkStatus("sem_dados", "contrato benchmark_result v1 do agent-runtime (Frente B) ainda nao publicado: nenhum resultado e exibido",
-                           [BenchmarkColumn("Claude"), BenchmarkColumn("Qwen"), BenchmarkColumn("Llama")])

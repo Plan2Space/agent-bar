@@ -828,6 +828,9 @@ def collect_snapshot(gov: Path | None = None, procs_fn=list_processes, task_fn=t
     from agent_bar.runs import collect_runs, runs_dir_from_env
 
     runs = collect_runs(runs_dir_from_env())
+    from agent_bar.benchmark import benchmark_from_env
+
+    benchmark = benchmark_from_env()
     from agent_bar.approvals import collect_approvals
 
     refs = [(r.repo, r.number) for r in pr_queue.rows if r.repo and r.state != "rascunho"]
@@ -840,7 +843,7 @@ def collect_snapshot(gov: Path | None = None, procs_fn=list_processes, task_fn=t
                     events=group_events(recent_events(g)), backlog=counts, backlog_error=berr, backlog_synced=bsync,
                     github_checks=gx.get("checks", "indisponivel"), executor_summary=summary, work=work, review_ref=ref,
                     log_path=str(log) if log else None, observation=observation, pr_queue=pr_queue, runs=runs, board=board,
-                    approvals=approvals)
+                    approvals=approvals, benchmark=benchmark)
 
 
 def _latest_log(gov: Path) -> Path | None:

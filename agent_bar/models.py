@@ -5,8 +5,9 @@ from dataclasses import dataclass, field
 from enum import Enum
 
 from agent_bar.approvals import ApprovalBoard
+from agent_bar.benchmark import BenchmarkView
 from agent_bar.observability import Observation
-from agent_bar.runs import BenchmarkStatus, RunsView, benchmark_status
+from agent_bar.runs import RunsView
 
 
 class Level(str, Enum):
@@ -118,7 +119,7 @@ class Snapshot:
     observation: Observation = field(default_factory=Observation)
     pr_queue: PrQueue = field(default_factory=lambda: PrQueue(error="nao coletada"))
     runs: RunsView = field(default_factory=lambda: RunsView("sem_fonte", "nao coletado"))
-    benchmark: BenchmarkStatus = field(default_factory=benchmark_status)
+    benchmark: BenchmarkView = field(default_factory=lambda: BenchmarkView('sem_fonte', 'nao coletado'))
     board: Board = field(default_factory=Board)
     approvals: ApprovalBoard = field(default_factory=lambda: ApprovalBoard(error='nao coletado'))
     pr: int | None = None
@@ -178,5 +179,7 @@ class Snapshot:
                  f"execucoes do motor: {self.runs.state} ({self.runs.reason})"]
         rows += [f"  {r.run_id} {r.status} verdict={r.verdict or 'sem relatorio'} visual={r.visual_verdict or '?'} HEAD={r.engine_commit[:12] or '?'}"
                  + (f" problemas: {'; '.join(r.problems)}" if r.problems else " evidencia conferida (sha256)") for r in self.runs.runs[:5]]
-        rows += [f"benchmark: {self.benchmark.state} ({self.benchmark.reason})"]
+        rows += [f"benchmark: {self.benchmark.state} ({self.benchmark.reason}; commit de origem {self.benchmark.origin_commit or 'nao informado'})"]
+        rows += [f"  {b.backend}: sucesso {b.success}/{b.runs} visiveis {b.visible_pass} ocultos {b.hidden_pass} recomendacao {b.recommendation}"
+                 f" result.json lidos {len(b.results)}" + (f" problemas: {'; '.join(b.problems)}" if b.problems else "") for b in self.benchmark.backends]
         return "\n".join(rows)
