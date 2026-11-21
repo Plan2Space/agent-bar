@@ -19,6 +19,7 @@ Tudo é opcional: sem nenhuma configuração a barra abre e mostra o que consegu
 | `AGENT_BAR_ORG` | `Plan2Space` | org do GitHub da fila de PRs (todos os repos dela) e do Project. Nome fora da regra de login do GitHub é recusado e cai no padrão |
 | `AGENT_BAR_PROJECT` | `2` | número do Project (v2). Valor não inteiro cai no padrão, com aviso |
 | `AGENT_BAR_COLUMNS` | `Backlog,Ready,In Progress,Review,Blocked,Done` | colunas do board, em ordem. Status fora delas é contado à parte, não some |
+| `AGENT_BAR_RUNS_DIR` | (sem padrão: **SEM FONTE**) | pasta de execuções do motor: `runs/<run_id>/manifest.json` (S00-02 C3/C10) ou `artifacts/<room>/<run_id>/run_manifest.json` (layout real do `sketchup-mcp-next`), lida para o card "Execuções do motor" |
 | `QT_QPA_PLATFORM` | do Qt | `offscreen` nos testes e na geração de capturas |
 
 O board é lido **no momento da consulta**: nome, URL, id, `Task ID` e `Status` de cada item, 100 por página até o fim. Falha de auth, falta de acesso, erro GraphQL ou resposta com menos itens que o `totalCount` aparecem como **INDISPONÍVEL** com o motivo. A barra nunca recorre a números antigos ou ao cache como fallback.
