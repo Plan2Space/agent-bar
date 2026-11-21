@@ -645,6 +645,7 @@ class Details(QWidget):
             self.overview.setText(f"<b>Event Store · INDISPONÍVEL</b>  {esc(obs.reason)}"
                                   f"<br>{esc(obs.messages_status)}")
         self.operations.update_observation(obs)
+        self.operations.update_runs(s.runs, s.benchmark)
         rows_h = self.events.sizeHintForRow(0) if self.events.count() else 0
         self.events.setFixedHeight(min(max(self.events.count(), 1), 6) * max(rows_h, 20) + 6)       # sem espaco vazio; rola acima de 6
         self.fit()
