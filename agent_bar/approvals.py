@@ -39,7 +39,8 @@ CREDENTIAL_WARNING = ("Atenção: os agentes usam a mesma conta do GitHub (fmode
                       "agentes, fora da lista de aprovadores: decisão do Felipe (S00-05, risco aberto).")
 _ROLLUP = {"SUCCESS": "success", "FAILURE": "failure", "ERROR": "failure", "PENDING": "pending", "EXPECTED": "pending"}
 HEAD_QUERY = ("query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){"
-              "headRefOid commits(last:1){nodes{commit{statusCheckRollup{state}}}}}}}")
+              "headRefOid commits(last:1){nodes{commit{committedDate statusCheckRollup{state}}}}}}}")
+DEFAULT_REVIEWER = "fmmodesto"   # agente revisor: aprova LOW/MEDIUM; nos HIGH so recomenda (decisao do Felipe)
 
 
 @dataclass
@@ -59,6 +60,10 @@ class PrApproval:
     state: str = "erro"                          # auto_low | aguardando | aprovado | bloqueado | erro
     can_approve: bool = False
     blocked_reason: str = ""
+    head_committed_at: str | None = None        # data do commit do HEAD (base do "ha quanto tempo espera"); None = desconhecida
+    reviewer_verdict: str | None = None         # APPROVED | CHANGES_REQUESTED | COMMENTED | comentário; None = sem opiniao no HEAD
+    reviewer_note: str = ""
+    reviewer_url: str = ""
 
     @property
     def pr_ref(self) -> str:
@@ -72,6 +77,8 @@ class ApprovalBoard:
     approvers: tuple[str, ...] = ()
     credential_warning: str = CREDENTIAL_WARNING
     error: str | None = None
+    reviewer: str = DEFAULT_REVIEWER
+    collected_at: str | None = None
 
     @property
     def waiting(self) -> list[PrApproval]:
@@ -107,14 +114,22 @@ def _rest(gh: Gh, path: str, jq: str | None = None) -> str:
 
 def read_head(gh: Gh, repo: str, number: int) -> tuple[str, str]:
     """(HEAD atual, estado do CI nesse HEAD) numa consulta GraphQL. Usado na tela e de novo no clique."""
+    head, ci, _ = read_head_info(gh, repo, number)
+    return head, ci
+
+
+def read_head_info(gh: Gh, repo: str, number: int) -> tuple[str, str, str | None]:
+    """(HEAD, CI, data do commit do HEAD ou None)."""
     owner, name = repo.split("/", 1)
     rc, out = gh(["api", "graphql", "-f", "query=" + HEAD_QUERY, "-f", f"owner={owner}", "-f", f"name={name}", "-F", f"number={number}"])
     if rc != 0:
         raise RuntimeError(f"gh api graphql rc={rc}: {(out.splitlines() or ['sem saida'])[0][:160]}")
     pr = json.loads(out)["data"]["repository"]["pullRequest"]
     nodes = (pr.get("commits") or {}).get("nodes") or [{}]
-    rollup = ((nodes[-1].get("commit") or {}).get("statusCheckRollup") or {}).get("state")
-    return str(pr["headRefOid"]), _ROLLUP.get(str(rollup), "none") if rollup else "none"
+    commit = nodes[-1].get("commit") or {}
+    rollup = (commit.get("statusCheckRollup") or {}).get("state")
+    committed = commit.get("committedDate") if isinstance(commit.get("committedDate"), str) else None
+    return str(pr["headRefOid"]), _ROLLUP.get(str(rollup), "none") if rollup else "none", committed
 
 
 def stored_approvals(store_path: Path | None, pr_ref: str) -> list[ApprovalRecord]:
@@ -151,7 +166,42 @@ def evidence_for(repo: str, head_sha: str, runs) -> tuple[bool | None, str]:
     return True, f"execução {good[0].run_id} PASS no HEAD, sha256 conferido"
 
 
-def _one(gh: Gh, repo: str, number: int, approvers: Sequence[str], login: str | None, runs, store_path) -> PrApproval:
+def _iso(text: object):
+    import datetime as _dt
+    if not isinstance(text, str) or not text:
+        return None
+    try:
+        v = _dt.datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return v if v.tzinfo else v.replace(tzinfo=_dt.timezone.utc)
+
+
+def _first_line(text: object) -> str:
+    return (str(text or "").strip().splitlines() or [""])[0][:160]
+
+
+def reviewer_opinion(reviewer: str, head: str, committed_at: str | None, reviews: list[dict], comments: list[dict]
+                     ) -> tuple[str, str, str] | None:
+    """Ultima opiniao do revisor NESTE HEAD: review com commit_id = HEAD; senao comentario que cita o SHA (7+) ou e posterior
+    ao commit do HEAD. (veredito, primeira linha, link) ou None. So leitura."""
+    who = reviewer.lower()
+    mine = [r for r in reviews if str((r.get("user") or {}).get("login", "")).lower() == who and r.get("commit_id") == head
+            and r.get("state") in ("APPROVED", "CHANGES_REQUESTED", "COMMENTED")]
+    if mine:
+        r = mine[-1]
+        return str(r["state"]), _first_line(r.get("body")), str(r.get("html_url") or "")
+    since = _iso(committed_at)
+    notes = [c for c in comments if str((c.get("user") or {}).get("login", "")).lower() == who
+             and (head[:7] in str(c.get("body") or "") or (since is not None and (_iso(c.get("created_at")) or since) > since))]
+    if notes:
+        c = notes[-1]
+        return "comentário", _first_line(c.get("body")), str(c.get("html_url") or "")
+    return None
+
+
+def _one(gh: Gh, repo: str, number: int, approvers: Sequence[str], login: str | None, runs, store_path,
+         reviewer: str = DEFAULT_REVIEWER) -> PrApproval:
     row = PrApproval(repo, number)
     try:
         pr = json.loads(_rest(gh, f"repos/{repo}/pulls/{number}"))
@@ -161,8 +211,8 @@ def _one(gh: Gh, repo: str, number: int, approvers: Sequence[str], login: str | 
         comments = _lines(_rest(gh, f"repos/{repo}/issues/{number}/comments",
                                 ".[] | {user: {login: .user.login, type: .user.type}, body, created_at, updated_at, html_url}"))
         reviews = _lines(_rest(gh, f"repos/{repo}/pulls/{number}/reviews",
-                               ".[] | {user: {login: .user.login, type: .user.type}, state, commit_id, submitted_at, html_url}"))
-        row.head_sha, row.ci_state = read_head(gh, repo, number)
+                               ".[] | {user: {login: .user.login, type: .user.type}, state, commit_id, submitted_at, html_url, body}"))
+        row.head_sha, row.ci_state, row.head_committed_at = read_head_info(gh, repo, number)
     except (RuntimeError, ValueError, KeyError, TypeError) as exc:
         row.blocked_reason = f"leitura do GitHub falhou: {exc}"[:240]
         return row
@@ -184,6 +234,9 @@ def _one(gh: Gh, repo: str, number: int, approvers: Sequence[str], login: str | 
             rec = None
         records += [rec] if rec else []
     records += stored_approvals(store_path, row.pr_ref)
+    opinion = reviewer_opinion(reviewer, row.head_sha, row.head_committed_at, reviews, comments)
+    if opinion:
+        row.reviewer_verdict, row.reviewer_note, row.reviewer_url = opinion
     row.evidence_ok, row.evidence_note = evidence_for(repo, row.head_sha, runs)
     decision: MergeDecision = merge_decision(pr=row.pr_ref, head_sha=row.head_sha, risk=row.risk, ci_state=row.ci_state,
                                              evidence_valid=row.evidence_ok is not False, approvals=records)
@@ -210,12 +263,16 @@ def _one(gh: Gh, repo: str, number: int, approvers: Sequence[str], login: str | 
 
 
 def collect_approvals(gh: Gh, prs: Iterable[tuple[str, int]], approvers: Sequence[str] | None = None, runs=None,
-                      store_path: Path | None = None, max_prs: int = 12) -> ApprovalBoard:
+                      store_path: Path | None = None, max_prs: int = 12, reviewer: str | None = None, now=None) -> ApprovalBoard:
+    import datetime as _dt
     approvers = tuple(approvers_from_env() if approvers is None else approvers)
+    reviewer = reviewer or os.environ.get("AGENT_BAR_REVIEWER") or DEFAULT_REVIEWER
     rc, out = gh(["api", "user", "--jq", ".login"])
     login = out.strip() if rc == 0 else None
-    board = ApprovalBoard(login=login, approvers=approvers, error=None if rc == 0 else f"gh api user rc={rc}: {out[:120]}")
-    board.rows = [_one(gh, repo, n, approvers, login, runs, store_path) for repo, n in list(prs)[:max_prs]]
+    at = (now or _dt.datetime.now(_dt.timezone.utc)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    board = ApprovalBoard(login=login, approvers=approvers, error=None if rc == 0 else f"gh api user rc={rc}: {out[:120]}",
+                          reviewer=reviewer, collected_at=at)
+    board.rows = [_one(gh, repo, n, approvers, login, runs, store_path, reviewer) for repo, n in list(prs)[:max_prs]]
     return board
 
 
