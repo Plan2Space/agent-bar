@@ -22,6 +22,7 @@ Um commit novo muda o HEAD e a aprovação anterior deixa de valer (R9): o item 
 
 ## O botão "Aprovar <RISCO> no HEAD <sha>"
 
+0. Um **seletor** acima do botão lista os PRs não aprovados (`repo#n · risco · estado · HEAD`). O botão age só sobre o PR escolhido. A escolha se mantém entre as coletas, e o primeiro aprovável vem selecionado.
 1. Só fica habilitado quando o PR está **AGUARDANDO**, o CI está `success`, a evidência não falta, e o login atual do `gh` está em `AGENT_BAR_APPROVERS`. Fora disso fica desabilitado, e o motivo aparece embaixo. No modo `AGENT_BAR_OBSERVE_ONLY=1` ele nunca habilita.
 2. Clicar abre uma **confirmação** com o PR, o risco, o SHA completo, o texto exato que será postado e o aviso de credencial (abaixo).
 3. Depois do "Sim", a barra **lê de novo** o HEAD e o CI. HEAD diferente: recusa com o motivo, e a tela volta a aguardar o HEAD novo. CI fora de `success`: recusa.

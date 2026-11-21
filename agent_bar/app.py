@@ -90,7 +90,8 @@ def _run_gui(ns: argparse.Namespace, log: logging.Logger) -> int:
                 else:
                     bar.close_app()
             QTimer.singleShot(400, save)
-        QTimer.singleShot(7000, shot)
+        delay = os.environ.get("AGENT_BAR_SCREENSHOT_DELAY_S", "7")                # coletas em fundo (aprovacoes) podem pedir mais tempo
+        QTimer.singleShot(int(float(delay) * 1000) if delay.replace(".", "", 1).isdigit() else 7000, shot)
     return app.exec()
 
 

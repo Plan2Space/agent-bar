@@ -12,6 +12,7 @@ import os
 import re
 import shutil
 import subprocess
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -502,6 +503,44 @@ def executor_summary(bridge: dict | None, now: dt.datetime) -> tuple[str, str, s
     ref = f"{cur.get('event_id', '?')} @ {str(cur.get('head_sha', ''))[:7]} (PR #{cur.get('pr')})" if cur else ""
     work = "TRABALHANDO (executando uma tarefa)" if running else "apenas monitorando (nenhuma tarefa em execucao)"
     return "; ".join(parts), work, ref
+
+
+class BackgroundCache:
+    """Como GithubCache, mas a coleta roda numa thread propria: `get` nunca espera. Sem valor ainda => `placeholder`;
+    vencido => serve o anterior e atualiza em fundo. Uma coleta por vez. Falha => `on_error(exc)` vira o valor (nunca some calada)."""
+
+    def __init__(self, ttl_s: float = 60.0, clock: Callable[[], float] = time.monotonic, placeholder: object = None,
+                 spawn: Callable[[Callable[[], None]], object] | None = None, on_done: Callable[[], None] | None = None,
+                 on_error: Callable[[BaseException], object] | None = None):
+        self.ttl, self.clock, self.placeholder = ttl_s, clock, placeholder
+        self.spawn = spawn or (lambda fn: threading.Thread(target=fn, name="agent-bar-background", daemon=True).start())
+        self.on_done, self.on_error = on_done, on_error
+        self._lock = threading.Lock()
+        self._key, self._val, self._at, self._running = None, None, None, False
+
+    def invalidate(self) -> None:
+        with self._lock:
+            self._at = None
+
+    def get(self, key: str, fetch: Callable[[], object]) -> object:
+        with self._lock:
+            stale = self._val is None or self._key != key or self._at is None or self.clock() - self._at >= self.ttl
+            start = stale and not self._running
+            if start:
+                self._running = True
+            current = self._val
+        if start:
+            def run() -> None:
+                try:
+                    value = fetch()
+                except Exception as exc:                                      # noqa: BLE001 - erro vira valor exibido
+                    value = self.on_error(exc) if self.on_error else None
+                with self._lock:
+                    self._key, self._val, self._at, self._running = key, value, self.clock(), False
+                if self.on_done:
+                    self.on_done()
+            self.spawn(run)
+        return current if current is not None else self.placeholder
 
 
 class GithubCache:

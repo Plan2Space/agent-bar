@@ -312,3 +312,49 @@ def test_window_button_confirmed_rechecks_and_posts_the_exact_line(gui, monkeypa
         time.sleep(0.02)
     assert posted == [["pr", "comment", "7", "--repo", REPO, "--body", f"APROVADO MEDIUM {SHA1}"]]
     assert "postada" in bar.details.status.text() and "não prova" in seen[0]
+
+
+# ------------------------------------------------------------------------------------------------ coleta em segundo plano
+def test_background_cache_never_blocks_and_serves_the_last_value():
+    from agent_bar.collectors import BackgroundCache
+    pending, done = [], []
+    clock = {"t": 0.0}
+    c = BackgroundCache(ttl_s=60, clock=lambda: clock["t"], placeholder="coletando", spawn=pending.append, on_done=lambda: done.append(1))
+    assert c.get("k", lambda: "v1") == "coletando" and len(pending) == 1          # 1a leitura: nao espera
+    assert c.get("k", lambda: "v1") == "coletando" and len(pending) == 1          # ja tem uma em curso: nao dispara outra
+    pending.pop()()
+    assert c.get("k", lambda: "v2") == "v1" and done == [1] and pending == []     # dentro do TTL: valor pronto, sem nova coleta
+    clock["t"] = 61
+    assert c.get("k", lambda: "v2") == "v1" and len(pending) == 1                 # vencido: serve o anterior e atualiza em fundo
+    pending.pop()()
+    assert c.get("k", lambda: "v3") == "v2"
+
+
+def test_a_failing_background_fetch_becomes_an_error_value_not_a_crash():
+    from agent_bar.collectors import BackgroundCache
+    pending = []
+    c = BackgroundCache(ttl_s=60, placeholder="coletando", spawn=pending.append, on_error=lambda exc: f"erro: {exc}")
+    c.get("k", lambda: (_ for _ in ()).throw(RuntimeError("gh caiu")))
+    pending.pop()()
+    assert c.get("k", lambda: "x") == "erro: gh caiu"
+
+
+def test_while_collecting_the_card_says_so_instead_of_nothing_waiting(gui):  # noqa: F811
+    bar, app, tmp = gui
+    s = snap(tmp)
+    s.approvals = ap.ApprovalBoard(error="coletando aprovações (primeira leitura)")
+    ops = _open_full(bar, s)
+    text = ops.cards["approval"].text()
+    assert "coletando" in text and "nenhum PR aguardando" not in text and not ops.approve_button.isEnabled()
+
+
+def test_the_user_picks_which_waiting_pr_the_button_approves(gui):  # noqa: F811
+    bar, app, tmp = gui
+    s = snap(tmp)
+    s.approvals = collect({(REPO, 7): pr_state(), ("Plan2Space/teste-dois", 9): pr_state(head=SHA2)})
+    ops = _open_full(bar, s)
+    assert ops.approval_picker.count() == 2 and ops.selected_approval.number == 7
+    ops.approval_picker.setCurrentIndex(1)
+    assert ops.selected_approval.number == 9 and SHA2[:12] in ops.approve_button.text() and "teste-dois#9" in ops.approve_button.text()
+    bar.on_snapshot(s)                                                                    # nova coleta mantem a escolha
+    assert ops.selected_approval.number == 9

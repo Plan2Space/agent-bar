@@ -193,7 +193,11 @@ class Worker(QObject):
         self._cache = col.GithubCache(ttl_s=settings.github_interval_s)
         self._backlog = col.GithubCache(ttl_s=settings.backlog_interval_s)
         self._queue = col.GithubCache(ttl_s=settings.github_interval_s)
-        self._approvals = col.GithubCache(ttl_s=settings.github_interval_s)
+        from agent_bar.approvals import ApprovalBoard
+        self._approvals = col.BackgroundCache(ttl_s=settings.github_interval_s,                      # varias chamadas por PR: nunca atrasa a barra
+                                              placeholder=ApprovalBoard(error="coletando aprovações (primeira leitura)"),
+                                              on_done=lambda: self._now.set(),
+                                              on_error=lambda exc: ApprovalBoard(error=f"coleta de aprovações falhou: {type(exc).__name__}: {exc}"))
         self._thread = threading.Thread(target=self._loop, name="agent-bar-collector", daemon=True)
 
     def start(self) -> None:

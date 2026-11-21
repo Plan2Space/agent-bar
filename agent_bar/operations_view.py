@@ -8,6 +8,7 @@ import time
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
+    QComboBox,
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
@@ -105,10 +106,49 @@ class OperationsView(QWidget):
         self.approve_button.setStyleSheet("QPushButton{background:#2b3a55;color:#e6edf7;border:1px solid #3e5a8a;border-radius:6px;padding:6px}"
                                           "QPushButton:disabled{background:#23262d;color:#6d7380;border-color:#323947}")
         self.approve_reason = self._label("")
+        self.approval_picker = QComboBox()                                       # o Felipe escolhe QUAL PR o botao aprova
+        self.approval_picker.setStyleSheet("QComboBox{background:#171b23;color:#e0e5ef;border:1px solid #323947;padding:4px;font-size:11px}")
+        self.approval_picker.currentIndexChanged.connect(lambda _i: self._refresh_button())
+        approval_box.layout().addWidget(self.approval_picker)
         approval_box.layout().addWidget(self.approve_button)
         approval_box.layout().addWidget(self.approve_reason)
-        self.selected_approval: PrApproval | None = None
+        self._approval_rows: list[PrApproval] = []
+        self._observe_only = False
         grid.addWidget(approval_box, 7, 0, 1, 2)
+
+    @property
+    def selected_approval(self) -> PrApproval | None:
+        i = self.approval_picker.currentIndex()
+        return self._approval_rows[i] if 0 <= i < len(self._approval_rows) else None
+
+    def _refresh_button(self) -> None:
+        sel = self.selected_approval
+        self.approve_button.setText(f"Aprovar {sel.risk} no HEAD {sel.head_sha[:12]} · {sel.repo.split('/')[-1]}#{sel.number}"
+                                    if sel is not None else "Aprovar")
+        if self._observe_only:
+            self.approve_button.setEnabled(False)
+            self.approve_reason.setText("instância somente leitura: aprovação desativada")
+        elif sel is None:
+            self.approve_button.setEnabled(False)
+            self.approve_reason.setText("nada para aprovar")
+        else:
+            self.approve_button.setEnabled(sel.can_approve)
+            self.approve_reason.setText("pede confirmação e confere o HEAD e o CI de novo antes de postar; nunca faz merge"
+                                        if sel.can_approve else _clean(sel.blocked_reason or sel.state))
+
+    def _set_approval_rows(self, rows: list[PrApproval]) -> None:
+        """Repopula o seletor mantendo a escolha (por repo#n); sem escolha anterior, o primeiro aprovavel."""
+        previous = self.selected_approval.pr_ref if self.selected_approval is not None else None
+        self._approval_rows = rows
+        self.approval_picker.blockSignals(True)
+        self.approval_picker.clear()
+        for r in rows:
+            self.approval_picker.addItem(f"{r.repo.split('/')[-1]}#{r.number} · {r.risk} · {r.state} · HEAD {r.head_sha[:12]}")
+        refs = [r.pr_ref for r in rows]
+        index = refs.index(previous) if previous in refs else next((i for i, r in enumerate(rows) if r.can_approve), 0 if rows else -1)
+        self.approval_picker.setCurrentIndex(index)
+        self.approval_picker.blockSignals(False)
+        self.approval_picker.setVisible(bool(rows))
 
     @staticmethod
     def _box(title: str) -> QGroupBox:
@@ -136,11 +176,14 @@ class OperationsView(QWidget):
         who = (f"login {_clean(b.login or '?')} · aprovadores: {_clean(', '.join(b.approvers) or 'nenhum (AGENT_BAR_APPROVERS)')}"
                + (f" · <span style='color:#ff9a9b'>{_clean(b.error)}</span>" if b.error else ""))
         rows = [r for r in b.rows if r.state != "auto_low"]
-        if not rows:
+        if b.error and not b.rows:                                            # coletando / falhou: nunca "nenhum PR aguardando"
+            self.cards["approval"].setText(f"<b>INDISPONÍVEL</b> {_clean(b.error)}{warn}")
+            self._set_approval_rows([])
+        elif not rows:
             low = sum(1 for r in b.rows if r.state == "auto_low")
             self.cards["approval"].setText(f"nenhum PR aguardando aprovação humana ({low} LOW automático)"
                                            f"<br><span style='color:#9aa5b5'>{who}</span>{warn}")
-            self.selected_approval = None
+            self._set_approval_rows([])
         else:
             lines = []
             for r in rows:
@@ -156,22 +199,9 @@ class OperationsView(QWidget):
                              + (f"<br>&nbsp;&nbsp;aprovação: {_clean(r.approval.approver)} · <a href=\"{_clean(r.approval.source)}\" "
                                 f"style='color:#8fb4ff'>registro</a>" if r.approval else ""))
             self.cards["approval"].setText("<br>".join(lines) + f"<br><span style='color:#9aa5b5'>{who}</span>{warn}")
-            self.selected_approval = next((r for r in rows if r.can_approve), None) or next((r for r in rows if r.state != "aprovado"), None)
-        sel = self.selected_approval
-        if sel is not None:
-            self.approve_button.setText(f"Aprovar {sel.risk} no HEAD {sel.head_sha[:12]} · {sel.repo.split('/')[-1]}#{sel.number}")
-        else:
-            self.approve_button.setText("Aprovar")
-        if observe_only:
-            self.approve_button.setEnabled(False)
-            self.approve_reason.setText("instância somente leitura: aprovação desativada")
-        elif sel is None:
-            self.approve_button.setEnabled(False)
-            self.approve_reason.setText("nada para aprovar")
-        else:
-            self.approve_button.setEnabled(sel.can_approve)
-            self.approve_reason.setText("pede confirmação e confere o HEAD e o CI de novo antes de postar; nunca faz merge"
-                                        if sel.can_approve else _clean(sel.blocked_reason or sel.state))
+            self._set_approval_rows([r for r in rows if r.state != "aprovado"])
+        self._observe_only = observe_only
+        self._refresh_button()
 
     def update_runs(self, v: RunsView, bench: BenchmarkStatus) -> None:
         """Só o que está em disco e confere com o manifest. Sem fonte/sem dados/sem evidência ficam escritos, nunca omitidos."""

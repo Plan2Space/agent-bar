@@ -16,7 +16,7 @@
    - o **HEAD completo**, o **CI** e a **evidência** ("não se aplica" fora do motor; no `sketchup-mcp-next`, precisa de execução PASS neste HEAD);
    - o estado: `AGUARDANDO`, `APROVADO no HEAD`, `BLOQUEADO` ou `ERRO`, com o motivo;
    - o **aviso** em amarelo: a mesma conta é usada pelos agentes, então o comentário não prova que foi você.
-5. O botão diz qual PR e qual HEAD ele aprovaria (`Aprovar HIGH no HEAD abc123… · agent-bar#NN`). Se estiver desabilitado, o motivo aparece logo abaixo dele.
+5. No seletor acima do botão, escolha o PR. O botão diz qual PR e qual HEAD ele aprovaria (`Aprovar HIGH no HEAD abc123… · agent-bar#NN`). Se estiver desabilitado, o motivo aparece logo abaixo dele.
 
 ## Testar a confirmação sem postar
 
