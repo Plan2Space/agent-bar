@@ -36,14 +36,28 @@ Cada agente tem o seu logo animado (estrela do Claude, balão `>_` do Codex, ros
 ## Instalar e rodar
 
 ```powershell
-python -m venv .venv
-.venv\Scripts\pip install -e .[gui]
-.venv\Scripts\python -m agent_bar.app                 # abre a barra
-.venv\Scripts\python -m agent_bar.app --once-json     # diagnóstico em texto, sem interface
-powershell -File launchers\run_agent_bar.ps1          # atalho para o mesmo
+py -3.12 -m venv .venv                                  # o python global desta máquina está quebrado: use py/uv
+.venv\Scripts\python -m pip install -e .[gui]
+.venv\Scripts\python -m agent_bar.app                   # abre a barra
+.venv\Scripts\python -m agent_bar.app --once-json       # diagnóstico em texto, sem interface
+powershell -NoProfile -File launchers\run_agent_bar.ps1 # o mesmo, sem console; sem .venv explica e sai com 2
 ```
 
-Pelo Explorer, use um duplo clique em `launchers\AGENT-BAR.cmd`. Ele abre a barra com o `.venv` deste checkout e não abre uma segunda se já houver uma aberta. Os caminhos da máquina (EventStore, pasta `runs/` do motor) ficam em `launchers\local.cmd`, fora do git; o modelo é `launchers\local.example.cmd`. Para demonstrar o Sprint 00, siga [`docs/demo/S00_demo_script.md`](docs/demo/S00_demo_script.md).
+### Atalho na Área de Trabalho
+
+```powershell
+powershell -NoProfile -File launchers\install_shortcut.ps1     # cria/recria "Plan2Space Agent Bar" apontando para ESTE checkout
+powershell -NoProfile -File launchers\uninstall_shortcut.ps1   # remove só esse atalho
+```
+
+- O atalho roda o `pythonw.exe` do `.venv` deste checkout, sem console. A pasta de trabalho é o checkout e o ícone é `launchers\agent_bar.ico` (gerado por `launchers\make_icon.py`). Sem `.venv`, o script recusa e explica como criar.
+- **Uma barra por usuário:** abrir de novo traz a barra existente para a frente e abre o painel.
+- **Log:** `%LOCALAPPDATA%\agent_bar\logs\agent_bar.log`. Se a barra falhar antes de aparecer, surge uma caixa de erro com o caminho do log.
+- **Fontes de dados da máquina** (EventStore, execuções do motor, board): `launchers\local.env`, fora do git. O modelo é `launchers\local.example.env`. Só valem chaves `AGENT_BAR_*` e `EVENT_STORE_DB_PATH`, e elas nunca sobrescrevem o ambiente.
+- Pelo Explorer também funciona `launchers\AGENT-BAR.cmd`.
+- Para trocar o checkout que o atalho abre (ex.: de uma worktree para `apps\agent-bar` depois do merge), rode o `install_shortcut.ps1` do checkout novo.
+
+Para demonstrar o Sprint 00, siga [`docs/demo/S00_demo_script.md`](docs/demo/S00_demo_script.md). Proposta de empacotamento (não implementada): [`docs/proposals/empacotamento-windows.md`](docs/proposals/empacotamento-windows.md).
 
 Requer Windows, Python 3.11+ e, para os estados reais, as CLIs `claude`, `codex` e `gh` no PATH.
 

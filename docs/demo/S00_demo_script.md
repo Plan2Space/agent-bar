@@ -12,79 +12,79 @@ Requisitos: Windows 11, Python 3.11+ (nesta máquina, o CPython 3.12 do `uv`, po
 cd <checkout do agent-bar>
 py -3.12 -m venv .venv
 .venv\Scripts\python -m pip install -e .[gui]
-copy launchers\local.example.cmd launchers\local.cmd   # ajuste os caminhos desta máquina (fora do git)
+copy launchers\local.example.env launchers\local.env       # ajuste os caminhos desta máquina (fora do git)
+powershell -NoProfile -File launchers\install_shortcut.ps1  # atalho "Plan2Space Agent Bar" na Área de Trabalho
 ```
 
-O `launchers\local.cmd` diz onde estão as fontes de dados:
+O `launchers\local.env` diz onde estão as fontes de dados:
 
-| Variável | Para a demo | Sem ela |
+| Chave | Para a demo | Sem ela |
 | --- | --- | --- |
 | `EVENT_STORE_DB_PATH` (+ `AGENT_BAR_GOV_DIR`) | `store.db` do laço de revisão FP-060 (schema 1, o mesmo do `agent-runtime`) | `Event Store · INDISPONÍVEL` |
-| `AGENT_BAR_HARNESS_LOG` | `run*.log` mais recente do laço | terminal: "Saída de terminal indisponível" |
-| `AGENT_BAR_RUNS_DIR` | `sketchup-mcp-next\runs` | card de execuções: `SEM FONTE` |
+| `AGENT_BAR_HARNESS_LOG` | `run*.log` do laço | terminal: "Saída de terminal indisponível" |
+| `AGENT_BAR_RUNS_DIR` | `artifacts\` do `sketchup-mcp-next` (cópia somente leitura via `git archive`) | card de execuções: `SEM FONTE` |
+| `AGENT_BAR_BOARD` | omitido = Plan2Space Project #2 | — (`legacy` mostra o board antigo, marcado LEGADO) |
 
 ## 2. Iniciar e encerrar
 
-- **Iniciar (Explorer):** duplo clique em `launchers\AGENT-BAR.cmd`. Com uma barra já aberta, o duplo clique não abre outra.
-- **Iniciar (PowerShell, a partir do repo):**
+- **Iniciar:** duplo clique no atalho **Plan2Space Agent Bar** da Área de Trabalho. Também funcionam `launchers\AGENT-BAR.cmd` (Explorer) ou, a partir do repo, no PowerShell:
   ```powershell
   .venv\Scripts\python -m agent_bar.app
   ```
+- **Abrir de novo** com a barra aberta não cria outra: a existente vem para a frente e abre o painel.
 - **Diagnóstico sem janela** (o mesmo estado, em texto UTF-8):
   ```powershell
   .venv\Scripts\python -m agent_bar.app --once-json
   ```
 - **Encerrar:** clique direito na barra → *Encerrar barra (fecha a barra inteira)*. O `✕` do painel fecha só o painel. Nenhum dos dois para Claude, Codex ou o laço de revisão.
+- **Log:** `%LOCALAPPDATA%\agent_bar\logs\agent_bar.log`. Uma falha antes da UI aparece numa caixa de erro.
 - **Não há componente web.** É uma janela PySide6: não existe porta nem URL local.
 
 ## 3. Roteiro (~10 min)
 
 | Min | Passo | Onde olhar | O que deve aparecer |
 | --- | --- | --- | --- |
-| 0–1 | Abrir a barra | barra flutuante | 5 indicadores. Cor = conexão (verde logado, vermelho sem login, cinza sem fonte); logo animado = trabalhando |
-| 1–2 | **Achar uma tarefa em execução** | clique na barra → painel; *Central completa ↗* → "Fila e dependências" e "Workers e leases" | eventos `PENDING`/`RUNNING` do EventStore lido, com lease. "Registro aberto não comprova processo vivo." |
-| 2–3 | **Ver qual agente** | painel, linhas Claude/Codex | Claude: sessões interativas vivas (pids), separadas das do orquestrador. Codex: "Limite de uso", com a idade do registro |
-| 3–4 | **Ver logs e erros** | Central completa → "Saída observável dos terminais", "Retries, falhas e DLQ" | as últimas linhas do log do coordenador; DLQ com tentativa `5/5` |
-| 4–5 | **Saber de onde vem o dado** | painel → linha `Event Store · LIDO` | caminho do `store.db`, `schema 1`, "último evento há …" e "lido não comprova produção" |
-| 5–6 | **Abrir evidências** | Central completa → "Execuções do motor" | hoje: `SEM DADOS` (o motor novo ainda não gravou `runs/`). Quando a Frente A gravar: run, HEAD, verdict, `visual_verdict = PENDING_HUMAN`, links para manifest e relatórios, preview conferido por sha256 |
-| 6–7 | **Comparar resultados** | Central completa → "Benchmark Claude \| Qwen \| Llama" | hoje: `sem dados` nas três colunas, porque o contrato `benchmark_result` v1 da Frente B ainda não saiu |
-| 7–8 | **Identificar PR bloqueado** | painel → linha "PRs" | PRs abertos de **todos os repos Plan2Space**, classificados (conflito, CI, a corrigir, aguarda revisão, rascunho). Link direto para os que pedem ação |
-| 8–9 | **Ver o board** | painel → "Backlog"; botão *Project #2* | contagem por coluna do Project #2 |
-| 9–10 | **Decisão humana pendente?** | Central completa → "Decisões humanas" | hoje: "indisponíveis: sem contrato persistido". A tela de aprovação presa ao HEAD é a issue S00-14 (UI) |
+| 0–1 | Abrir pelo atalho | barra flutuante (sobre a barra de tarefas) | 5 indicadores. Cor = conexão (verde logado, vermelho sem login, cinza sem fonte); logo animado = trabalhando |
+| 1–2 | **Ver o board do rebuild** | clique na barra → painel → "Board" | `Plan2Space Rebuild` (link), `#2 · PVT_kwDOFV8G784BsjNn`, contagem por coluna e cada item com Task ID, status e `repo#n`, lidos no momento da consulta |
+| 2–3 | **Achar uma tarefa em execução** | Board (In Progress); *Central completa ↗* → "Fila e dependências", "Workers e leases" | Task IDs em In Progress; eventos `PENDING`/`RUNNING` do EventStore lido, com lease. "Registro aberto não comprova processo vivo." |
+| 3–4 | **Ver qual agente** | painel, linhas Claude/Codex | Claude: sessões interativas vivas (pids). Codex: "Limite de uso", com a idade do registro |
+| 4–5 | **Ver logs e erros** | Central completa → "Saída observável dos terminais", "Retries, falhas e DLQ" | as últimas linhas do log do coordenador; DLQ com tentativa `5/5` |
+| 5–6 | **Saber de onde vem o dado** | painel → `Event Store · LIDO` | caminho do `store.db`, `schema 1`, "último evento há …" e "lido não comprova produção" |
+| 6–8 | **Abrir evidências e comparar resultados** | Central completa → "Execuções do motor" | as 3 execuções reais do `sketchup-mcp-next@938e6df`: `room_001` PASS, `room_alt_5x3` PASS, `room_001-planner_error` FAIL (`plano forçado`, check reprovado `opening.door_01.width: esperado 0.8, medido 0.82`). HEAD `43b0cef`, `visual PENDING_HUMAN`, links para manifest e relatórios, preview do `room_001` conferido por sha256 |
+| 8 | **Benchmark** | Central completa → "Benchmark Claude \| Qwen \| Llama" | `sem dados` nas três colunas: os resultados da Frente B ainda não foram publicados |
+| 8–9 | **Identificar PR bloqueado** | painel → linha "PRs" | PRs abertos de **todos os repos Plan2Space**, classificados (conflito, CI, a corrigir, aguarda revisão, rascunho). Link para os que pedem ação |
+| 9–10 | **Decisão humana pendente?** | Central completa → "Decisões humanas" | hoje: "indisponíveis: sem contrato persistido". A tela de aprovação presa ao HEAD é a [#10](https://github.com/Plan2Space/agent-bar/issues/10) (S00-14 UI) |
 
 **Botões que agem** (só com confirmação): *Dar andamento (Claude)*, *Parar*, *Reiniciar DRY_RUN*. Fora da demo. Não clique sem decidir: o primeiro roda um passo real de `claude -p`.
 
 ## 4. Execução real registrada em 2026-11-20 (Frente C)
 
-Rodado a partir do worktree `E:\Claude\worktrees\p2s-c-s00-13` (branch `docs/s00-13-demo`), com o `local.cmd` da tabela acima:
+A partir da worktree `E:\Claude\worktrees\p2s-c-s00-13`, com o `local.env` da tabela acima:
 
-1. `launchers\AGENT-BAR.cmd` iniciou a barra (venv `pythonw.exe` → CPython 3.12.13, saída 0). Um segundo duplo clique **não** abriu outra (2 processos antes e depois: o lançador do venv e o filho).
-2. `--once-json` com as fontes reais:
-   - backlog do Project #2 lido (`Backlog=0, Ready=0, In Progress=7, Review=3, Blocked=0, Done=4`);
-   - 5 PRs abertos da org (`claude-engineering-skills#42=conflito`, `agent-bar#13`, `agent-bar#14`, `sketchup-mcp#685`, `engineering-specs#13=rascunho`);
-   - EventStore `lido (schema 1)` com `DONE 281, SUPERSEDED 48, PENDING 2, DLQ 2, RECORDED 3`;
-   - `execucoes do motor: sem_dados (pasta de execucoes nao existe)` e `benchmark: sem_dados`.
-3. Capturas (Qt `offscreen`, mesmas fontes, via `python -m agent_bar.app --screenshot X.png --full`): barra, painel, Central completa e o widget inteiro de operações. Elas mostram o terminal embutido com o log real do coordenador. As capturas trazem caminhos locais, pids e o login do GitHub, então **não** foram versionadas neste repo público: ficam na pasta de notas da sessão coordenadora (`frente-c-evidencias/`). O veredito visual no desktop real é do Felipe.
+1. `install_shortcut.ps1` criou `Desktop\Plan2Space Agent Bar.lnk` (alvo: `.venv\Scripts\pythonw.exe -m agent_bar.app`; pasta de trabalho: o checkout; ícone `launchers\agent_bar.ico`).
+2. Abrir pelo atalho iniciou a barra (log: `iniciando … local.env=[EVENT_STORE_DB_PATH, AGENT_BAR_GOV_DIR, AGENT_BAR_HARNESS_LOG, AGENT_BAR_RUNS_DIR]`, `barra visivel`). Abrir pela segunda vez registrou `segunda abertura: trazendo a barra existente para a frente`, e a segunda instância saiu: continuaram 2 processos, o lançador do venv e o filho.
+3. `--once-json` com as fontes reais: Project #2 com 15 itens e Task IDs; 5–6 PRs abertos da org; EventStore `lido (schema 1)`; `execucoes do motor: lido (3 execucao(oes))`, todas com `evidencia conferida (sha256)`; `benchmark: sem_dados`.
+4. Capturas da **janela real aberta pelo atalho** (barra e painel) e capturas *offscreen* da Central completa. Elas trazem caminhos locais, pids e o login do GitHub, então **não** foram versionadas neste repo público: ficam na pasta de notas da sessão coordenadora (`frente-c-evidencias/`). O veredito visual é do Felipe.
 
-**Conexão com o runtime: honesta, não completa.** Ainda não existe um EventStore do `agent-runtime` com job real (a Frente B não publicou um). A barra lê o `store.db` do laço FP-060, que usa o mesmo schema 1 (o `event_store.py` do runtime foi portado dele), e o rotula `LIDO`, nunca "produção". Quando o runtime gravar um banco real, basta apontar `EVENT_STORE_DB_PATH` para ele.
+**Conexão com o runtime: honesta, não completa.** Ainda não existe um EventStore do `agent-runtime` com job real. A Frente B avisou que o benchmark do Llama vai gerar um. A barra lê o `store.db` do laço FP-060, que usa o mesmo schema 1, e o rotula `LIDO`, nunca "produção". Quando o banco real sair, basta apontar `EVENT_STORE_DB_PATH` para ele no `local.env`.
 
-**Terminais existentes continuam funcionando:** o terminal embutido mostra as linhas do log real (captura `_ops`). A suíte inteira (incluindo `test_stream_lines_become_readable_terminal_lines` e os testes do passo com streaming) passa no HEAD. Nenhuma funcionalidade do inventário S00-07 foi removida.
+**Terminais existentes continuam funcionando:** o terminal embutido mostra as linhas do log real, e a suíte inteira passa (inclui streaming do passo e terminal somente leitura). Nenhuma funcionalidade do inventário S00-07 foi removida.
 
 ## 5. Reproduzir
 
 ```powershell
 cd <checkout do agent-bar>
-.venv\Scripts\python -m pytest -q                                  # QT_QPA_PLATFORM=offscreen para não abrir janelas
-cmd /c "call launchers\local.cmd & set "QT_QPA_PLATFORM=offscreen" & .venv\Scripts\python -m agent_bar.app --screenshot %TEMP%\abar.png --full"
+$env:QT_QPA_PLATFORM = "offscreen"; .venv\Scripts\python -m pytest -q; Remove-Item Env:QT_QPA_PLATFORM
 .venv\Scripts\python -m agent_bar.app --once-json
+.venv\Scripts\python -m agent_bar.app --screenshot $env:TEMP\abar.png --full   # grava abar.png, _panel, _full e _ops
 ```
 
 ## 6. Perguntas para o Felipe
 
 1. **Ajuda?** Depois de 10 minutos, a barra respondeu "o que está rodando, quem está rodando e o que está travado" mais rápido que abrir GitHub e terminais?
-2. **Confuso?** Algum rótulo ou cor induziu ao erro (ex.: `LIDO` vs. produção, Codex "Limite de uso" com dado de 1 dia)?
+2. **Confuso?** Algum rótulo ou cor induziu ao erro (ex.: `LIDO` vs. produção, Codex "Limite de uso" com dado de 1 dia, `plano forçado`)?
 3. **Falta?** O que você procurou e não achou?
 4. **Remover?** Algum card ou botão que só ocupa espaço (ex.: Listener FP-057 desligado, Pipeline PR/CI do laço antigo)?
-5. **Prioridade da próxima sprint:** (a) execuções reais do motor com preview lado a lado; (b) benchmark Claude×Qwen×Llama; (c) tela de aprovação presa ao HEAD (S00-14); (d) repontar o atalho da área de trabalho para este repo (M0b).
+5. **Prioridade da próxima sprint:** (a) previews lado a lado das execuções do motor (mesma câmera); (b) benchmark Claude×Qwen×Llama; (c) tela de aprovação presa ao HEAD (S00-14); (d) empacotar como `.exe` (ver `docs/proposals/empacotamento-windows.md`).
 
 As sugestões de UI só viram issue depois da resposta dele.
