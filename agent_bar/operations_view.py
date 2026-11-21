@@ -207,7 +207,8 @@ class OperationsView(QWidget):
                              f"<br>&nbsp;&nbsp;HEAD <code>{_clean(r.head_sha or '?')}</code> · CI {_clean(r.ci_state)} · evidência {ev}"
                              f"<br>&nbsp;&nbsp;<span style='color:#9aa5b5'>{_clean(r.evidence_note)}</span>"
                              f"<br>&nbsp;&nbsp;<span style='color:#9aa5b5'>risco: {_clean('; '.join(r.risk_reasons[:3]))}</span>"
-                             + (f"<br>&nbsp;&nbsp;<span style='color:#ff9a9b'>{_clean(r.blocked_reason)}</span>" if r.blocked_reason else "")
+                             + (f"<br>&nbsp;&nbsp;<span style='color:{'#3ddc84' if r.state == 'aprovado' else '#ff9a9b'}'>"   # aprovado nao e bloqueio
+                                f"{_clean(r.blocked_reason)}</span>" if r.blocked_reason else "")
                              + (f"<br>&nbsp;&nbsp;aprovação: {_clean(r.approval.approver)} · <a href=\"{_clean(r.approval.source)}\" "
                                 f"style='color:#8fb4ff'>registro</a>" if r.approval else ""))
             self.cards["approval"].setText("<br>".join(lines) + f"<br><span style='color:#9aa5b5'>{who}</span>{warn}")
