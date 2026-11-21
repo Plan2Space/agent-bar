@@ -57,6 +57,8 @@ class RunView:
     preview_path: Path | None = None
     report_paths: dict[str, Path] = field(default_factory=dict)
     problems: list[str] = field(default_factory=list)
+    failed_checks: list[str] = field(default_factory=list)      # checks do validation_report com pass=false
+    plan_override: bool | None = None                           # execucao com plano forcado (ex.: erro de planner injetado)
 
     @property
     def duration_s(self) -> int | None:
@@ -150,11 +152,18 @@ def _read_json(path: Path) -> dict | None:
     return d if isinstance(d, dict) else None
 
 
+MANIFEST_NAMES = ("run_manifest.json", "manifest.json")   # o motor publica run_manifest.json; a S00-02 C3 diz manifest.json
+
+
+def _manifest_path(run_dir: Path) -> Path:
+    return next((run_dir / n for n in MANIFEST_NAMES if (run_dir / n).exists()), run_dir / MANIFEST_NAMES[0])
+
+
 def read_run(run_dir: Path) -> RunView:
-    mpath = run_dir / "manifest.json"
+    mpath = _manifest_path(run_dir)
     m = _read_json(mpath)
     if m is None:
-        return RunView(run_dir.name, "MANIFEST_ILEGIVEL", run_dir, problems=["manifest.json ausente ou JSON invalido"])
+        return RunView(run_dir.name, "MANIFEST_ILEGIVEL", run_dir, problems=[f"{mpath.name} ausente ou JSON invalido"])
     version = str(m.get("schema_version") or "")
     if version.split(".")[0] != SUPPORTED_MAJOR:
         return RunView(str(m.get("run_id") or run_dir.name), "MANIFEST_INCOMPATIVEL", run_dir,
@@ -172,6 +181,7 @@ def read_run(run_dir: Path) -> RunView:
         r.problems.append("engine.commit nao e um SHA completo: execucao sem HEAD exato")
     if r.engine_dirty:
         r.problems.append("motor com arvore suja (dirty): o HEAD nao descreve o codigo que rodou")
+    r.plan_override = m.get("plan_override") if isinstance(m.get("plan_override"), bool) else None
     fixture = m.get("fixture") if isinstance(m.get("fixture"), dict) else {}
     r.fixture_path = str(fixture.get("path") or "")
     r.steps = [Step(str(s.get("name") or "?"), str(s.get("status") or "?"), s.get("elapsed_s") if isinstance(s.get("elapsed_s"), (int, float)) else None)
@@ -203,6 +213,8 @@ def read_run(run_dir: Path) -> RunView:
         r.verdict = verdict if verdict in ("PASS", "FAIL", "BLOCKED") else None
         if r.verdict is None:
             r.problems.append(f"validation_report com verdict invalido: {verdict!r}")
+        r.failed_checks = [f"{c.get('target') or c.get('id')}: esperado {c.get('expected')}, medido {c.get('measured')} (tol {c.get('tolerance')})"
+                           for c in (v.get("checks") or []) if isinstance(c, dict) and c.get("pass") is False]
         r.visual_verdict = str(v.get("visual_verdict")) if v.get("visual_verdict") is not None else None
         if r.visual_verdict != "PENDING_HUMAN":
             r.problems.append(f"visual_verdict = {r.visual_verdict!r}; so o humano decide (esperado PENDING_HUMAN)")
@@ -219,12 +231,19 @@ def collect_runs(runs_dir: Path | None, limit: int = 10) -> RunsView:
         return RunsView("sem_fonte", "AGENT_BAR_RUNS_DIR nao configurado: nenhuma execucao do motor e exibida")
     if not runs_dir.is_dir():
         return RunsView("sem_dados", f"pasta de execucoes nao existe: {runs_dir}", str(runs_dir))
-    try:
-        dirs = [d for d in runs_dir.iterdir() if d.is_dir() and (d / "manifest.json").exists()]
+    try:                                                     # runs/<run_id>/ (C10) ou artifacts/<room>/<run_id>/ (motor): ate 2 niveis
+        dirs = []
+        for d in runs_dir.iterdir():
+            if not d.is_dir():
+                continue
+            if any((d / n).exists() for n in MANIFEST_NAMES):
+                dirs.append(d)
+            else:
+                dirs += [e for e in d.iterdir() if e.is_dir() and any((e / n).exists() for n in MANIFEST_NAMES)]
     except OSError as exc:
         return RunsView("sem_dados", f"pasta de execucoes ilegivel: {type(exc).__name__}", str(runs_dir))
     if not dirs:
-        return RunsView("sem_dados", f"nenhuma execucao com manifest.json em {runs_dir}", str(runs_dir))
+        return RunsView("sem_dados", f"nenhuma execucao com run_manifest.json/manifest.json em {runs_dir}", str(runs_dir))
     runs = [read_run(d) for d in dirs]
     runs.sort(key=lambda r: (r.started_at, r.run_id), reverse=True)
     return RunsView("lido", f"{len(runs)} execucao(oes) lida(s) de {runs_dir}", str(runs_dir), runs[:limit])

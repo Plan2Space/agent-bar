@@ -146,6 +146,10 @@ class OperationsView(QWidget):
             rows.append(f"<b>{_clean(r.run_id)}</b> · {_clean(r.status)} · <span style='color:{color}'><b>{_clean(r.verdict or 'sem relatório')}</b></span>"
                         f" · visual {_clean(r.visual_verdict or '?')}<br>&nbsp;&nbsp;HEAD {_clean(r.engine_repo)}@{_clean(r.engine_commit[:12] or '?')}"
                         f"{dur} · {steps}<br>&nbsp;&nbsp;{links or 'nenhum arquivo conferido'}")
+            if r.plan_override:
+                rows.append("&nbsp;&nbsp;<span style='color:#ffc233'>plano forçado (plan_override): execução de teste do caminho de erro</span>")
+            if r.failed_checks:
+                rows.append("&nbsp;&nbsp;<span style='color:#ff9a9b'>checks reprovados: " + _clean("; ".join(r.failed_checks[:4])) + "</span>")
             if r.problems:
                 rows.append("&nbsp;&nbsp;<span style='color:#ff9a9b'>sem evidência / problema: " + _clean("; ".join(r.problems)[:400]) + "</span>")
         self.cards["runs"].setText("<br>".join(rows))
