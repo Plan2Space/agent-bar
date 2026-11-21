@@ -140,12 +140,6 @@ def test_reading_runs_never_writes_anything(tmp_path):
     assert {p: p.stat().st_mtime_ns for p in tmp_path.rglob("*")} == before
 
 
-def test_benchmark_has_no_data_until_the_runtime_publishes_its_contract():
-    b = rn.benchmark_status()
-    assert b.state == "sem_dados" and [c.agent for c in b.columns] == ["Claude", "Qwen", "Llama"]
-    assert all(c.result is None for c in b.columns) and "benchmark_result" in b.reason
-
-
 # ------------------------------------------------------------------------------------------------ UI (Central completa)
 from tests.test_agent_bar import gui, snap  # noqa: E402,F401
 
@@ -163,7 +157,7 @@ def test_full_view_says_no_engine_run_is_shown_without_a_source(gui):  # noqa: F
     text = ops.cards["runs"].text()
     assert "SEM FONTE" in text and "AGENT_BAR_RUNS_DIR" in text and ops.preview.pixmap().isNull()
     bench = ops.cards["benchmark"].text()
-    assert "Claude" in bench and "Qwen" in bench and "Llama" in bench and "sem dados" in bench
+    assert "SEM FONTE" in bench and "AGENT_BAR_BENCHMARK_DIR" in bench and "ainda nao publicado" not in bench
 
 
 def test_full_view_shows_run_head_verdict_problems_and_the_preview(gui, tmp_path):  # noqa: F811
