@@ -214,7 +214,8 @@ def test_snapshot_end_to_end_with_fakes_and_diagnostic_has_no_secrets(tmp_path):
         return gh_with([{"conclusion": "SUCCESS"}])(args)
     s = col.collect_snapshot(g, procs_fn=lambda: LISTENER_OK, task_fn=lambda: "Running", gh=gh, now=NOW)
     assert s.pr == 7 and s.listener.level is Level.GREEN and s.codex.label == "Nao integrado"
-    assert s.backlog == {"Ready": 5, "In Progress": 8, "GPT Review": 10, "Blocked": 32, "Done": 26} and s.backlog_error is None
+    # colunas do Project #2 em ordem; "GPT Review" (coluna do board antigo) aparece como extra, nao some
+    assert s.backlog == {"Backlog": 0, "Ready": 5, "In Progress": 8, "Review": 0, "Blocked": 32, "Done": 26, "GPT Review": 10} and s.backlog_error is None
     assert s.mode_banner().startswith("DRY_RUN") and "desligada" in s.mode_banner() and "monitorando" in s.work
     d = s.diagnostic()
     assert "PR atual: 7" in d and "review:9" in d and "aaaaaaa" in d and "heartbeat: 30s" in d and "pid 20" in d
@@ -223,8 +224,8 @@ def test_snapshot_end_to_end_with_fakes_and_diagnostic_has_no_secrets(tmp_path):
 
 # ------------------------------------------------------------------------------------------------------------- backlog
 def gql(counts, more=False, cursor=None):
-    nodes = [{"fieldValueByName": {"name": k}} for k, n in counts.items() for _ in range(n)]
-    nodes.append({"fieldValueByName": None})                                      # item sem status
+    nodes = [{"status": {"name": k}} for k, n in counts.items() for _ in range(n)]
+    nodes.append({"status": None})                                                # item sem status
     return json.dumps({"data": {"organization": {"projectV2": {"items": {
         "pageInfo": {"hasNextPage": more, "endCursor": cursor}, "nodes": nodes}}}}})
 
@@ -261,7 +262,8 @@ def test_backlog_error_is_specific_never_a_bare_indisponivel():
     assert "Could not resolve" in err
 
 
-def test_snapshot_keeps_the_last_good_backlog_but_flags_the_error():
+def test_snapshot_shows_the_backlog_error_and_never_the_last_good_numbers():
+    # Mudou de proposito (pedido do Felipe, S00-13): falha na leitura do board = erro e indisponivel, sem numero antigo/cache.
     cache = col.GithubCache(ttl_s=0)
     ok = {"state": "good"}
 
@@ -279,7 +281,7 @@ def test_snapshot_keeps_the_last_good_backlog_but_flags_the_error():
         g = gov(Path(d))
         s2 = col.collect_snapshot(g, procs_fn=lambda: LISTENER_OK, task_fn=lambda: "Running", gh=gh, backlog_cache=cache, now=NOW)
     assert s1.backlog["Ready"] == 7 and s1.backlog_error is None
-    assert s2.backlog["Ready"] == 7 and "rate limit" in s2.backlog_error and s2.backlog_synced == s1.backlog_synced
+    assert s2.backlog["Ready"] is None and "rate limit" in s2.backlog_error and s2.backlog_synced is None
 
 
 # -------------------------------------------------------------------------------------------------------- historico

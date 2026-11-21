@@ -49,7 +49,7 @@ class RunEntry:
 
 @dataclass
 class Observation:
-    source: str = "indisponível"  # real | demonstração | indisponível
+    source: str = "indisponível"  # lido | demonstração | indisponível ("lido" = schema lido do arquivo; NAO prova que e producao)
     reason: str = "Event Store não encontrado"
     db_path: str = ""
     counts: dict[str, int] = field(default_factory=dict)
@@ -65,6 +65,8 @@ class Observation:
     mean_run_seconds_24h: float | None = None
     messages_status: str = "Mensagens entre agentes indisponíveis: sem contrato persistido"
     decisions_status: str = "Decisões humanas indisponíveis: sem contrato persistido"
+    schema_version: str | None = None
+    last_event_age_s: int | None = None          # idade da ultima transicao; None = banco sem transicoes (nunca um 0 inventado)
     heartbeats_status: str = "Heartbeats individuais indisponíveis: apenas lease e heartbeat do listener"
 
 
@@ -134,6 +136,10 @@ def collect_observation(gov: Path, *, db_path: Path | None = None, now: float | 
             if not version or version[0] != "1":
                 result.reason = "Versão do Event Store incompatível"
                 return result
+            result.schema_version = version[0]
+            last = db.execute("SELECT MAX(at) FROM transitions").fetchone()[0]
+            if last is not None:
+                result.last_event_age_s = max(0, int((now if now is not None else time.time()) - float(last)))
             result.counts = {row["status"]: row["n"] for row in db.execute(
                 "SELECT status, COUNT(*) n FROM events GROUP BY status")}
             result.outbox_pending = db.execute(
@@ -165,8 +171,8 @@ def collect_observation(gov: Path, *, db_path: Path | None = None, now: float | 
             result.mean_run_seconds_24h = db.execute(
                 """SELECT AVG(ended_at-started_at) FROM subprocess_runs
                    WHERE ended_at IS NOT NULL AND ended_at>=?""", (cutoff,)).fetchone()[0]
-        result.source = "demonstração" if os.environ.get("AGENT_BAR_DEMO") == "1" else "real"
-        result.reason = "Fixture isolada" if result.source == "demonstração" else "Event Store FP-060, leitura SQLite"
+        result.source = "demonstração" if os.environ.get("AGENT_BAR_DEMO") == "1" else "lido"
+        result.reason = "Fixture isolada" if result.source == "demonstração" else f"arquivo {path.name} lido em modo somente leitura (schema {version[0]})"
         for run in result.runs:
             lines = _safe_tail(run.stdout_path, path.parent)
             errors = _safe_tail(run.stderr_path, path.parent)
