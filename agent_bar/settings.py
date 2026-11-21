@@ -16,6 +16,7 @@ class Settings:
     github_interval_s: int = 60        # TTL do cache do GitHub (PR/checks)
     backlog_interval_s: int = 300      # TTL do cache do Project #1 (mais caro)
     notifications: bool = False
+    notify_human: bool = True          # aviso do Windows quando um PR passa a precisar do Felipe (uma vez por PR@HEAD)
     minimized: bool = False
 
 

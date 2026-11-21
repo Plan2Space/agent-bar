@@ -23,6 +23,7 @@ Tudo é opcional: sem nenhuma configuração a barra abre e mostra o que consegu
 | `AGENT_BAR_BENCHMARK_DIR` | (sem padrão: **SEM FONTE**) | pasta `benchmark/` do `agent-runtime` (ou a pasta acima dela), ex.: uma cópia via `git archive <sha> benchmark`. Lê `comparison.json` e `<backend>/runs/*/result.json` (`benchmark_result` 1.x; outro major é recusado por arquivo). Sem `comparison.json` legível: **INDISPONÍVEL**, nenhum número |
 | `AGENT_BAR_BENCHMARK_COMMIT` | (não informado) | commit do `agent-runtime` de onde a cópia veio, mostrado na tela. Sem ele, a tela diz "commit de origem não informado" |
 | `AGENT_BAR_APPROVERS` | (vazio: ninguém aprova pela barra) | logins aceitos como aprovadores na tela de aprovação humana (S00-14), separados por vírgula. Ver [aprovacao-humana.md](aprovacao-humana.md) |
+| `AGENT_BAR_REVIEWER` | `fmmodesto` | login do agente revisor cuja recomendação aparece em "Precisa de você". Ver [precisa-de-voce.md](precisa-de-voce.md) |
 | `QT_QPA_PLATFORM` | do Qt | `offscreen` nos testes e na geração de capturas |
 
 O board é lido **no momento da consulta**: nome, URL, id, `Task ID` e `Status` de cada item, 100 por página até o fim. Falha de auth, falta de acesso, erro GraphQL ou resposta com menos itens que o `totalCount` aparecem como **INDISPONÍVEL** com o motivo. A barra nunca recorre a números antigos ou ao cache como fallback.

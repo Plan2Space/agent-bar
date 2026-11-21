@@ -57,6 +57,7 @@ from agent_bar import collectors as col
 from agent_bar import controls as ctl
 from agent_bar import geometry as geo
 from agent_bar import settings as cfg
+from agent_bar.inbox import Inbox, InboxNotifier, human_inbox, waited
 from agent_bar.models import GroupedEvent, Level, Snapshot
 from agent_bar.operations_view import OperationsView
 
@@ -278,6 +279,30 @@ def board_html(b) -> str:
             + (f"<br>{items}{more}" if items else ""))
 
 
+def inbox_html(inbox: Inbox) -> str:
+    """Topo do painel: o que espera o Felipe (HIGH aguardando no HEAD atual), do mais antigo para o mais novo."""
+    head = "<b style='color:#ffc233'>Precisa de você</b>"
+    if inbox.state != "lido":
+        return f"{head} <b style='color:#ff6b6d'>INDISPONÍVEL</b> <span style='color:#ff9a9b'>{esc(inbox.reason)}</span>"
+    extra = f" <span style='color:#ff9a9b'>({inbox.unreadable} PR(s) não lidos: erro de leitura)</span>" if inbox.unreadable else ""
+    when = f" <span style='color:#6d6d75'>(lido {hhmm(inbox.collected_at)})</span>" if inbox.collected_at else ""
+    if not inbox.items:
+        return f"{head} <span style='color:#3ddc84'>nada esperando você</span>{extra}{when}"
+    rows = []
+    for i in inbox.items:
+        name = esc(i.pr_ref.split("/")[-1])
+        link = f"<a href=\"{esc(i.url)}\" style='color:#8fb4ff'>{name}</a>" if i.url.startswith("https://github.com/") else name
+        if i.reviewer_verdict:
+            rlink = f" <a href=\"{esc(i.reviewer_url)}\" style='color:#8fb4ff'>ver</a>" if i.reviewer_url.startswith("https://github.com/") else ""
+            rec = f"revisor {esc(inbox.reviewer)}: <b>{esc(i.reviewer_verdict)}</b> {esc(i.reviewer_note[:90])}{rlink}"
+        else:
+            rec = f"revisor {esc(inbox.reviewer)}: sem recomendação neste HEAD"
+        rows.append(f"&bull; {link} <span style='color:#9a9aa2'>{esc(i.title[:60])}</span><br>&nbsp;&nbsp;<b>{esc(i.risk)}</b> "
+                    f"<span style='color:#9a9aa2'>{esc(i.reason[:90])}</span><br>&nbsp;&nbsp;HEAD {esc(i.head_sha[:7])} · CI {esc(i.ci_state)}"
+                    f" · espera há {waited(i.waiting_s)}<br>&nbsp;&nbsp;<span style='color:#9a9aa2'>{rec}</span>")
+    return f"{head} ({len(inbox.items)}){extra}{when}<br>" + "<br>".join(rows)
+
+
 def queue_html(q) -> str:
     """Fila de PRs: contagens por situacao, os que pedem acao com link e o erro explicito quando a leitura falha (nunca um 0 inventado)."""
     if q.error and not q.rows:
@@ -390,6 +415,12 @@ class Details(QWidget):
         lay = QVBoxLayout(self.body)
         lay.setContentsMargins(12, 6, 12, 6)
         lay.setSpacing(2)
+        self.human = QLabel()                                                    # "Precisa de você": primeira coisa do painel
+        self.human.setTextFormat(Qt.TextFormat.RichText)
+        self.human.setWordWrap(True)
+        self.human.setOpenExternalLinks(True)
+        self.human.setStyleSheet("color:#e6e6e6;font-size:11px;background:#2a2516;border:1px solid #5a4a1f;border-radius:8px;padding:6px")
+        lay.addWidget(self.human)
         self.banner, self.agents, self.health, self.backlog = QLabel(), QLabel(), QLabel(), QLabel()
         for w in (self.banner, self.agents, self.health, self.backlog):
             w.setTextFormat(Qt.TextFormat.RichText)
@@ -606,6 +637,7 @@ class Details(QWidget):
         self.terminal.verticalScrollBar().setValue(self.terminal.verticalScrollBar().maximum())
 
     def update_snapshot(self, s: Snapshot) -> None:
+        self.human.setText(inbox_html(getattr(self.bar, "inbox", None) or human_inbox(s.approvals)))
         self.banner.setText(f'<b style="color:{"#ffc233" if s.mode == "DRY_RUN" else "#ff6b6d" if s.mode == "EXECUTE" else "#8a8f98"}">'
                             f'{esc(s.mode_banner())}</b> &middot; {esc(s.work)}')
         rows = []
@@ -688,6 +720,10 @@ class Bar(QWidget):
         self.pr = QLabel("PR -")
         self.pr.setStyleSheet("color:#bdbdc4;font-size:12px")
         lay.addWidget(self.pr)
+        self.human_badge = QLabel()                                              # contador "para voce" (decisao humana pendente)
+        self.human_badge.setVisible(False)
+        lay.addWidget(self.human_badge)
+        self.inbox: Inbox | None = None
         lay.addStretch(1)
         self.play = QPushButton("▶")                                             # o mesmo "Dar andamento" do painel, a um clique da barra
         self.play.setFixedSize(28, 28)
@@ -716,6 +752,15 @@ class Bar(QWidget):
         self._step_stopped = False
         self._refresh_pending: float | None = None
         self.tray = QSystemTrayIcon(self) if QSystemTrayIcon.isSystemTrayAvailable() else None
+        self._notice_url: str | None = None
+        if self.tray is not None:                                                     # sem icone visivel o Windows nao mostra o aviso
+            from PySide6.QtGui import QIcon
+            ico = Path(__file__).resolve().parents[1] / "launchers" / "agent_bar.ico"
+            self.tray.setIcon(QIcon(str(ico)) if ico.is_file() else QApplication.windowIcon())
+            self.tray.setToolTip("Plan2Space Agent Bar")
+            self.tray.messageClicked.connect(self._open_notice)
+            self.tray.show()
+        self.notifier = InboxNotifier(show=self._notify_human, enabled=lambda: self.settings.notify_human)
         self.worker = Worker(settings, self.gov)
         self.details = Details(self)
         self.worker.snapshot.connect(self.on_snapshot)
@@ -780,6 +825,9 @@ class Bar(QWidget):
         n = QAction("Notificacoes", m, checkable=True, checked=self.settings.notifications)
         n.toggled.connect(self.set_notifications)
         m.addAction(n)
+        h = QAction("Avisar quando um PR precisar de mim", m, checkable=True, checked=self.settings.notify_human)
+        h.toggled.connect(self.set_notify_human)
+        m.addAction(h)
         m.addAction("Minimizar para icone", self.toggle_minimized)
         m.addSeparator()
         m.addAction("Encerrar barra (fecha a barra inteira)", self.close_app)
@@ -818,9 +866,39 @@ class Bar(QWidget):
         mini = self.settings.minimized
         for w in (*self.labels.values(), *self.icons.values(), self.pr, self.play, self.gear):
             w.setVisible(not mini)
+        self._sync_badge()
         self.resize(44 if mini else BAR_W, 44 if mini else 65)
         if mini:
             self.details.hide()
+
+    def _notify_human(self, title: str, text: str, url: str) -> None:
+        if self.tray is None:
+            raise RuntimeError("bandeja do sistema indisponível")
+        self._notice_url = url
+        self.tray.showMessage(title, text, QSystemTrayIcon.MessageIcon.Information, 15000)
+
+    def _open_notice(self) -> None:
+        if self._notice_url:
+            self.report(ctl.open_url(self._notice_url))
+
+    def set_notify_human(self, on: bool) -> None:
+        self.settings.notify_human = on
+        cfg.save(self.settings)
+
+    def _sync_badge(self) -> None:
+        inbox = self.inbox
+        if inbox is None or self.settings.minimized:
+            self.human_badge.setVisible(False)
+            return
+        if inbox.state != "lido":
+            self.human_badge.setText("<span style='color:#8a8f98;font-size:12px'>&#9873; ? para você</span>")
+            self.human_badge.setToolTip(f"Precisa de você: indisponível ({inbox.reason})")
+            self.human_badge.setVisible(True)
+            return
+        n = len(inbox.items)
+        self.human_badge.setText(f"<b style='color:#ffc233;font-size:12px'>&#9873; {n} para você</b>")
+        self.human_badge.setToolTip("\n".join(f"{i.pr_ref} {i.risk} HEAD {i.head_sha[:7]} · espera há {waited(i.waiting_s)}" for i in inbox.items))
+        self.human_badge.setVisible(n > 0)
 
     def set_notifications(self, on: bool) -> None:
         self.settings.notifications = on
@@ -1034,6 +1112,9 @@ class Bar(QWidget):
                 self.tray.showMessage("Agent bar", a.line(), QSystemTrayIcon.MessageIcon.Warning)
             self._levels[a.name] = a.level
         self._sync_animation()
+        self.inbox = human_inbox(s.approvals)
+        self._sync_badge()
+        self.notifier.update(self.inbox)
         self.pr.setText(f"PR #{s.pr}" if s.pr else "PR -")
         self.pr.setToolTip(f"checks: {s.github_checks}")
         self.gear.setToolTip(f"{s.mode_banner()}\n{s.work}\n" + (s.last_error or "sem erro observado"))
