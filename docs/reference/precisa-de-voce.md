@@ -29,6 +29,6 @@ Vazio: "nada esperando você". Falha da coleta: **INDISPONÍVEL** com o motivo, 
 | `AGENT_BAR_REVIEWER` | `fmmodesto` | login do agente revisor cuja recomendação aparece na lista |
 | `notify_human` (`settings.json`) | `true` | aviso do Windows quando um PR passa a precisar do Felipe |
 
-## Limite conhecido (do runtime, não desta tela)
+## Aprovadores por nível (agent-runtime `0de08b9`)
 
-`agent_runtime.approval.from_github_review` aceita como aprovação **qualquer review `APPROVED` de usuário humano**: `user.type = User`, sem conferir a lista de aprovadores. A conta do revisor `fmmodesto` é `User`. Se ele der APPROVED num PR HIGH, o runtime trata como aprovação humana, e o PR sai desta lista. A correção é no runtime (filtrar reviews pela lista de aprovadores) e foi reportada ao coordenador.
+Desde o agent-runtime#64, `from_github_review` só aceita review `APPROVED` de um login configurado **para o nível do PR**, sem herança entre níveis, e ignora o autor do PR. A barra passa o mapa por nível (`AGENT_BAR_APPROVERS_MEDIUM` / `AGENT_BAR_APPROVERS_HIGH`, ver [aprovacao-humana.md](aprovacao-humana.md)). A conta do revisor (`AGENT_BAR_REVIEWER`) é retirada da lista HIGH mesmo se configurada lá. Resultado: um APPROVED da `fmmodesto` num HIGH **não** tira o PR desta lista, nem um comentário `APROVADO HIGH <sha>` dela. A falha descrita antes (qualquer usuário humano aprovava) está corrigida no runtime.

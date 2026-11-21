@@ -22,7 +22,7 @@ Tudo é opcional: sem nenhuma configuração a barra abre e mostra o que consegu
 | `AGENT_BAR_RUNS_DIR` | (sem padrão: **SEM FONTE**) | pasta de execuções do motor: `runs/<run_id>/manifest.json` (S00-02 C3/C10) ou `artifacts/<room>/<run_id>/run_manifest.json` (layout real do `sketchup-mcp-next`), lida para o card "Execuções do motor" |
 | `AGENT_BAR_BENCHMARK_DIR` | (sem padrão: **SEM FONTE**) | pasta `benchmark/` do `agent-runtime` (ou a pasta acima dela), ex.: uma cópia via `git archive <sha> benchmark`. Lê `comparison.json` e `<backend>/runs/*/result.json` (`benchmark_result` 1.x; outro major é recusado por arquivo). Sem `comparison.json` legível: **INDISPONÍVEL**, nenhum número |
 | `AGENT_BAR_BENCHMARK_COMMIT` | (não informado) | commit do `agent-runtime` de onde a cópia veio, mostrado na tela. Sem ele, a tela diz "commit de origem não informado" |
-| `AGENT_BAR_APPROVERS` | (vazio: ninguém aprova pela barra) | logins aceitos como aprovadores na tela de aprovação humana (S00-14), separados por vírgula. Ver [aprovacao-humana.md](aprovacao-humana.md) |
+| `AGENT_BAR_APPROVERS_HIGH` / `AGENT_BAR_APPROVERS_MEDIUM` | (vazio: ninguém aprova pela barra) | aprovadores **por nível** (sem herança; o revisor nunca entra em HIGH). `AGENT_BAR_APPROVERS` (plana) vale para os dois níveis sem variável própria. Ver [aprovacao-humana.md](aprovacao-humana.md) |
 | `AGENT_BAR_REVIEWER` | `fmmodesto` | login do agente revisor cuja recomendação aparece em "Precisa de você". Ver [precisa-de-voce.md](precisa-de-voce.md) |
 | `QT_QPA_PLATFORM` | do Qt | `offscreen` nos testes e na geração de capturas |
 

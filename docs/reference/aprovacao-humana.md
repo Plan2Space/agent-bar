@@ -39,7 +39,11 @@ Os agentes usam a mesma conta do GitHub (`fmodesto30`) que posta esta aprovaçã
 
 | Variável | Para quê |
 | --- | --- |
-| `AGENT_BAR_APPROVERS` | logins aceitos como aprovadores, separados por vírgula (ex.: `fmodesto30`). Vazio: ninguém aprova pela barra, e a tela diz isso. O runtime ainda não tem uma lista configurada própria; quando tiver, esta variável deve seguir a dele |
+| `AGENT_BAR_APPROVERS_HIGH` | logins que aprovam PR **HIGH**, separados por vírgula (ex.: `fmodesto30`). A conta do revisor (`AGENT_BAR_REVIEWER`, padrão `fmmodesto`) é sempre retirada desta lista |
+| `AGENT_BAR_APPROVERS_MEDIUM` | logins que aprovam PR **MEDIUM** (ex.: `fmmodesto,fmodesto30`). Sem herança: estar em MEDIUM não aprova HIGH (agent-runtime `0de08b9`, `approvers_for`) |
+| `AGENT_BAR_APPROVERS` | forma antiga, plana: vale para os dois níveis quando o nível não tem variável própria (sempre sem o revisor em HIGH). Vazio em tudo: ninguém aprova pela barra, e a tela diz qual variável falta |
+
+O botão só habilita se o login do `gh` estiver na lista **do nível do PR**. Um comentário `APROVADO <RISCO> <sha>` só conta se o autor estiver na lista desse nível. Um review `APPROVED` segue a mesma regra no runtime, e o review do próprio autor do PR é ignorado. Os aprovadores do merge gate do runtime são parâmetros dele (`scripts/merge_gate.py --approver NIVEL=LOGIN`): mantenha os dois iguais. Lembrete do runtime: HIGH ele nunca mergeia, e comentário nunca dispara merge. O comentário da barra é o registro auditável da decisão humana no HEAD.
 | `EVENT_STORE_DB_PATH` | EventStore do runtime, de onde vêm os fatos `GITHUB_REVIEW_SUBMITTED` (somente leitura) |
 | `AGENT_BAR_RUNS_DIR` | execuções do motor, usadas como evidência dos PRs do `sketchup-mcp-next` |
 

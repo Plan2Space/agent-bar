@@ -17,7 +17,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from contextlib import closing
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -74,7 +74,7 @@ class PrApproval:
 class ApprovalBoard:
     rows: list[PrApproval] = field(default_factory=list)
     login: str | None = None
-    approvers: tuple[str, ...] = ()
+    approvers: dict[str, tuple[str, ...]] = field(default_factory=dict)   # por nivel: {'MEDIUM': (...), 'HIGH': (...)}
     credential_warning: str = CREDENTIAL_WARNING
     error: str | None = None
     reviewer: str = DEFAULT_REVIEWER
@@ -85,9 +85,37 @@ class ApprovalBoard:
         return [r for r in self.rows if r.state in ("aguardando", "bloqueado", "erro") and r.risk != "LOW"]
 
 
-def approvers_from_env(env: dict | None = None) -> tuple[str, ...]:
-    raw = (os.environ if env is None else env).get("AGENT_BAR_APPROVERS", "")
-    return tuple(a.strip() for a in raw.split(",") if a.strip())
+LEVELS = ("MEDIUM", "HIGH")
+Approvers = Mapping[str, Sequence[str]]
+
+
+def _split(raw: str) -> tuple[str, ...]:
+    return tuple(a.strip() for a in (raw or "").split(",") if a.strip())
+
+
+def by_level(approvers: Approvers | Sequence[str], reviewer: str = DEFAULT_REVIEWER) -> dict[str, tuple[str, ...]]:
+    """Mapa por nivel (runtime 0de08b9: sem heranca entre niveis). Lista plana = os dois niveis. A conta do revisor nunca
+    aprova HIGH, mesmo se configurada: e tirada da lista HIGH aqui."""
+    if isinstance(approvers, Mapping):
+        m = {lvl: tuple(next((v for k, v in approvers.items() if str(k).upper() == lvl), ())) for lvl in LEVELS}
+    else:
+        flat = tuple(approvers)
+        m = {lvl: flat for lvl in LEVELS}
+    m["HIGH"] = tuple(a for a in m["HIGH"] if a.lower() != reviewer.lower())
+    return m
+
+
+def approvers_from_env(env: Mapping[str, str] | None = None) -> dict[str, tuple[str, ...]]:
+    """AGENT_BAR_APPROVERS_MEDIUM / AGENT_BAR_APPROVERS_HIGH; a antiga AGENT_BAR_APPROVERS (plana) vale para os dois niveis
+    quando o nivel nao tem variavel propria."""
+    e = os.environ if env is None else env
+    flat = _split(e.get("AGENT_BAR_APPROVERS", ""))
+    raw = {lvl: _split(e[f"AGENT_BAR_APPROVERS_{lvl}"]) if f"AGENT_BAR_APPROVERS_{lvl}" in e else flat for lvl in LEVELS}
+    return by_level(raw, e.get("AGENT_BAR_REVIEWER") or DEFAULT_REVIEWER)
+
+
+def approvers_text(m: Mapping[str, Sequence[str]]) -> str:
+    return " · ".join(f"{lvl}: {', '.join(m.get(lvl, ())) or 'ninguém'}" for lvl in LEVELS)
 
 
 def approval_line(risk: str, sha: str) -> str:
@@ -200,7 +228,7 @@ def reviewer_opinion(reviewer: str, head: str, committed_at: str | None, reviews
     return None
 
 
-def _one(gh: Gh, repo: str, number: int, approvers: Sequence[str], login: str | None, runs, store_path,
+def _one(gh: Gh, repo: str, number: int, approvers: Mapping[str, Sequence[str]], login: str | None, runs, store_path,
          reviewer: str = DEFAULT_REVIEWER) -> PrApproval:
     row = PrApproval(repo, number)
     try:
@@ -220,16 +248,18 @@ def _one(gh: Gh, repo: str, number: int, approvers: Sequence[str], login: str | 
     changes = {f["filename"]: {k: f.get(k) for k in ("status", "patch", "previous_filename")} for f in files}
     labels = [lbl.get("name", "") for lbl in pr.get("labels") or []]
     row.risk, row.risk_reasons = classify_risk(names, labels, file_changes=changes)
+    author = str((pr.get("user") or {}).get("login") or "")
+    level_approvers = tuple(approvers.get(row.risk, ()))                    # comentario: so quem aprova ESTE nivel (sem heranca)
     records: list[ApprovalRecord] = []
     for c in comments:
         try:
-            rec = from_github_comment(c, pr=row.pr_ref, approvers=approvers)
+            rec = from_github_comment(c, pr=row.pr_ref, approvers=level_approvers)
         except ApprovalError:
             rec = None
         records += [rec] if rec else []
     for r in reviews:
         try:
-            rec = from_github_review(r, pr=row.pr_ref, risk=row.risk)
+            rec = from_github_review(r, pr=row.pr_ref, risk=row.risk, approvers=approvers, author=author)
         except ApprovalError:
             rec = None
         records += [rec] if rec else []
@@ -252,21 +282,22 @@ def _one(gh: Gh, repo: str, number: int, approvers: Sequence[str], login: str | 
         row.state, row.blocked_reason = "aprovado", f"aprovado por {decision.approval.approver} no HEAD {row.head_sha[:12]}"
     else:
         row.state = "aguardando"
-        who = {a.lower() for a in approvers}
-        if not approvers:
-            row.blocked_reason = "AGENT_BAR_APPROVERS vazio: nenhum login configurado como aprovador"
+        who = {a.lower() for a in level_approvers}
+        if not level_approvers:
+            row.blocked_reason = f"AGENT_BAR_APPROVERS_{row.risk} vazio: nenhum login configurado como aprovador {row.risk}"
         elif not login or login.lower() not in who:
-            row.blocked_reason = f"login atual ({login or 'desconhecido'}) fora da lista de aprovadores ({', '.join(approvers)})"
+            row.blocked_reason = (f"login atual ({login or 'desconhecido'}) fora da lista de aprovadores {row.risk} "
+                                  f"({', '.join(level_approvers)})")
         else:
             row.can_approve = True
     return row
 
 
-def collect_approvals(gh: Gh, prs: Iterable[tuple[str, int]], approvers: Sequence[str] | None = None, runs=None,
+def collect_approvals(gh: Gh, prs: Iterable[tuple[str, int]], approvers: Approvers | Sequence[str] | None = None, runs=None,
                       store_path: Path | None = None, max_prs: int = 12, reviewer: str | None = None, now=None) -> ApprovalBoard:
     import datetime as _dt
-    approvers = tuple(approvers_from_env() if approvers is None else approvers)
     reviewer = reviewer or os.environ.get("AGENT_BAR_REVIEWER") or DEFAULT_REVIEWER
+    approvers = approvers_from_env() if approvers is None else by_level(approvers, reviewer)
     rc, out = gh(["api", "user", "--jq", ".login"])
     login = out.strip() if rc == 0 else None
     at = (now or _dt.datetime.now(_dt.timezone.utc)).strftime("%Y-%m-%dT%H:%M:%SZ")
