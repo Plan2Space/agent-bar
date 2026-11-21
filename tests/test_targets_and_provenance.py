@@ -35,7 +35,7 @@ def test_an_org_name_with_unsafe_characters_is_refused():
 
 
 def _gql_items(statuses):
-    nodes = [{"fieldValueByName": {"name": s} if s else None} for s in statuses]
+    nodes = [{"status": {"name": s} if s else None, "task": None, "content": {"__typename": "DraftIssue", "title": "x"}} for s in statuses]
     return json.dumps({"data": {"organization": {"projectV2": {"items": {
         "pageInfo": {"hasNextPage": False, "endCursor": None}, "nodes": nodes}}}}})
 

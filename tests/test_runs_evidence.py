@@ -189,3 +189,55 @@ def test_full_view_shows_run_head_verdict_problems_and_the_preview(gui, tmp_path
     assert "test-room_001-b" in text and "FAIL" in text and "sha256 nao confere" in text
     assert 'href="file:' in text                                                          # relatorios e manifest abrem pelo link
     assert not ops.preview.pixmap().isNull() and "test-room_001-a" in ops.preview_caption.text()
+
+
+# ------------------------------------------------------------------------------------------------ layout real do motor (sketchup-mcp-next 938e6df)
+def _as_engine_layout(root: Path, room: str, run_dir: Path, *, plan_override: bool = False, failed: list | None = None) -> Path:
+    """Move uma execucao de teste para artifacts/<room>/<run_id>/run_manifest.json, como o motor publica."""
+    target = root / room / run_dir.name
+    target.parent.mkdir(parents=True, exist_ok=True)
+    run_dir.rename(target)
+    m = json.loads((target / "manifest.json").read_text(encoding="utf-8"))
+    m["plan_override"] = plan_override
+    (target / "manifest.json").unlink()
+    (target / "run_manifest.json").write_text(json.dumps(m), encoding="utf-8")
+    if failed is not None:
+        v = json.loads((target / "validation_report.json").read_text(encoding="utf-8"))
+        v["checks"] = failed
+        data = json.dumps(v).encode()
+        (target / "validation_report.json").write_bytes(data)
+        for a in m["artifacts"]:
+            if a["role"] == "validation_report":
+                a["sha256"], a["bytes"] = _sha(data), len(data)
+        (target / "run_manifest.json").write_text(json.dumps(m), encoding="utf-8")
+    return target
+
+
+def test_engine_layout_with_run_manifest_one_level_below_the_room_is_read(tmp_path):
+    staging, root = tmp_path / "staging", tmp_path / "artifacts"
+    _as_engine_layout(root, "room_001", make_run(staging, "test-room_001-l2"))
+    v = rn.collect_runs(root)
+    assert v.state == "lido" and [r.run_id for r in v.runs] == ["test-room_001-l2"]
+    r = v.runs[0]
+    assert r.problems == [] and r.report_paths["manifest"].name == "run_manifest.json" and r.preview_path is not None
+
+
+def test_failed_checks_and_plan_override_are_shown(tmp_path):
+    staging, root = tmp_path / "staging", tmp_path / "artifacts"
+    bad = [{"id": "opening.door_01.width", "target": "opening.door_01.width", "expected": 0.8, "measured": 0.82, "tolerance": 0.001, "pass": False},
+           {"id": "floor.area", "target": "floor.area", "expected": 12.0, "measured": 12.0, "tolerance": 0.01, "pass": True}]
+    _as_engine_layout(root, "room_001", make_run(staging, "test-room_001-planner_error", verdict="FAIL"), plan_override=True, failed=bad)
+    r = rn.collect_runs(root).runs[0]
+    assert r.verdict == "FAIL" and r.plan_override is True
+    assert r.failed_checks == ["opening.door_01.width: esperado 0.8, medido 0.82 (tol 0.001)"]
+
+
+def test_full_view_lists_failed_checks_and_the_forced_plan(gui, tmp_path):  # noqa: F811
+    bar, app, tmp = gui
+    staging, root = tmp_path / "staging", tmp_path / "artifacts"
+    bad = [{"id": "opening.door_01.width", "target": "opening.door_01.width", "expected": 0.8, "measured": 0.82, "tolerance": 0.001, "pass": False}]
+    _as_engine_layout(root, "room_001", make_run(staging, "test-room_001-planner_error", verdict="FAIL"), plan_override=True, failed=bad)
+    s = snap(tmp)
+    s.runs = rn.collect_runs(root)
+    text = _full(bar, s).cards["runs"].text()
+    assert "checks reprovados: opening.door_01.width" in text and "plan_override" in text
