@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from agent_bar.approvals import ApprovalBoard, PrApproval
+from agent_bar.approvals import ApprovalBoard, PrApproval, approvers_text
 from agent_bar.benchmark import BenchmarkView
 from agent_bar.observability import Observation
 from agent_bar.runs import RunsView
@@ -185,7 +185,7 @@ class OperationsView(QWidget):
     def update_approvals(self, b: ApprovalBoard, observe_only: bool = False) -> None:
         """PRs MEDIUM/HIGH com risco, HEAD, CI, evidência e aprovação vindos do runtime. Um botão, para o PR selecionado."""
         warn = f"<br><span style='color:#ffc233'>{_clean(b.credential_warning)}</span>"
-        who = (f"login {_clean(b.login or '?')} · aprovadores: {_clean(', '.join(b.approvers) or 'nenhum (AGENT_BAR_APPROVERS)')}"
+        who = (f"login {_clean(b.login or '?')} · aprovadores: {_clean(approvers_text(b.approvers) if any(b.approvers.values()) else 'nenhum (AGENT_BAR_APPROVERS_MEDIUM/_HIGH)')}"
                + (f" · <span style='color:#ff9a9b'>{_clean(b.error)}</span>" if b.error else ""))
         rows = [r for r in b.rows if r.state != "auto_low"]
         if b.error and not b.rows:                                            # coletando / falhou: nunca "nenhum PR aguardando"
