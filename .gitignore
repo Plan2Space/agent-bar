@@ -13,3 +13,4 @@ runs/
 *.db
 *.db-journal
 launchers/local.cmd
+launchers/local.env

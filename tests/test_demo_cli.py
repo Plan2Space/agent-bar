@@ -13,7 +13,10 @@ def test_screenshot_full_writes_the_full_view_png(tmp_path):
     pytest.importorskip("PySide6.QtWidgets")
     env = {k: v for k, v in os.environ.items() if k not in ("GH_TOKEN", "GITHUB_TOKEN", "EVENT_STORE_DB_PATH", "AGENT_BAR_RUNS_DIR")}
     env.update(QT_QPA_PLATFORM="offscreen", AGENT_BAR_SETTINGS=str(tmp_path / "s.json"), AGENT_BAR_GOV_DIR=str(tmp_path / "gov"),
-               PATH=os.path.dirname(sys.executable))                       # sem gh/claude/codex no PATH: coleta rapida e sem rede
+               PATH=os.path.dirname(sys.executable),                       # sem gh/claude/codex no PATH: coleta rapida e sem rede
+               AGENT_BAR_LOG_DIR=str(tmp_path / "logs"),                   # log do teste fora do %LOCALAPPDATA% real
+               EVENT_STORE_DB_PATH=str(tmp_path / "none.db"), AGENT_BAR_RUNS_DIR=str(tmp_path / "none"),
+               AGENT_BAR_HARNESS_LOG="")                                   # ja definidas: o launchers/local.env da maquina nao vale aqui
     out = tmp_path / "x.png"
     r = subprocess.run([sys.executable, "-m", "agent_bar.app", "--screenshot", str(out), "--full"], env=env, cwd=Path(__file__).parents[1],
                        capture_output=True, text=True, timeout=90)

@@ -1,7 +1,8 @@
 @echo off
-rem Agent Bar (Plan2Space): abre a barra DESTE checkout com o venv do proprio checkout. Somente observacao.
-rem Duplo clique com a barra ja aberta nao abre outra. ASCII puro (cmd). Sem PowerShell -ExecutionPolicy Bypass.
-rem Caminhos da maquina (EventStore, pasta runs do motor) ficam em launchers\local.cmd, fora do git (ver local.example.cmd).
+rem Plan2Space Agent Bar: abre a barra DESTE checkout com o pythonw.exe do proprio .venv (nunca o python global). Somente observacao.
+rem Abrir de novo com a barra aberta so traz a existente para a frente (instancia unica no proprio app).
+rem Fontes de dados da maquina: launchers\local.env (fora do git; modelo em local.example.env). Log: %LOCALAPPDATA%\agent_bar\logs
+rem ASCII puro (cmd). Sem contornar a ExecutionPolicy do PowerShell. Atalho na Area de Trabalho: launchers\install_shortcut.ps1
 setlocal
 for %%i in ("%~dp0..") do set "REPO=%%~fi"
 set "PYW=%REPO%\.venv\Scripts\pythonw.exe"
@@ -13,12 +14,8 @@ if not exist "%PYW%" (
   pause
   exit /b 2
 )
-powershell -NoProfile -Command "if (@(Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'pythonw.exe' -and $_.CommandLine -like '*-m agent_bar.app*' }).Count -gt 0) { exit 1 } else { exit 0 }"
-if errorlevel 1 exit /b 0
 set "PYTHONUTF8=1"
 set "GH_TOKEN="
-if exist "C:\Program Files\GitHub CLI\gh.exe" set "GH_BIN=C:\Program Files\GitHub CLI\gh.exe"
-if exist "%~dp0local.cmd" call "%~dp0local.cmd"
 cd /d "%REPO%"
 start "" "%PYW%" -m agent_bar.app
 exit /b 0
