@@ -415,6 +415,12 @@ class Details(QWidget):
         lay = QVBoxLayout(self.body)
         lay.setContentsMargins(12, 6, 12, 6)
         lay.setSpacing(2)
+        self.pin_warning = QLabel()                                              # agent-runtime instalado != fixado no pyproject
+        self.pin_warning.setWordWrap(True)
+        self.pin_warning.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)   # o comando pode ser copiado
+        self.pin_warning.setStyleSheet("color:#ffd0d0;font-size:11px;background:#3a1717;border:1px solid #7a2a2a;border-radius:8px;padding:6px")
+        self.pin_warning.setVisible(False)
+        lay.addWidget(self.pin_warning)
         self.human = QLabel()                                                    # "Precisa de você": primeira coisa do painel
         self.human.setTextFormat(Qt.TextFormat.RichText)
         self.human.setWordWrap(True)
@@ -763,6 +769,8 @@ class Bar(QWidget):
         self.notifier = InboxNotifier(show=self._notify_human, enabled=lambda: self.settings.notify_human)
         self.worker = Worker(settings, self.gov)
         self.details = Details(self)
+        from agent_bar import runtime_pin
+        self.set_runtime_pin(runtime_pin.check())
         self.worker.snapshot.connect(self.on_snapshot)
         self.result.connect(self.details.set_status)
         self._place()
@@ -876,6 +884,14 @@ class Bar(QWidget):
             raise RuntimeError("bandeja do sistema indisponível")
         self._notice_url = url
         self.tray.showMessage(title, text, QSystemTrayIcon.MessageIcon.Information, 15000)
+
+    def set_runtime_pin(self, st) -> None:
+        """So divergencia comprovada vira o aviso vermelho; 'nao deu para saber' fica no log e no tooltip da engrenagem."""
+        self.runtime_pin = st
+        w = self.details.pin_warning
+        w.setText(st.message if st.ok is False else "")
+        w.setVisible(st.ok is False)
+        self.gear.setToolTip(f"runtime: {st.message}")
 
     def _open_notice(self) -> None:
         if self._notice_url:
@@ -1117,7 +1133,8 @@ class Bar(QWidget):
         self.notifier.update(self.inbox)
         self.pr.setText(f"PR #{s.pr}" if s.pr else "PR -")
         self.pr.setToolTip(f"checks: {s.github_checks}")
-        self.gear.setToolTip(f"{s.mode_banner()}\n{s.work}\n" + (s.last_error or "sem erro observado"))
+        self.gear.setToolTip(f"{s.mode_banner()}\n{s.work}\n" + (s.last_error or "sem erro observado")
+                             + (f"\nruntime: {self.runtime_pin.message}" if getattr(self, "runtime_pin", None) else ""))
         self.details.update_snapshot(s)
         if self._refresh_pending:
             self._refresh_pending = None
