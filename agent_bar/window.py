@@ -193,6 +193,7 @@ class Worker(QObject):
         self._cache = col.GithubCache(ttl_s=settings.github_interval_s)
         self._backlog = col.GithubCache(ttl_s=settings.backlog_interval_s)
         self._queue = col.GithubCache(ttl_s=settings.github_interval_s)
+        self._approvals = col.GithubCache(ttl_s=settings.github_interval_s)
         self._thread = threading.Thread(target=self._loop, name="agent-bar-collector", daemon=True)
 
     def start(self) -> None:
@@ -203,6 +204,7 @@ class Worker(QObject):
             self._cache.invalidate()
             self._backlog.invalidate()
             self._queue.invalidate()
+            self._approvals.invalidate()
         self._now.set()
 
     def stop(self) -> None:
@@ -214,7 +216,7 @@ class Worker(QObject):
         while not self._stop.is_set():
             try:
                 self.snapshot.emit(col.collect_snapshot(self.gov, cache=self._cache, backlog_cache=self._backlog, queue_cache=self._queue,
-                                                   claude_login=col.claude_login_state, codex_login=col.codex_login_state))
+                                                   approval_cache=self._approvals, claude_login=col.claude_login_state, codex_login=col.codex_login_state))
             except Exception:                                                  # noqa: BLE001 — coleta nunca derruba a UI
                 traceback.print_exc()
             self._now.wait(self.settings.local_interval_s)
@@ -429,6 +431,7 @@ class Details(QWidget):
         self.overview.setStyleSheet("color:#9facba;font-size:11px;padding:6px 2px")
         lay.addWidget(self.overview)
         self.operations = OperationsView(self.body)
+        self.operations.approve_button.clicked.connect(bar.action_approve)
         self.operations.setVisible(False)
         lay.addWidget(self.operations)
         self.scroll = QScrollArea()
@@ -646,6 +649,7 @@ class Details(QWidget):
                                   f"<br>{esc(obs.messages_status)}")
         self.operations.update_observation(obs)
         self.operations.update_runs(s.runs, s.benchmark)
+        self.operations.update_approvals(s.approvals, observe_only=os.environ.get("AGENT_BAR_OBSERVE_ONLY") == "1")
         rows_h = self.events.sizeHintForRow(0) if self.events.count() else 0
         self.events.setFixedHeight(min(max(self.events.count(), 1), 6) * max(rows_h, 20) + 6)       # sem espaco vazio; rola acima de 6
         self.fit()
@@ -862,6 +866,27 @@ class Bar(QWidget):
             self.result.emit(r.ok, r.message)
             self.worker.refresh(force=False)
         threading.Thread(target=go, name="agent-bar-control", daemon=True).start()
+
+    def action_approve(self) -> None:
+        """S00-14: aprova o HEAD mostrado. Confirmacao aqui (thread da UI); nova leitura do HEAD/CI e o comentario, fora dela."""
+        from agent_bar import approvals as ap
+        if os.environ.get("AGENT_BAR_OBSERVE_ONLY") == "1":
+            self.report(ctl.Result(False, "instância somente leitura: aprovação desativada"))
+            return
+        row = self.details.operations.selected_approval
+        if row is None or not row.can_approve:
+            self.report(ctl.Result(False, f"aprovação indisponível: {row.blocked_reason if row else 'nenhum PR aguardando'}"))
+            return
+        if not self.confirm(ap.confirmation_text(row)):
+            self.report(ctl.Result(False, "aprovação cancelada: nada foi postado"))
+            return
+        self.details.set_status(True, f"conferindo o HEAD de {row.pr_ref} antes de postar...")
+
+        def go() -> ctl.Result:
+            ok, msg = ap.approve(col.run_gh, row, confirm=lambda _text: True)      # ja confirmado acima, na thread da UI
+            self.worker.refresh(force=True)
+            return ctl.Result(ok, msg)
+        self._run_async(go)
 
     def action_restart(self) -> None:
         if os.environ.get("AGENT_BAR_OBSERVE_ONLY") == "1":

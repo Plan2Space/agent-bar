@@ -4,6 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum
 
+from agent_bar.approvals import ApprovalBoard
 from agent_bar.observability import Observation
 from agent_bar.runs import BenchmarkStatus, RunsView, benchmark_status
 
@@ -119,6 +120,7 @@ class Snapshot:
     runs: RunsView = field(default_factory=lambda: RunsView("sem_fonte", "nao coletado"))
     benchmark: BenchmarkStatus = field(default_factory=benchmark_status)
     board: Board = field(default_factory=Board)
+    approvals: ApprovalBoard = field(default_factory=lambda: ApprovalBoard(error='nao coletado'))
     pr: int | None = None
     pr_url: str | None = None
     mode: str = "indisponivel"                         # DRY_RUN | EXECUTE | indisponivel

@@ -12,11 +12,13 @@ from PySide6.QtWidgets import (
     QGroupBox,
     QHBoxLayout,
     QLabel,
+    QPushButton,
     QTextEdit,
     QVBoxLayout,
     QWidget,
 )
 
+from agent_bar.approvals import ApprovalBoard, PrApproval
 from agent_bar.observability import Observation
 from agent_bar.runs import BenchmarkStatus, RunsView
 
@@ -94,6 +96,19 @@ class OperationsView(QWidget):
         self.cards["benchmark"] = self._label("Não coletado")
         bench_box.layout().addWidget(self.cards["benchmark"])
         grid.addWidget(bench_box, 6, 0, 1, 2)
+        approval_box = self._box("Aprovação humana no HEAD exato (S00-14) · risco e decisão do agent-runtime")
+        self.cards["approval"] = self._label("Não coletado")
+        self.cards["approval"].setOpenExternalLinks(True)
+        approval_box.layout().addWidget(self.cards["approval"])
+        self.approve_button = QPushButton("Aprovar")
+        self.approve_button.setEnabled(False)
+        self.approve_button.setStyleSheet("QPushButton{background:#2b3a55;color:#e6edf7;border:1px solid #3e5a8a;border-radius:6px;padding:6px}"
+                                          "QPushButton:disabled{background:#23262d;color:#6d7380;border-color:#323947}")
+        self.approve_reason = self._label("")
+        approval_box.layout().addWidget(self.approve_button)
+        approval_box.layout().addWidget(self.approve_reason)
+        self.selected_approval: PrApproval | None = None
+        grid.addWidget(approval_box, 7, 0, 1, 2)
 
     @staticmethod
     def _box(title: str) -> QGroupBox:
@@ -111,6 +126,52 @@ class OperationsView(QWidget):
         label.setTextFormat(Qt.TextFormat.RichText)
         label.setStyleSheet("color:#e0e5ef;font-size:11px;line-height:1.3")
         return label
+
+    _STATE = {"aguardando": ("#ffc233", "AGUARDANDO aprovação humana"), "bloqueado": ("#ff6b6d", "BLOQUEADO"),
+              "aprovado": ("#3ddc84", "APROVADO no HEAD"), "erro": ("#ff6b6d", "ERRO de leitura"), "auto_low": ("#8f8f98", "LOW automático")}
+
+    def update_approvals(self, b: ApprovalBoard, observe_only: bool = False) -> None:
+        """PRs MEDIUM/HIGH com risco, HEAD, CI, evidência e aprovação vindos do runtime. Um botão, para o PR selecionado."""
+        warn = f"<br><span style='color:#ffc233'>{_clean(b.credential_warning)}</span>"
+        who = (f"login {_clean(b.login or '?')} · aprovadores: {_clean(', '.join(b.approvers) or 'nenhum (AGENT_BAR_APPROVERS)')}"
+               + (f" · <span style='color:#ff9a9b'>{_clean(b.error)}</span>" if b.error else ""))
+        rows = [r for r in b.rows if r.state != "auto_low"]
+        if not rows:
+            low = sum(1 for r in b.rows if r.state == "auto_low")
+            self.cards["approval"].setText(f"nenhum PR aguardando aprovação humana ({low} LOW automático)"
+                                           f"<br><span style='color:#9aa5b5'>{who}</span>{warn}")
+            self.selected_approval = None
+        else:
+            lines = []
+            for r in rows:
+                color, tag = self._STATE.get(r.state, ("#e0e5ef", r.state))
+                link = f"<a href=\"{_clean(r.url)}\" style='color:#8fb4ff'>{_clean(r.repo.split('/')[-1])}#{r.number}</a>" \
+                    if r.url.startswith("https://github.com/") else _clean(r.pr_ref)
+                ev = "não se aplica" if r.evidence_ok is None else ("ok" if r.evidence_ok else "FALTA")
+                lines.append(f"{link} · <b>{_clean(r.risk or '?')}</b> · <span style='color:{color}'><b>{tag}</b></span>"
+                             f"<br>&nbsp;&nbsp;HEAD <code>{_clean(r.head_sha or '?')}</code> · CI {_clean(r.ci_state)} · evidência {ev}"
+                             f"<br>&nbsp;&nbsp;<span style='color:#9aa5b5'>{_clean(r.evidence_note)}</span>"
+                             f"<br>&nbsp;&nbsp;<span style='color:#9aa5b5'>risco: {_clean('; '.join(r.risk_reasons[:3]))}</span>"
+                             + (f"<br>&nbsp;&nbsp;<span style='color:#ff9a9b'>{_clean(r.blocked_reason)}</span>" if r.blocked_reason else "")
+                             + (f"<br>&nbsp;&nbsp;aprovação: {_clean(r.approval.approver)} · <a href=\"{_clean(r.approval.source)}\" "
+                                f"style='color:#8fb4ff'>registro</a>" if r.approval else ""))
+            self.cards["approval"].setText("<br>".join(lines) + f"<br><span style='color:#9aa5b5'>{who}</span>{warn}")
+            self.selected_approval = next((r for r in rows if r.can_approve), None) or next((r for r in rows if r.state != "aprovado"), None)
+        sel = self.selected_approval
+        if sel is not None:
+            self.approve_button.setText(f"Aprovar {sel.risk} no HEAD {sel.head_sha[:12]} · {sel.repo.split('/')[-1]}#{sel.number}")
+        else:
+            self.approve_button.setText("Aprovar")
+        if observe_only:
+            self.approve_button.setEnabled(False)
+            self.approve_reason.setText("instância somente leitura: aprovação desativada")
+        elif sel is None:
+            self.approve_button.setEnabled(False)
+            self.approve_reason.setText("nada para aprovar")
+        else:
+            self.approve_button.setEnabled(sel.can_approve)
+            self.approve_reason.setText("pede confirmação e confere o HEAD e o CI de novo antes de postar; nunca faz merge"
+                                        if sel.can_approve else _clean(sel.blocked_reason or sel.state))
 
     def update_runs(self, v: RunsView, bench: BenchmarkStatus) -> None:
         """Só o que está em disco e confere com o manifest. Sem fonte/sem dados/sem evidência ficam escritos, nunca omitidos."""
