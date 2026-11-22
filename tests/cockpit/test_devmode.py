@@ -289,3 +289,27 @@ def test_auto_approve_never_approves_irreversible(tmp_path):
         assert got == [None] and "RECUSADA (irreversível" in st.log[-1]
     finally:
         rt.stop()
+
+
+def test_validator_does_not_hand_credentials_to_proposed_code(tmp_path, monkeypatch):
+    """Codigo proposto pelo agente roda no validador: um conftest dele nao pode achar credencial do ambiente."""
+    for k in ("ANTHROPIC_API_KEY", "GH_TOKEN", "GITHUB_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "AWS_SECRET_ACCESS_KEY"):
+        monkeypatch.setenv(k, "segredo-de-teste")
+    sb = tmp_path / "sandbox"
+    (sb / "tests").mkdir(parents=True)
+    (sb / "conftest.py").write_bytes(
+        b"import os\n\n"
+        b"LEAKED = sorted(k for k in os.environ if any(s in k.upper() for s in ('TOKEN', 'KEY', 'SECRET', 'ANTHROPIC', 'GH_')))\n")
+    (sb / "tests" / "test_env.py").write_bytes(
+        b"import conftest\n\n\n"
+        b"def test_no_credentials_reach_proposed_code():\n"
+        b"    assert conftest.LEAKED == []\n")
+    ok, output = D.default_validator(sb, timeout=120)
+    assert ok, output
+    assert "1 passed" in output
+
+
+def test_validator_env_is_the_agent_allowlist_plus_offscreen():
+    env = D.validator_env({"PATH": "p", "SYSTEMROOT": "s", "PYTHONPATH": ".", "GH_TOKEN": "x", "OPENAI_API_KEY": "x",
+                           "MY_PASSWORD": "x", "RANDOM": "1"})
+    assert env == {"PATH": "p", "SYSTEMROOT": "s", "PYTHONPATH": ".", "QT_QPA_PLATFORM": "offscreen"}
