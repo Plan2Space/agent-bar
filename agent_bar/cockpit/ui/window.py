@@ -1,4 +1,4 @@
-"""window.py — janela do cockpit ACP (D2): QMainWindow redimensionavel com abas Chat, Fluxos, Biblioteca, PRs, Actions e Dev."""
+"""window.py — janela do cockpit ACP (D2): QMainWindow redimensionavel com abas Chat, Fluxos, Revisão visual, Biblioteca, PRs, Actions e Dev."""
 from __future__ import annotations
 
 from PySide6.QtWidgets import QMainWindow, QTabWidget
@@ -9,6 +9,7 @@ from agent_bar.cockpit.ui.chat import ChatView
 from agent_bar.cockpit.ui.dev_tab import DevTab
 from agent_bar.cockpit.ui.github_tabs import ActionsTab, PrsTab
 from agent_bar.cockpit.ui.library_tab import LibraryTab
+from agent_bar.cockpit.ui.review_tab import ReviewTab
 from agent_bar.cockpit.ui.workflows_tab import WorkflowsTab
 from agent_bar.targets import load_targets
 
@@ -19,7 +20,7 @@ TAB_CSS = ("QTabWidget::pane{border:0;background:#16161a}QTabBar::tab{background
 
 class CockpitWindow(QMainWindow):
     def __init__(self, gh: GhClient | None = None, repos: list[str] | None = None, discover_fn=None, specs_root=None,
-                 dev_kwargs: dict | None = None, **chat_kwargs) -> None:
+                 dev_kwargs: dict | None = None, review_kwargs: dict | None = None, **chat_kwargs) -> None:
         super().__init__()
         self.setWindowTitle("Cockpit ACP — Agent Bar")
         self.resize(980, 720)
@@ -35,6 +36,8 @@ class CockpitWindow(QMainWindow):
                                       specs_root=specs_root, **wf_kwargs)
         self.tabs.addTab(self.chat, "Chat")
         self.tabs.addTab(self.workflows, "Fluxos")
+        self.review = ReviewTab(**(review_kwargs or {}))
+        self.tabs.addTab(self.review, "Revisão visual")
         self.tabs.addTab(self.library, "Biblioteca")
         gh = gh or GhClient()
         repos = repos or configured_repos(load_targets().org)
@@ -56,6 +59,8 @@ class CockpitWindow(QMainWindow):
             tab.refresh()
         elif tab is self.library:                                            # workspace pode ter mudado no Chat
             self.library.ensure_loaded()
+        elif tab is self.review and self.review.req == 0:                    # primeira visita: lê o evidence
+            self.review.reload()
 
     def _use_sandbox(self, workspace: str) -> None:
         """F6: o Chat passa a trabalhar no sandbox (o agente nunca edita o checkout direto)."""
@@ -71,6 +76,7 @@ class CockpitWindow(QMainWindow):
             return
         self._closed = True
         self.workflows.shutdown()
+        self.review.shutdown()
         self.dev.shutdown()
         self.prs.shutdown()
         self.library.shutdown()
