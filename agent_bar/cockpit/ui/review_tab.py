@@ -32,6 +32,7 @@ from PySide6.QtWidgets import (
 )
 
 from agent_bar.cockpit import evidence as E
+from agent_bar.cockpit.ui.diff_panel import DiffPanel
 from agent_bar.cockpit.ui.github_tabs import BTN_CSS, COMBO_CSS, TEXT_CSS, TREE_CSS
 
 STATE_COLOR = {"PASS": "#3ddc84", "APPROVED": "#3ddc84", "FAIL": "#ff6b6d", "CHANGES_REQUESTED": "#ff6b6d", "BLOCKED": "#ffc233"}
@@ -94,8 +95,9 @@ class ReviewTab(QWidget):
 
     def __init__(self, root_fn: Callable[[], Path] = E.evidence_dir,
                  load_fn: Callable[[Path], E.Catalog] = E.load_catalog,
-                 executor: ThreadPoolExecutor | None = None) -> None:
+                 executor: ThreadPoolExecutor | None = None, report_store=None) -> None:
         super().__init__()
+        self.report_store = report_store
         self.root_fn = root_fn
         self.load_fn = load_fn
         self.pool = executor or ThreadPoolExecutor(max_workers=1, thread_name_prefix="cockpit-review")
@@ -170,8 +172,10 @@ class ReviewTab(QWidget):
         self.history.setColumnWidth(2, 180)
         self.absent = QTextBrowser()
         self.absent.setStyleSheet(TEXT_CSS)
+        self.diff = DiffPanel(self.report_store)
         for w, title in ((self.states, "Estados (separados)"), (self.reports, "Relatórios técnicos"),
-                         (self.history, "Histórico do cômodo"), (self.absent, "Evidências ausentes")):
+                         (self.history, "Histórico do cômodo"), (self.absent, "Evidências ausentes"),
+                         (self.diff, "Relatório de diferenças")):
             self.details.addTab(w, title)
         vsplit.addWidget(self.details)
         vsplit.setSizes([470, 230])
@@ -263,6 +267,7 @@ class ReviewTab(QWidget):
         self._states(a, b)
         self._reports(a, b)
         self._absent(a, b)
+        self.diff.set_pair(a, b, pairs + engine)
         if self.cams.count():
             self.cams.setCurrentRow(0)
         else:

@@ -38,3 +38,10 @@ def no_leaked_cockpit_widgets():
     gc.collect()
     alive = [type(w).__name__ for w in app.topLevelWidgets() if type(w).__module__.startswith("agent_bar.cockpit")]
     assert alive == [], f"widget do cockpit vivo depois do teste: {alive}"
+
+
+@pytest.fixture(autouse=True)
+def isolated_cockpit_data(tmp_path, monkeypatch):
+    """Nenhum teste do cockpit le ou grava o %LOCALAPPDATA% real (historico, relatorios, pacotes)."""
+    monkeypatch.setenv("AGENT_BAR_COCKPIT_DATA", str(tmp_path / "cockpit-data"))      # o teste pode sobrescrever
+    yield
