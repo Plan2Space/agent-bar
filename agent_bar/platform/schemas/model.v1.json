@@ -1,0 +1,87 @@
+{
+  "$id": "p2s.model.v1",
+  "type": "object",
+  "required": [
+    "schema",
+    "model_id",
+    "display_name",
+    "provider_id",
+    "transport",
+    "availability",
+    "tools",
+    "images",
+    "effort_levels",
+    "limits",
+    "source"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema": {
+      "const": "p2s.model.v1"
+    },
+    "model_id": {
+      "type": "string"
+    },
+    "display_name": {
+      "type": "string"
+    },
+    "provider_id": {
+      "type": "string"
+    },
+    "transport": {
+      "enum": [
+        "ACP",
+        "CLI",
+        "HTTP_API",
+        "LOCAL_HTTP"
+      ]
+    },
+    "availability": {
+      "enum": [
+        "AVAILABLE",
+        "UNAVAILABLE",
+        "UNKNOWN"
+      ]
+    },
+    "tools": {
+      "enum": [
+        "SUPPORTED",
+        "UNSUPPORTED",
+        "UNKNOWN",
+        "ERROR"
+      ]
+    },
+    "images": {
+      "enum": [
+        "SUPPORTED",
+        "UNSUPPORTED",
+        "UNKNOWN",
+        "ERROR"
+      ]
+    },
+    "effort_levels": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "limits": {
+      "type": "object",
+      "required": [
+        "context_tokens"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "context_tokens": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      }
+    },
+    "source": {
+      "type": "string"
+    }
+  }
+}
