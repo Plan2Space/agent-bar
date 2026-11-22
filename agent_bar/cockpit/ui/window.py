@@ -1,4 +1,4 @@
-"""window.py — janela do cockpit ACP (D2): QMainWindow redimensionavel com abas Chat, Biblioteca, PRs e Actions."""
+"""window.py — janela do cockpit ACP (D2): QMainWindow redimensionavel com abas Chat, Fluxos, Biblioteca, PRs e Actions."""
 from __future__ import annotations
 
 from PySide6.QtWidgets import QMainWindow, QTabWidget
@@ -8,6 +8,7 @@ from agent_bar.cockpit.github import GhClient, configured_repos
 from agent_bar.cockpit.ui.chat import ChatView
 from agent_bar.cockpit.ui.github_tabs import ActionsTab, PrsTab
 from agent_bar.cockpit.ui.library_tab import LibraryTab
+from agent_bar.cockpit.ui.workflows_tab import WorkflowsTab
 from agent_bar.targets import load_targets
 
 TAB_CSS = ("QTabWidget::pane{border:0;background:#16161a}QTabBar::tab{background:#202026;color:#bdbdc4;padding:6px 14px;"
@@ -16,7 +17,8 @@ TAB_CSS = ("QTabWidget::pane{border:0;background:#16161a}QTabBar::tab{background
 
 
 class CockpitWindow(QMainWindow):
-    def __init__(self, gh: GhClient | None = None, repos: list[str] | None = None, discover_fn=None, **chat_kwargs) -> None:
+    def __init__(self, gh: GhClient | None = None, repos: list[str] | None = None, discover_fn=None, specs_root=None,
+                 **chat_kwargs) -> None:
         super().__init__()
         self.setWindowTitle("Cockpit ACP — Agent Bar")
         self.resize(980, 720)
@@ -27,7 +29,11 @@ class CockpitWindow(QMainWindow):
         self.chat = ChatView(runtime=self.runtime, context_provider=lambda: self.library.context() if self.library else "",
                              **chat_kwargs)
         self.library = LibraryTab(self.chat.workspace, **({"discover_fn": discover_fn} if discover_fn else {}))
+        wf_kwargs = {k: chat_kwargs[k] for k in ("profiles_fn", "ask_permission") if k in chat_kwargs}
+        self.workflows = WorkflowsTab(self.runtime, self.chat.workspace, context_fn=self.library.context,
+                                      specs_root=specs_root, **wf_kwargs)
         self.tabs.addTab(self.chat, "Chat")
+        self.tabs.addTab(self.workflows, "Fluxos")
         self.tabs.addTab(self.library, "Biblioteca")
         gh = gh or GhClient()
         repos = repos or configured_repos(load_targets().org)
@@ -57,6 +63,7 @@ class CockpitWindow(QMainWindow):
         if self._closed:
             return
         self._closed = True
+        self.workflows.shutdown()
         self.prs.shutdown()
         self.library.shutdown()
         self.actions.shutdown()
