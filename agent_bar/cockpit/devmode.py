@@ -25,7 +25,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 
-from agent_bar.cockpit.acp import CREATE_NO_WINDOW
+from agent_bar.cockpit.acp import CREATE_NO_WINDOW, isolated_env
 from agent_bar.cockpit.store import atomic_write_json, data_dir
 
 ALLOWED = ("agent_bar/**", "tests/**", "docs/**")
@@ -147,14 +147,25 @@ ValidatorResult = tuple[bool, str]
 Validator = Callable[[Path], ValidatorResult]
 
 
+VALIDATOR_ALLOW = ("PYTHONPATH", "PYTHONUTF8", "PYTHONIOENCODING", "VIRTUAL_ENV", "CI")
+
+
+def validator_env(base: dict[str, str] | None = None) -> dict[str, str]:
+    """Ambiente do validador: o mesmo isolamento do agente (lista permitida, sem credencial) + Qt offscreen.
+    O codigo validado foi escrito pelo agente: nao recebe ANTHROPIC_/GH_/GITHUB_/AWS_ nem *TOKEN*/*KEY*/*SECRET*."""
+    env = isolated_env(base, allow=VALIDATOR_ALLOW)
+    env["QT_QPA_PLATFORM"] = "offscreen"
+    return env
+
+
 def default_validator(sandbox: Path, timeout: float = 900.0) -> ValidatorResult:
-    """`pytest -q` e `ruff check .` no sandbox, com o Python deste processo. Saida truncada no fim."""
+    """`pytest -q` e `ruff check .` no sandbox, com o Python deste processo e `validator_env()`. Saida truncada no fim."""
     out: list[str] = []
     ok = True
     for args in ([sys.executable, "-m", "ruff", "check", "."], [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider"]):
         try:
             r = subprocess.run(args, cwd=sandbox, capture_output=True, timeout=timeout, check=False,
-                               env={**os.environ, "QT_QPA_PLATFORM": "offscreen"},       # o ambiente do Felipe, so sem tela
+                               env=validator_env(),
                                creationflags=CREATE_NO_WINDOW if os.name == "nt" else 0)
             text = (r.stdout + r.stderr).decode("utf-8", "replace")
             out.append(f"$ {' '.join(args[2:])} -> {r.returncode}\n{text[-4000:]}")
