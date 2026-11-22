@@ -303,9 +303,10 @@ def test_the_stop_button_ends_only_the_step_it_started(gui, monkeypatch, no_exte
     assert wait_for(app, lambda: bar.step_process is None, secs=20)
     assert "passo interrompido" in bar.details.terminal.toPlainText()
     assert bar.details.buttons["progress"].text() == "Dar andamento (Claude)"
-    import subprocess
-    alive = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/NH"], capture_output=True, text=True).stdout
-    assert str(pid) not in alive
+    from tests.support.process import (
+        pid_alive,  # sem tasklist: a saida dele depende do idioma do Windows
+    )
+    assert not pid_alive(pid)
 
 
 def test_a_step_already_running_in_another_window_blocks_a_second_one(gui, monkeypatch):  # noqa: F811

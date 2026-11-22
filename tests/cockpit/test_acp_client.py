@@ -192,25 +192,8 @@ def test_missing_executable_is_not_found(tmp_path):
 
 
 def _alive(pid: int) -> bool:
-    if sys.platform == "win32":                                  # sem tasklist: a saida dele muda de codepage por maquina
-        import ctypes
-        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
-        k32.OpenProcess.restype = ctypes.c_void_p
-        h = k32.OpenProcess(0x1000, False, pid)                  # PROCESS_QUERY_LIMITED_INFORMATION
-        if not h:
-            return False
-        try:
-            code = ctypes.c_ulong()
-            k32.GetExitCodeProcess(ctypes.c_void_p(h), ctypes.byref(code))
-            return code.value == 259                             # STILL_ACTIVE
-        finally:
-            k32.CloseHandle(ctypes.c_void_p(h))
-    import os
-    try:
-        os.kill(pid, 0)
-        return True
-    except OSError:
-        return False
+    from tests.support.process import pid_alive
+    return pid_alive(pid)
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="encerramento da arvore e especifico do Windows")
