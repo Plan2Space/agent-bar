@@ -115,7 +115,7 @@ def kill_tree(pid: int) -> bool:
             return True
         except OSError:
             return False
-    r = subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True, text=True,
+    r = subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True,     # bytes: saida em OEM codepage
                        creationflags=CREATE_NO_WINDOW, check=False)
     return r.returncode == 0
 
@@ -202,9 +202,24 @@ class AsyncRuntime:
         self.loop.call_soon_threadsafe(fn, *args)
 
     def stop(self) -> None:
+        """Cancela e aguarda as tasks pendentes (leitores de clientes ja encerrados), para o loop e o fecha."""
+        if self.loop.is_closed():
+            return
         if self.loop.is_running():
+            async def _drain() -> None:
+                tasks = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
+                for t in tasks:
+                    t.cancel()
+                await asyncio.gather(*tasks, return_exceptions=True)
+
+            try:
+                asyncio.run_coroutine_threadsafe(_drain(), self.loop).result(8)
+            except Exception:                                                    # noqa: BLE001 - parar de qualquer jeito
+                log.warning("runtime parou com tasks pendentes")
             self.loop.call_soon_threadsafe(self.loop.stop)
         self.thread.join(timeout=5)
+        if not self.thread.is_alive() and not self.loop.is_closed():
+            self.loop.close()
 
 
 # ---------------------------------------------------------------------------------------------------- tipos

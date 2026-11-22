@@ -21,9 +21,20 @@ from agent_bar.cockpit.ui.chat import ChatView  # noqa: E402
 STUB = Path(__file__).with_name("fake_acp_agent.py")
 
 
-@pytest.fixture(scope="module")
+_APP = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])     # vive ate o fim do processo, como nos outros testes de GUI
+
+
+@pytest.fixture
 def app():
-    return QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    return _APP
+
+
+def dispose(view) -> None:
+    """Encerra o cliente e destroi o widget agora: widget vivo depois do QApplication derruba o processo na saida."""
+    from PySide6.QtCore import QCoreApplication, QEvent
+    view.shutdown()
+    view.deleteLater()
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
 
 
 def wait(app, cond, timeout=20.0):
@@ -78,7 +89,7 @@ def test_thousand_chunks_are_coalesced_and_handler_is_fast(app, tmp_path):
         assert view.text_block.full_text() == "".join(f"{i}," for i in range(1000))
         assert worst < 0.010
     finally:
-        view.shutdown()
+        dispose(view)
 
 
 def test_stale_generation_updates_are_ignored(app, tmp_path):
@@ -89,7 +100,7 @@ def test_stale_generation_updates_are_ignored(app, tmp_path):
         view.flush()
         assert view.text_block is None
     finally:
-        view.shutdown()
+        dispose(view)
 
 
 def test_end_to_end_stream_and_history_saved(app, tmp_path):
@@ -103,7 +114,7 @@ def test_end_to_end_stream_and_history_saved(app, tmp_path):
         assert saved.session_id == "s-1" and saved.workspace.endswith("ws1")
         assert len(factory.made) == 1
     finally:
-        view.shutdown()
+        dispose(view)
 
 
 def test_tool_call_and_updates_make_one_card_and_plan_is_single(app, tmp_path):
@@ -116,7 +127,7 @@ def test_tool_call_and_updates_make_one_card_and_plan_is_single(app, tmp_path):
         roles = [m["role"] for m in view.chat.messages]
         assert roles.count("tool") == 1 and "plan" in roles and "thought" in roles
     finally:
-        view.shutdown()
+        dispose(view)
 
 
 def test_plan_update_replaces_entries(app, tmp_path):
@@ -128,7 +139,7 @@ def test_plan_update_replaces_entries(app, tmp_path):
         plans = view.transcript.findChildren(W.PlanCard)
         assert len(plans) == 1 and plans[0].entries == [{"content": "b", "status": "completed"}]
     finally:
-        view.shutdown()
+        dispose(view)
 
 
 def test_dismissed_permission_answers_cancelled(app, tmp_path):
@@ -143,7 +154,7 @@ def test_dismissed_permission_answers_cancelled(app, tmp_path):
         card = view.transcript.findChildren(W.ToolCard)[0]
         assert card.state["status"] == "failed"
     finally:
-        view.shutdown()
+        dispose(view)
 
 
 def test_permission_selected_reaches_agent(app, tmp_path):
@@ -152,7 +163,7 @@ def test_permission_selected_reaches_agent(app, tmp_path):
         turn(app, view, "perm")
         assert [m["text"] for m in view.chat.messages if m["role"] == "agent"] == ["outcome=selected:allow"]
     finally:
-        view.shutdown()
+        dispose(view)
 
 
 def test_permission_dialog_close_is_none_and_button_returns_option(app):
@@ -165,6 +176,10 @@ def test_permission_dialog_close_is_none_and_button_returns_option(app):
     dlg2 = W.PermissionDialog(req)
     dlg2.buttons["a"].click()
     assert dlg2.choice == "a"
+    for d in (dlg, dlg2):                     # dialogo sem pai que sobrevive ao QApplication derruba o processo na saida
+        d.deleteLater()
+    from PySide6.QtCore import QCoreApplication, QEvent
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
 
 
 def test_workspace_change_restarts_client_and_keeps_transcript(app, tmp_path):
@@ -181,7 +196,7 @@ def test_workspace_change_restarts_client_and_keeps_transcript(app, tmp_path):
         turn(app, view, "echo 1")
         assert view.chat.workspace.endswith("ws2")
     finally:
-        view.shutdown()
+        dispose(view)
 
 
 def test_missing_agent_shows_classified_banner(app, tmp_path):
@@ -192,7 +207,7 @@ def test_missing_agent_shows_classified_banner(app, tmp_path):
         assert view.banner_label.text().startswith("[not_found]")
         assert not view.busy
     finally:
-        view.shutdown()
+        dispose(view)
 
 
 def test_bypass_mode_is_never_the_default(app, tmp_path):
@@ -203,7 +218,7 @@ def test_bypass_mode_is_never_the_default(app, tmp_path):
         assert view.mode_box.currentData() == "default"
         assert any("⚠" in view.mode_box.itemText(i) for i in range(view.mode_box.count()))
     finally:
-        view.shutdown()
+        dispose(view)
 
 
 def test_reopen_chat_reloads_session_and_renders(app, tmp_path):
@@ -218,7 +233,7 @@ def test_reopen_chat_reloads_session_and_renders(app, tmp_path):
         assert view.transcript.findChildren(W.ToolCard)
         assert factory.made[-1].session_id == "s-1"                               # session/load do stub (loadSession=true)
     finally:
-        view.shutdown()
+        dispose(view)
 
 
 def test_store_atomic_write_and_corrupt_file_skipped(tmp_path):
