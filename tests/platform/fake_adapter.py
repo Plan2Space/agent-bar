@@ -177,6 +177,14 @@ class FakeAdapter(ProviderAdapter):
             raise SessionNotFound(session_id)
         self._cancel[session_id].set()
 
+    def close_session(self, session_id: str) -> None:
+        self._need()
+        with self._lock:
+            if session_id not in self._sessions:
+                raise SessionNotFound(session_id)
+            self._cancel.pop(session_id).set()
+            del self._sessions[session_id]
+
 
 # ------------------------------------------------------------------------------------------------- defeituosos
 class NoopCancel(FakeAdapter):
@@ -244,6 +252,13 @@ class OrphanProcess(FakeAdapter):
         return [p.pid] if p is not None and p.poll() is None else []
 
 
+class CloseLeavesSessionOpen(FakeAdapter):
+    """Diz que fechou, mas a sessao continua listada e aceitando prompt."""
+
+    def close_session(self, session_id: str) -> None:
+        self._need()
+
+
 class InvalidProvider(FakeAdapter):
     """Registro de provedor sem `cost_class`."""
 
@@ -280,4 +295,5 @@ DEFECTIVE = {
     InvalidProvider: "provider_record",
     WorksAfterDisconnect: "disconnect",
     ClaimsCapabilityItLacks: "unsupported_raise_typed",
+    CloseLeavesSessionOpen: "close_session",
 }

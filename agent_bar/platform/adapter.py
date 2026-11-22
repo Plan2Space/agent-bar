@@ -155,6 +155,12 @@ class ProviderAdapter(ABC):
     def cancel(self, session_id: str) -> None:
         raise CapabilityUnsupported("cancel")
 
+    def close_session(self, session_id: str) -> None:
+        """Encerra a sessao e libera o que ela segura (o claude-agent-acp roda um processo do Claude Code por sessao:
+        sem fechar, ~75 sessoes derrubam o agente). Depois dele, a sessao some de `get_status().sessions` e usa-la
+        levanta `SessionNotFound`. Fora do schema v1 de capacidades: quem nao fecha recusa aqui."""
+        raise CapabilityUnsupported("close_session")
+
     def owned_pids(self) -> list[int]:
         """PIDs que ESTE adaptador iniciou e ainda nao encerrou (vazio para HTTP)."""
         return []

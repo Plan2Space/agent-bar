@@ -550,12 +550,25 @@ class AcpClient:
         return reason
 
     async def _cancel(self) -> None:
-        if not self.session_id or not self.alive:
+        if self.session_id:
+            await self._cancel_session(self.session_id)
+
+    async def _cancel_session(self, session_id: str) -> None:
+        if not self.alive:
             return
         for rid, (sid, _respond) in list(self._perm_pending.items()):          # pedidos de permissao em aberto -> cancelled
-            if sid == self.session_id:
+            if sid == session_id:
                 await self._answer_permission(rid, None)
-        await self._send({"jsonrpc": "2.0", "method": "session/cancel", "params": {"sessionId": self.session_id}})
+        await self._send({"jsonrpc": "2.0", "method": "session/cancel", "params": {"sessionId": session_id}})
+
+    # ------------------------------------------------------------------- varias sessoes no mesmo processo (plataforma)
+    def call(self, method: str, params: dict, timeout: float | None = 30.0) -> cf.Future:
+        """Pedido JSON-RPC cru, com `sessionId` explicito nos params: o adaptador da plataforma usa varias sessoes no
+        mesmo processo (como os editores ACP). `timeout=None` = sem limite (session/prompt)."""
+        return self.rt.submit(self._request(method, params, timeout))
+
+    def cancel_session(self, session_id: str) -> cf.Future:
+        return self.rt.submit(self._cancel_session(session_id))
 
     async def _send(self, msg: dict) -> None:
         if self.proc is None or self.proc.stdin is None or self._closed or self.returncode is not None:
