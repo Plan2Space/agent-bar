@@ -227,7 +227,8 @@ class AsyncRuntime:
 
 
 UPDATE_KINDS = frozenset({"agent_message_chunk", "agent_thought_chunk", "user_message_chunk", "tool_call",
-                          "tool_call_update", "plan", "current_mode_update", "available_commands_update"})
+                          "tool_call_update", "plan", "current_mode_update", "available_commands_update",
+                          "config_option_update"})
 
 
 @dataclass(frozen=True)
@@ -297,6 +298,27 @@ def mode_is_safe(mode_id: str, modes: Mapping[str, Any]) -> bool:
     return bool(mode_id) and (mode_id == safe_mode_id(modes) or mode_id in READ_ONLY_MODE_IDS)
 
 
+def find_config(options: Sequence[Mapping[str, Any]], config_id: str) -> Mapping[str, Any] | None:
+    """Por id; se nao houver, pela categoria (o claude-agent-acp usa id "effort" com categoria "thought_level")."""
+    for o in options:
+        if o.get("id") == config_id:
+            return o
+    for o in options:
+        if o.get("category") == config_id:
+            return o
+    return None
+
+
+def config_values(option: Mapping[str, Any]) -> list[str]:
+    out = []
+    for item in option.get("options") or []:
+        if isinstance(item, dict) and "value" in item:
+            out.append(str(item["value"]))
+        elif isinstance(item, dict) and isinstance(item.get("options"), list):   # grupos de opcoes
+            out.extend(str(x["value"]) for x in item["options"] if isinstance(x, dict) and "value" in x)
+    return out
+
+
 @dataclass
 class Timeouts:
     initialize: float = 30.0
@@ -338,6 +360,7 @@ class AcpClient:
         self.session_id: str | None = None
         self.agent_info: dict = {}
         self.modes: dict = {}
+        self.config_options: list[dict] = []                                  # modelo/esforco/... anunciados (ACP configOptions)
         self._ids = itertools.count(1)
         self._pending: dict[int, asyncio.Future] = {}
         self._perm_pending: dict[Any, tuple[str, Callable[[str | None], None]]] = {}
@@ -371,6 +394,7 @@ class AcpClient:
             try:
                 res = await self._load_session(resume_session, self.cwd)
                 self.modes = res.get("modes") or self.modes
+                self._take_config(res)
                 loaded = True
             except AcpError as exc:
                 if exc.code != "RPC":
@@ -380,7 +404,7 @@ class AcpClient:
             await self._new_session(self.cwd)
         forced_from, safe = await self._ensure_safe_mode()
         return {"agent": agent, "session_id": self.session_id, "modes": self.modes, "loaded": loaded,
-                "mode_forced_from": forced_from, "safe_mode": safe}
+                "mode_forced_from": forced_from, "safe_mode": safe, "config_options": self.config_options}
 
     async def _ensure_safe_mode(self) -> tuple[str | None, bool]:
         """Modo perigoso nunca implicito: se o agente abriu a sessao num modo que decide sem pedir (o claude-agent-acp
@@ -404,6 +428,30 @@ class AcpClient:
 
     def load_session(self, session_id: str, cwd: str | Path | None = None) -> cf.Future:
         return self.rt.submit(self._load_session(session_id, str(Path(cwd).resolve()) if cwd else self.cwd))
+
+    def set_config_option(self, config_id: str, value: str) -> cf.Future:
+        """`session/set_config_option`. Resultado: a lista de configOptions DEVOLVIDA pelo agente, que e a confirmacao do
+        que vale agora (trocar o modelo pode mudar os esforcos possiveis). Valor fora das opcoes anunciadas e recusado
+        aqui, sem ir ao agente."""
+        return self.rt.submit(self._set_config_option(config_id, value))
+
+    async def _set_config_option(self, config_id: str, value: str) -> list[dict]:
+        opt = find_config(self.config_options, config_id)
+        if opt is None:
+            raise AcpError("RPC", f"o agente nao anuncia a configuracao {config_id!r}")
+        if value not in config_values(opt):
+            raise AcpError("RPC", f"{config_id}={value!r} fora das opcoes anunciadas")
+        res = await self._request("session/set_config_option",
+                                  {"sessionId": self._sid(), "configId": config_id, "value": value}, self.timeouts.request)
+        if not isinstance(res, dict) or not isinstance(res.get("configOptions"), list):
+            raise AcpError("RPC", "session/set_config_option sem configOptions na resposta: valor nao confirmado")
+        self._take_config(res)
+        return self.config_options
+
+    def _take_config(self, res: Mapping[str, Any]) -> None:
+        opts = res.get("configOptions")
+        if isinstance(opts, list):
+            self.config_options = [o for o in opts if isinstance(o, dict) and o.get("id")]
 
     def set_mode(self, mode_id: str) -> cf.Future:
         return self.rt.submit(self._request("session/set_mode", {"sessionId": self._sid(), "modeId": mode_id},
@@ -481,6 +529,7 @@ class AcpClient:
         if not self.session_id:
             raise AcpError("RPC", "session/new sem sessionId")
         self.modes = res.get("modes") or {}
+        self._take_config(res)
         return res
 
     async def _load_session(self, session_id: str, cwd: str) -> dict:
@@ -587,6 +636,8 @@ class AcpClient:
             self._emit(parse_update(params))
 
     def _emit(self, upd: Update) -> None:
+        if upd.kind == "config_option_update":
+            self._take_config(upd.data)
         if upd.kind == "current_mode_update" and upd.data.get("currentModeId"):
             self.modes = {**self.modes, "currentModeId": str(upd.data["currentModeId"])}
         if self.on_update is None:
