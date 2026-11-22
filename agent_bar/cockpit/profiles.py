@@ -22,8 +22,11 @@ class AgentProfile:
     label: str
     argv: tuple[str, ...]
     demo: bool = False
+    adapter: str = "acp"                                                     # "acp" ou um adaptador da plataforma (ex.: "ollama")
 
     def available(self) -> tuple[bool, str]:
+        if self.adapter == "ollama" and os.environ.get("OLLAMA_HOST", "").strip():
+            return True, ""                                                  # servidor configurado; o connect confirma
         exe = self.argv[0]
         if Path(exe).is_file() or shutil.which(exe):
             return True, ""
@@ -35,6 +38,7 @@ def profiles() -> list[AgentProfile]:
     real = tuple(custom.split()) if custom else ("claude-agent-acp",)
     return [
         AgentProfile("claude", "Claude Code (ACP)", real),
+        AgentProfile("ollama", "Ollama (local)", ("ollama",), adapter="ollama"),
         AgentProfile("demo", "Demonstração (sem LLM)", (sys.executable, "-m", "agent_bar.cockpit.demo_agent"), demo=True),
     ]
 
