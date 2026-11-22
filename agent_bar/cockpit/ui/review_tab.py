@@ -212,7 +212,8 @@ class ReviewTab(QWidget):
             self.source.setTextFormat(Qt.TextFormat.RichText)
             for box in (self.room_box, self.a_box, self.b_box):
                 box.clear()
-            self.cams.clear()
+            self.history.clear()
+            self._clear_pair()                                                # nada do par anterior fica na tela (F0 #43)
             return
         self.catalog, self.error = result, ""  # type: ignore[assignment]
         self.source.setTextFormat(Qt.TextFormat.PlainText)
@@ -256,6 +257,7 @@ class ReviewTab(QWidget):
         a, b = self.selected_runs()
         self.cams.clear()
         if a is None or b is None:
+            self._clear_pair()
             return
         pairs, refused = E.compatible_cameras(a, b)
         for name in pairs:
@@ -283,6 +285,18 @@ class ReviewTab(QWidget):
         else:
             self._show_camera(None)
         self.run_selected.emit()
+
+    def _clear_pair(self) -> None:
+        """Sem par selecionavel: limpa tudo que descreve um par (estados, relatorios, ausencias, diff, pacotes, humano,
+        imagens). Mostrar o veredito de outro dado como se fosse deste e pior que nao mostrar nada."""
+        self.cams.clear()
+        self.states.clear()
+        self.reports.clear()
+        self.absent.clear()
+        self.diff.set_pair(None, None, [])
+        self.packages.set_pair(None, None, [])
+        self.human.set_pair(None, None)
+        self._show_camera(None)
 
     def _show_camera(self, item: QListWidgetItem | None) -> None:
         a, b = self.selected_runs()
