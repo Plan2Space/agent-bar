@@ -16,7 +16,9 @@ CTX = ContractContext(prompt="echo 3", slow_prompt="slow", prompt_timeout=20, ca
 
 
 def make(tmp_path, env=None):
-    base = {"PATH": sys.prefix, "SYSTEMROOT": "C:\\Windows", **(env or {})}
+    state = tmp_path / "fake-state"                                          # sessoes "em disco" do agente falso (load estrito)
+    state.mkdir(exist_ok=True)
+    base = {"PATH": sys.prefix, "SYSTEMROOT": "C:\\Windows", "AGENT_BAR_FAKE_STATE_DIR": str(state), **(env or {})}
     return AcpAdapter([sys.executable, str(STUB)], tmp_path, env=base, provider_id="fake-acp", display_name="ACP falso",
                       cost_class="local")
 
@@ -98,3 +100,46 @@ def test_real_claude_agent_acp_passes_the_contract(tmp_path):
     ws.mkdir()
     failures = run_contract(lambda env: AcpAdapter(["claude-agent-acp"], ws, env=env), ctx)
     assert failures == {}, failures
+
+
+def test_a_session_comes_back_through_session_load_after_the_agent_process_dies(tmp_path):
+    from agent_bar.platform.adapter import SessionNotFound
+    first = make(tmp_path)
+    first.connect()
+    sid = first.create_session(SessionRequest(model_id="fake-pro"))["session_id"]
+    first.disconnect()                                                       # o processo do agente morre
+    second = make(tmp_path)
+    second.connect()
+    try:
+        rec = second.resume_session(sid)
+        assert rec["session_id"] == sid and sid in second.get_status().sessions
+        ev: list[AgentEvent] = []
+        assert second.send_prompt(sid, "echo 2", ev.append).result(20).stop_reason == "end_turn"
+        with pytest.raises(SessionNotFound):
+            second.resume_session("s-que-nunca-existiu")
+    finally:
+        second.disconnect()
+
+
+def test_session_manager_recovers_a_claude_like_session_with_context(tmp_path):
+    import subprocess
+    import time
+
+    from agent_bar.platform.adapter import ProviderUnavailable
+    from agent_bar.platform.sessions import SessionManager
+    m = SessionManager({"fake-acp": lambda: make(tmp_path)})
+    try:
+        s = m.open("fake-acp")
+        adapter = m._adapters["fake-acp"]
+        subprocess.run(["taskkill", "/PID", str(adapter.owned_pids()[0]), "/T", "/F"], capture_output=True)
+        end = time.monotonic() + 10
+        while time.monotonic() < end and adapter.owned_pids():
+            time.sleep(0.05)
+        with pytest.raises(ProviderUnavailable):
+            m.send(s["id"], "echo 1").result(20)
+        assert m.get(s["id"])["state"] == "ERROR"
+        r = m.recover(s["id"])
+        assert r["recovered_without_context"] is False and r["session"]["session_id"] == s["session"]["session_id"]
+        assert m.send(s["id"], "echo 1").result(20).stop_reason == "end_turn"
+    finally:
+        m.close_all()
