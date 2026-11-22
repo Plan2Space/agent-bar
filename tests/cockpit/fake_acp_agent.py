@@ -28,6 +28,8 @@ _events: dict[int, threading.Event] = {}
 _cancelled: set[str] = set()
 _caps: dict = {}
 _next = [1000]
+_sessions = [0]
+_closed_sessions: set[str] = set()
 
 
 def send(msg: dict) -> None:
@@ -177,7 +179,7 @@ def main() -> None:
         elif method == "initialize":
             _caps.update(params.get("clientCapabilities") or {})
             send({"jsonrpc": "2.0", "id": rid, "result": {"protocolVersion": 1,
-                                                          "agentCapabilities": {"loadSession": True}, "authMethods": []}})
+                                                          "agentCapabilities": {"loadSession": True, "sessionCapabilities": {"close": {}}}, "authMethods": []}})
         elif method == "session/new":
             # AGENT_BAR_FAKE_START_MODE simula o claude-agent-acp 0.109, que abre a sessao em "auto"
             available = [{"id": "default", "name": "Ask"}, {"id": "acceptEdits", "name": "Accept edits"},
@@ -185,11 +187,15 @@ def main() -> None:
                          {"id": "bypassPermissions", "name": "Bypass"}]
             if os.environ.get("AGENT_BAR_FAKE_NO_SAFE_MODE"):
                 available = [m for m in available if m["id"] != "default"]
-            send({"jsonrpc": "2.0", "id": rid, "result": {"sessionId": "s-1", "modes": {
+            _sessions[0] += 1                                # s-1, s-2...: varias sessoes no mesmo processo
+            send({"jsonrpc": "2.0", "id": rid, "result": {"sessionId": f"s-{_sessions[0]}", "modes": {
                 "currentModeId": os.environ.get("AGENT_BAR_FAKE_START_MODE", "default"), "availableModes": available},
                 "configOptions": config_options()}})
         elif method == "session/set_config_option":
             set_config(rid, params)
+        elif method == "session/close":
+            _closed_sessions.add(params.get("sessionId", ""))
+            send({"jsonrpc": "2.0", "id": rid, "result": {}})
         elif method == "session/load":
             send({"jsonrpc": "2.0", "id": rid, "result": {}})
         elif method == "session/set_mode":

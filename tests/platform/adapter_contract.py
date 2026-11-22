@@ -189,8 +189,40 @@ def check_effort_honest(a: ProviderAdapter, ctx: ContractContext) -> None:
             _fail(f"{m['model_id']}: esforco inexistente aceito ({rec.get('effort_accepted')!r})")
         for level in levels:
             rec = a.create_session(SessionRequest(model_id=m["model_id"], effort=level))
+            _close(a, rec["session_id"])                                     # o claude-agent-acp cai com ~75 sessoes abertas
             if rec["effort_accepted"] not in (None, level):
                 _fail(f"{m['model_id']}: pediu {level}, aceito {rec['effort_accepted']!r}")
+
+
+def _close(a: ProviderAdapter, sid: str) -> None:
+    """Fecha a sessao que a checagem abriu, quando o adaptador sabe fechar (a checagem `close_session` cobra o resto)."""
+    try:
+        a.close_session(sid)
+    except CapabilityUnsupported:
+        pass
+
+
+def check_close_session(a: ProviderAdapter, ctx: ContractContext) -> None:
+    sid = a.create_session(SessionRequest())["session_id"]
+    try:
+        a.close_session(sid)
+    except CapabilityUnsupported as exc:
+        if exc.capability != "close_session":
+            _fail(f"close_session recusou com capacidade {exc.capability!r}")
+        return                                                               # nao fecha: recusa explicita, nao no-op
+    if sid in a.get_status().sessions:
+        _fail("sessao fechada continua em get_status().sessions")
+    try:
+        a.send_prompt(sid, ctx.prompt, lambda e: None)
+    except SessionNotFound:
+        pass
+    else:
+        _fail("prompt numa sessao fechada foi aceito")
+    try:
+        a.close_session(sid)
+    except SessionNotFound:
+        return
+    _fail("fechar de novo uma sessao fechada nao levantou SessionNotFound")
 
 
 def check_session_record(a: ProviderAdapter, ctx: ContractContext) -> None:
@@ -319,6 +351,7 @@ CHECKS: dict[str, Callable[[ProviderAdapter, ContractContext], None]] = {
     "cancel": check_cancel,
     "resume": check_resume,
     "disconnect": check_disconnect,
+    "close_session": check_close_session,
     "no_secret_leak": check_no_secret_leak,
 }
 
