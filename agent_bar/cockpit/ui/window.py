@@ -38,6 +38,7 @@ class CockpitWindow(QMainWindow):
         self.tabs.addTab(self.workflows, "Fluxos")
         self.review = ReviewTab(**(review_kwargs or {}))
         self.tabs.addTab(self.review, "Revisão visual")
+        self.review.packages.send_to_chat.connect(self.open_correction)
         self.tabs.addTab(self.library, "Biblioteca")
         gh = gh or GhClient()
         repos = repos or configured_repos(load_targets().org)
@@ -65,6 +66,14 @@ class CockpitWindow(QMainWindow):
     def _use_sandbox(self, workspace: str) -> None:
         """F6: o Chat passa a trabalhar no sandbox (o agente nunca edita o checkout direto)."""
         self.chat.prefill(workspace, "")
+
+    def open_correction(self, workspace: str, text: str) -> None:
+        """F7.4: o pedido de correção vai para o Chat preenchido (no checkout do motor, se existir); o envio é manual."""
+        self.tabs.setCurrentWidget(self.chat)
+        if workspace:
+            self.chat.prefill(workspace, text)
+        else:
+            self.chat.input.setPlainText(text)
 
     def open_review(self, workspace: str, prompt: str) -> None:
         """Revisao assistida (R21): conversa nova no checkout do repo com o prompt pronto. Enviar e com o Felipe."""
