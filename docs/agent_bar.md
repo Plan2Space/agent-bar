@@ -1,5 +1,7 @@
 # Agent bar (FP-058)
 
+> **Histórico (2026-11-22):** este documento descreve peças do orquestrador legado FP-057/FP-060 (listener/event bridge, laço de revisão do Codex, chip GPT, passo "Dar andamento", `AGENT_BAR_GOV_DIR`) que **saíram** do Agent Bar. O estado atual está no README e em [`docs/audit/legacy-cleanup-2026-11-22.md`](audit/legacy-cleanup-2026-11-22.md).
+
 > **Documento histórico (FP-058).** A referência atual e completa está em [`docs/README.md`](README.md). Este texto descreve a versão original da barra e pode divergir do comportamento atual (por exemplo: a semântica das cores, o botão de passo, a fila de PRs e o terminal embutido).
 >
 > Evolução FP-061: [SPEC Agent Bar 2.0](https://github.com/Plan2Space/engineering-specs/blob/40b76f9ce10ab7e9a51e2a1e03495a9cd1ba2b72/agent-bar/FP-061_agent_bar_control_center.md). O modo completo lê o Event Store em SQLite somente leitura; `AGENT_BAR_DEMO=1` rotula fixtures demonstrativas.

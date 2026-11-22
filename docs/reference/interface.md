@@ -1,5 +1,7 @@
 # Interface
 
+> **Histórico (2026-11-22):** este documento descreve peças do orquestrador legado FP-057/FP-060 (listener/event bridge, laço de revisão do Codex, chip GPT, passo "Dar andamento", `AGENT_BAR_GOV_DIR`) que **saíram** do Agent Bar. O estado atual está no README e em [`docs/audit/legacy-cleanup-2026-11-22.md`](../audit/legacy-cleanup-2026-11-22.md).
+
 A interface tem três peças que compartilham **o mesmo processo, o mesmo coletor e o mesmo `Snapshot`**:
 
 1. a **barra** flutuante (`Bar`);

@@ -1,5 +1,7 @@
 # Passo do Claude ("Dar andamento")
 
+> **Histórico (2026-11-22):** este documento descreve peças do orquestrador legado FP-057/FP-060 (listener/event bridge, laço de revisão do Codex, chip GPT, passo "Dar andamento", `AGENT_BAR_GOV_DIR`) que **saíram** do Agent Bar. O estado atual está no README e em [`docs/audit/legacy-cleanup-2026-11-22.md`](../audit/legacy-cleanup-2026-11-22.md).
+
 O botão **Dar andamento (Claude)** (no painel) e o **▶** (na barra) rodam **um passo**: uma sessão do Claude Code, sem tela (`claude -p`), que lê um arquivo de **missão** e executa o que ele manda. O progresso aparece num **terminal embutido, somente leitura**, dentro do painel, e há um botão **Parar passo** (■). A barra **não faz merge e não decide nada**: o que o passo pode ou não fazer é definido pela missão e pelo sistema de permissões do Claude.
 
 ## Fluxo completo

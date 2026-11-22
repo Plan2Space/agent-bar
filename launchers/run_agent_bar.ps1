@@ -1,6 +1,6 @@
 # Inicia o Agent Bar com o Python do .venv DESTE checkout. ASCII (PowerShell 5.1). Uso:  powershell -NoProfile -File launchers\run_agent_bar.ps1
 # Nunca cai no python global (quebrado nesta maquina): sem .venv, explica como criar e sai com 2.
-# Variaveis opcionais: veja docs\reference\configuracao.md (AGENT_BAR_GOV_DIR, EVENT_STORE_DB_PATH, AGENT_BAR_RUNS_DIR, ...).
+# Variaveis opcionais: veja docs\reference\configuracao.md (EVENT_STORE_DB_PATH, AGENT_BAR_RUNS_DIR, AGENT_BAR_EVIDENCE_DIR, ...).
 $repo = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $py = Join-Path $repo ".venv\Scripts\pythonw.exe"
 if (-not (Test-Path $py)) {

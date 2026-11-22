@@ -1,5 +1,7 @@
 # Limitações e roadmap
 
+> **Histórico (2026-11-22):** este documento descreve peças do orquestrador legado FP-057/FP-060 (listener/event bridge, laço de revisão do Codex, chip GPT, passo "Dar andamento", `AGENT_BAR_GOV_DIR`) que **saíram** do Agent Bar. O estado atual está no README e em [`docs/audit/legacy-cleanup-2026-11-22.md`](audit/legacy-cleanup-2026-11-22.md).
+
 Esta página lista, com honestidade, o que o Agent Bar **não** faz ou faz de forma limitada hoje, e o que está planejado. Nada aqui é escondido na interface: quando algo não existe, a barra mostra "indisponível".
 
 ## Limitações conhecidas
