@@ -26,12 +26,11 @@ def project(nodes, total=None, more=False, cursor=None, title="Plan2Space Rebuil
 
 
 # ------------------------------------------------------------------------------------------------ selecao
-def test_default_board_is_the_rebuild_project_and_legacy_needs_an_explicit_choice():
+def test_only_the_rebuild_board_exists_and_the_old_legacy_choice_is_ignored_with_a_warning():
     assert tg.load_targets({}).board == "rebuild"
     t = tg.load_targets({"AGENT_BAR_BOARD": "legacy"})
-    assert (t.org, t.project, t.board) == ("GFCDOTA", 1, "legacy") and "GPT Review" in t.columns
-    bad = tg.load_targets({"AGENT_BAR_BOARD": "outro"})
-    assert bad.board == "rebuild" and "AGENT_BAR_BOARD" in bad.warning
+    assert (t.org, t.project, t.board) == ("Plan2Space", 2, "rebuild") and "GPT Review" not in t.columns
+    assert "AGENT_BAR_BOARD" in t.warning and "ignorado" in t.warning
 
 
 def test_board_reads_name_url_id_task_ids_and_status_of_every_item():
@@ -78,9 +77,9 @@ def test_snapshot_never_falls_back_to_old_numbers_when_the_board_read_fails(tmp_
         if "projectV2" in joined:
             return (0, project([item("T-1", "Ready")])) if state["ok"] else (1, "GraphQL: API rate limit exceeded")
         return 1, "offline"
-    s1 = col.collect_snapshot(tmp_path, procs_fn=lambda: [], task_fn=lambda: None, gh=gh, backlog_cache=cache, targets=tg.Targets())
+    s1 = col.collect_snapshot(procs_fn=lambda: [], gh=gh, backlog_cache=cache, targets=tg.Targets())
     state["ok"] = False
-    s2 = col.collect_snapshot(tmp_path, procs_fn=lambda: [], task_fn=lambda: None, gh=gh, backlog_cache=cache, targets=tg.Targets())
+    s2 = col.collect_snapshot(procs_fn=lambda: [], gh=gh, backlog_cache=cache, targets=tg.Targets())
     assert s1.backlog["Ready"] == 1 and s1.board.error is None
     assert all(v is None for v in s2.backlog.values()) and "rate limit" in s2.board.error and s2.board.items == []
 
@@ -97,16 +96,15 @@ def test_rebuild_board_is_never_mixed_with_legacy_data(tmp_path):
         if 'login:"Plan2Space"' in joined:
             return 0, project([item("T-7", "In Progress")])
         return 1, "offline"
-    s = col.collect_snapshot(tmp_path, procs_fn=lambda: [], task_fn=lambda: None, gh=gh, targets=tg.load_targets({}))
-    assert not any("GFCDOTA" in c for c in seen)
-    assert s.board.node_id == REBUILD_ID and "GPT Review" not in s.backlog and [i.task_id for i in s.board.items] == ["T-7"]
-    legacy = col.collect_snapshot(tmp_path, procs_fn=lambda: [], task_fn=lambda: None, gh=gh, targets=tg.load_targets({"AGENT_BAR_BOARD": "legacy"}))
-    assert legacy.board.board == "legacy" and legacy.backlog["GPT Review"] == 3 and legacy.board.node_id == "PVT_legacy"
+    for env in ({}, {"AGENT_BAR_BOARD": "legacy"}):                       # nem a escolha antiga traz o board do legado de volta
+        s = col.collect_snapshot(procs_fn=lambda: [], gh=gh, targets=tg.load_targets(env))
+        assert not any("GFCDOTA" in c for c in seen)
+        assert s.board.node_id == REBUILD_ID and "GPT Review" not in s.backlog and [i.task_id for i in s.board.items] == ["T-7"]
 
 
 # ------------------------------------------------------------------------------------------------ UI / diagnostico
 def test_diagnostic_names_the_project_and_lists_its_items(tmp_path):
-    s = col.collect_snapshot(tmp_path, procs_fn=lambda: [], task_fn=lambda: None,
+    s = col.collect_snapshot(procs_fn=lambda: [],
                              gh=lambda a: (0, project([item("T-7", "In Progress", 7)])) if "projectV2" in " ".join(a) else (1, "x"),
                              targets=tg.Targets())
     d = s.diagnostic()
@@ -127,13 +125,9 @@ def test_panel_shows_project_identity_counts_and_items(gui):  # noqa: F811
     assert "In Progress <b>1</b>" in text and "T-7" in text and "T-13" in text
 
 
-def test_panel_marks_the_legacy_board_and_shows_errors_as_unavailable(gui):  # noqa: F811
+def test_panel_shows_board_errors_as_unavailable(gui):  # noqa: F811
     bar, app, tmp = gui
     s = snap(tmp)
-    s.board = col.collect_board(lambda a: (0, project([item("LEG-1", "GPT Review")], title="Legado", pid="PVT_legacy",
-                                                        url="https://github.com/orgs/GFCDOTA/projects/1")), tg.load_targets({"AGENT_BAR_BOARD": "legacy"}))
-    bar.on_snapshot(s)
-    assert "LEGADO" in bar.details.backlog.text()
     s.board = col.collect_board(lambda a: (1, "HTTP 401: Bad credentials"), tg.Targets())
     bar.on_snapshot(s)
     text = bar.details.backlog.text()

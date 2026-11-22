@@ -33,7 +33,7 @@ def main(argv: list[str] | None = None) -> int:
         reconfigure = getattr(sys.stdout, "reconfigure", None)
         if reconfigure is not None:                                           # redirecionado no Windows sai em cp1252 sem isto (S00-07 D7)
             reconfigure(encoding="utf-8")
-        print(col.collect_snapshot(claude_login=col.claude_login_state, codex_login=col.codex_login_state).diagnostic())
+        print(col.collect_snapshot(claude_login=col.claude_login_state).diagnostic())
         return 0
     log_path = None
     try:

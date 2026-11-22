@@ -1,8 +1,9 @@
-"""collectors.py — leitura SOMENTE-LEITURA do estado real (FP-058). Sem Qt. Todo I/O externo entra por funcao injetavel (testavel).
+"""collectors.py — leitura SOMENTE-LEITURA do estado real. Sem Qt. Todo I/O externo entra por funcao injetavel (testavel).
 
-Reutiliza o que o bridge/executor JA gravam (nada de monitor concorrente): `runs/governance/event_bridge.json` (last_poll, mode,
-fila, diagnosticos), `event_bridge.log` (um JSON por ciclo), `event_executor.instance.lock`, `EXECUTOR_DISABLED`, `executor/*.log`,
-a tabela de processos e a Tarefa Agendada. Ausencia de dado => GRAY/`indisponivel`, nunca verde.
+Fontes vivas: sessoes Claude locais (tabela de processos + `claude auth status`), `gh` (login e fila de PRs da org), o
+Project #2, o EventStore do agent-runtime (`EVENT_STORE_DB_PATH`), execucoes do motor, benchmark e aprovacoes. O
+orquestrador legado (listener/event bridge, laco de revisao do Codex, passo FP-060) foi removido em 2026-11-22
+(docs/audit/legacy-cleanup-2026-11-22.md). Ausencia de dado => GRAY/`indisponivel`, nunca verde.
 """
 from __future__ import annotations
 
@@ -23,8 +24,6 @@ from agent_bar.models import (
     AgentStatus,
     Board,
     BoardItem,
-    Event,
-    GroupedEvent,
     Level,
     PrQueue,
     PrRow,
@@ -32,13 +31,7 @@ from agent_bar.models import (
 )
 from agent_bar.targets import DEFAULT_COLUMNS, Targets, load_targets
 
-TASK_NAME = "sketchup-mcp event bridge"
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)   # Windows: subprocesso da barra nunca abre janela de console
-STALE_HEARTBEAT_S = 600                 # o listener faz ciclo a cada ~120 s: 10 min sem ciclo = parado/travado
-LISTENER_RE = re.compile(r"event_executor(\.py)?\s+run|event_executor run|run_event_bridge", re.I)
-EXECUTOR_RE = re.compile(r"event_executor(\.py)?\s+run|event_executor run", re.I)
-
-
 @dataclass(frozen=True)
 class Proc:
     pid: int
@@ -62,22 +55,6 @@ def parse_iso(text: object) -> dt.datetime | None:
     return v if v.tzinfo else v.replace(tzinfo=dt.timezone.utc)
 
 
-def default_gov_dir() -> Path:
-    """`runs/governance` do checkout PRINCIPAL (o que o listener usa), mesmo se a barra roda de uma worktree."""
-    env = os.environ.get("AGENT_BAR_GOV_DIR")
-    if env:
-        return Path(env)
-    here = Path(__file__).resolve().parents[1]                                       # raiz do repositorio (agent_bar/ fica na raiz)
-    try:
-        r = subprocess.run(["git", "rev-parse", "--git-common-dir"], cwd=here, capture_output=True, text=True, timeout=10, creationflags=NO_WINDOW)
-        common = Path(r.stdout.strip())
-        if r.returncode == 0 and r.stdout.strip():
-            return ((common if common.is_absolute() else here / common).resolve().parent / "runs" / "governance")
-    except (OSError, subprocess.SubprocessError):
-        pass
-    return here / "runs" / "governance"
-
-
 # ------------------------------------------------------------------------------------------------ I/O injetavel (real)
 def list_processes(timeout: float = 15.0) -> list[Proc] | None:
     """Tabela de processos via CIM (Windows). None = indisponivel (nao e 'lista vazia')."""
@@ -99,20 +76,6 @@ def list_processes(timeout: float = 15.0) -> list[Proc] | None:
             for d in data if isinstance(d, dict) and d.get("ProcessId") is not None]
 
 
-def task_state(timeout: float = 15.0) -> str | None:
-    """Estado da Tarefa Agendada ('Running', 'Ready', 'Disabled'...) ou None se nao observavel/inexistente."""
-    if os.name != "nt":
-        return None
-    try:
-        r = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command",
-                            f"(Get-ScheduledTask -TaskName '{TASK_NAME}' -ErrorAction Stop).State"],
-                           capture_output=True, text=True, timeout=timeout, creationflags=NO_WINDOW)
-    except (OSError, subprocess.SubprocessError):
-        return None
-    out = r.stdout.strip()
-    return out if r.returncode == 0 and out else None
-
-
 def run_gh(args: list[str], timeout: float = 60.0) -> tuple[int, str]:
     exe = shutil.which("gh") or "gh"
     env = {k: v for k, v in os.environ.items() if k not in ("GH_TOKEN", "GITHUB_TOKEN")}
@@ -123,135 +86,6 @@ def run_gh(args: list[str], timeout: float = 60.0) -> tuple[int, str]:
     return r.returncode, (r.stdout if r.returncode == 0 else (r.stdout + r.stderr)).strip()
 
 
-# ----------------------------------------------------------------------------------------------------- arquivos do bridge
-def read_bridge(gov: Path) -> dict | None:
-    """event_bridge.json ou None (ausente/corrompido => o chamador marca ambiguo, nunca verde)."""
-    try:
-        d = json.loads((gov / "event_bridge.json").read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
-    return d if isinstance(d, dict) else None
-
-
-def read_log_tail(gov: Path, n: int = 40) -> tuple[list[dict], int, bool]:
-    """(registros JSON validos dos ultimos n, linhas ilegiveis, tem NUL). Log de ciclo: uma linha JSON cada."""
-    p = gov / "event_bridge.log"
-    try:
-        raw = p.read_bytes()
-    except OSError:
-        return [], 0, False
-    nul = b"\x00" in raw
-    lines = raw.decode("utf-8", errors="replace").replace("\x00", "").splitlines()[-n:]
-    ok, bad = [], 0
-    for ln in lines:
-        if not ln.strip():
-            continue
-        try:
-            obj = json.loads(ln)
-        except ValueError:
-            bad += 1
-            continue
-        if isinstance(obj, dict):
-            ok.append(obj)
-        else:
-            bad += 1
-    return ok, bad, nul
-
-
-def lock_holder(gov: Path) -> str | None:
-    """PID gravado no InstanceLock (a partir do byte 16: o byte 0 fica travado no Windows). None se nao observavel."""
-    try:
-        fd = os.open(gov / "event_executor.instance.lock", os.O_RDONLY)
-    except OSError:
-        return None
-    try:
-        os.lseek(fd, 16, os.SEEK_SET)
-        return os.read(fd, 32).decode("ascii", "replace").strip() or None
-    except OSError:
-        return None
-    finally:
-        os.close(fd)
-
-
-# ------------------------------------------------------------------------------------------------------------ processos
-def descendants(procs: list[Proc], roots: set[int]) -> list[Proc]:
-    out, frontier = [], set(roots)
-    seen = set(roots)
-    while frontier:
-        nxt = {p.pid for p in procs if p.ppid in frontier and p.pid not in seen}
-        out += [p for p in procs if p.pid in nxt]
-        seen |= nxt
-        frontier = nxt
-    return out
-
-
-def executor_roots(procs: list[Proc]) -> list[Proc]:
-    """Raizes de cadeia do executor: python 'event_executor run' cujo pai NAO e outro 'event_executor run' (o shim do venv e o pai)."""
-    ex = [p for p in procs if p.name.lower().startswith("python") and EXECUTOR_RE.search(p.cmdline)]
-    pids = {p.pid for p in ex}
-    return [p for p in ex if p.ppid not in pids]
-
-
-def _age(iso: str | None, now: dt.datetime) -> int | None:
-    t = parse_iso(iso)
-    return None if t is None else max(0, int((now - t).total_seconds()))
-
-
-# ------------------------------------------------------------------------------------------------------------ coletores
-def collect_listener(gov: Path, procs: list[Proc] | None, tstate: str | None, now: dt.datetime | None = None,
-                     stale_s: int = STALE_HEARTBEAT_S) -> tuple[AgentStatus, dict]:
-    """(status, extras). extras: mode, heartbeat_age_s, kill_switch, concurrent_instances, lock_holder, last_error, roots."""
-    n = _now(now)
-    kill = (gov / "EXECUTOR_DISABLED").exists() if gov.exists() else None
-    holder = lock_holder(gov)
-    bridge = read_bridge(gov)
-    logs, bad_lines, nul = read_log_tail(gov)
-    hb_iso = (bridge or {}).get("last_poll")
-    hb = _age(hb_iso, n)
-    last_log = logs[-1] if logs else {}
-    mode = "indisponivel"
-    if bridge and bridge.get("mode") in ("dry-run", "execute") and "execute" in last_log:
-        a, b = bridge["mode"] == "execute", bool(last_log["execute"])
-        mode = "EXECUTE" if a and b else "DRY_RUN" if (not a and not b) else "ambiguo"
-    elif "execute" in last_log:
-        mode = "EXECUTE" if last_log["execute"] else "DRY_RUN"
-    elif bridge and bridge.get("mode") in ("dry-run", "execute"):
-        mode = "EXECUTE" if bridge["mode"] == "execute" else "DRY_RUN"
-    diags = (bridge or {}).get("diagnostics") or []
-    last_error = next((d.get("message") for d in reversed(diags) if isinstance(d, dict) and re.search(r"FAILED|erro|fatal|BLOCKED", str(d.get("message")), re.I)), None)
-    if last_log.get("fatal"):
-        last_error = str(last_log["fatal"])
-    extras = {"mode": mode, "heartbeat_age_s": hb, "kill_switch": kill, "concurrent_instances": None, "lock_holder": holder,
-              "last_error": last_error, "roots": []}
-    if procs is None:
-        return AgentStatus("Listener", Level.GRAY, "Indisponivel", "tabela de processos nao observavel"), extras
-    roots = executor_roots(procs)
-    extras["concurrent_instances"] = len(roots)
-    extras["roots"] = [p.pid for p in roots]
-    launchers = [p for p in procs if p.name.lower().startswith("powershell") and "run_event_bridge" in p.cmdline]
-    pid = roots[0].pid if roots else None
-    since = roots[0].created if roots else None
-    if len(roots) > 1:
-        return AgentStatus("Listener", Level.RED, "Instancias concorrentes", f"{len(roots)} executores: pids {[p.pid for p in roots]}", pid, since), extras
-    if not roots:
-        if tstate == "Running" or launchers:
-            return AgentStatus("Listener", Level.RED, "Tarefa ativa sem processo", f"tarefa {tstate}; executor ausente (morreu?)"), extras
-        return AgentStatus("Listener", Level.GRAY, "Desligado", f"tarefa: {tstate or 'nao observavel'}"), extras
-    if kill:
-        return AgentStatus("Listener", Level.YELLOW, "Kill switch ativo", "EXECUTOR_DISABLED presente: nao consome a fila", pid, since), extras
-    if bridge is None or (not logs and bad_lines):
-        return AgentStatus("Listener", Level.YELLOW, "Estado ilegivel", "event_bridge.json/log ausente ou corrompido", pid, since), extras
-    if hb is None:
-        return AgentStatus("Listener", Level.YELLOW, "Sem heartbeat", "event_bridge.json sem last_poll valido", pid, since), extras
-    if hb > stale_s:
-        return AgentStatus("Listener", Level.RED, "Heartbeat velho", f"ultimo ciclo ha {hb}s (> {stale_s}s)", pid, since), extras
-    if mode == "ambiguo":
-        return AgentStatus("Listener", Level.YELLOW, "Modo ambiguo", "bridge e log discordam sobre execute", pid, since), extras
-    note = f"ciclo ha {hb}s" + (f"; {bad_lines} linha(s) de log ilegivel" if bad_lines else "") + ("; NUL no log" if nul else "")
-    return AgentStatus("Listener", Level.GREEN, mode if mode != "indisponivel" else "Online", note, pid, since), extras
-
-
-LOOP_RE = re.compile(r"tools\.orchestration\.pr_lifecycle\s+run\b", re.I)               # o laco de revisao do Codex (pr_lifecycle run): e a automacao viva da FP-060
 _LOGIN_CACHE: dict[str, tuple[float, bool | None]] = {}
 
 
@@ -292,217 +126,61 @@ def claude_login_state(run: Callable[[list[str]], tuple[int, str]] = _run_cli, c
     return _cached_login("claude", clock, ttl, compute)
 
 
-def codex_login_state(run: Callable[[list[str]], tuple[int, str]] = _run_cli, clock: Callable[[], float] = time.monotonic,
-                      which: Callable[[str], str | None] = shutil.which, ttl: float = 300.0) -> bool | None:
-    """O Codex CLI esta logado? `codex login status`. `None` = nao deu para saber."""
-    exe = which("codex")
-    if not exe:
-        return None
-
-    def compute() -> bool | None:
-        rc, out = run([exe, "login", "status"])
-        low = out.lower()
-        if rc == 0 and "logged in" in low:
-            return True
-        if "not logged in" in low:
-            return False
-        return None
-    return _cached_login("codex", clock, ttl, compute)
-
-
-STEP_RE = re.compile(r"fp060-passo\.md", re.I)                                  # missao do botao FP-060 (ops/launchers/fp060-passo.md)
 DESKTOP_RE = re.compile(r"--type=|AnthropicClaude|--startup", re.I)           # app Claude Desktop (Electron) e seus auxiliares
-CODEX_RE = re.compile(r"(@openai[/\\]codex|[/\\]codex(\.exe|\.js|\.cmd)?(\s|\"|$)|\bcodex\s+(exec|review|resume|login))", re.I)
-
-
 def short_cmd(cmd: str, n: int = 120) -> str:
     """Linha de comando resumida e sem segredos (tokens conhecidos redatados)."""
     c = re.sub(r"(gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{20,}|Bearer\s+\S+)", "[REDACTED]", " ".join(cmd.split()))
     return c if len(c) <= n else c[: n - 1] + "…"
 
 
-def review_loop(procs: list[Proc] | None) -> Proc | None:
-    """O laco de revisao do Codex (`pr_lifecycle run`) vivo, ou None. Devolve a RAIZ (o launcher do venv e seu filho python casam; vale o de cima)."""
-    if procs is None:
-        return None
-    found = [p for p in procs if p.name.lower() in ("python.exe", "python", "pythonw.exe") and LOOP_RE.search(p.cmdline)]
-    ids = {p.pid for p in found}
-    roots = [p for p in found if p.ppid not in ids]
-    return (roots or found or [None])[0]
-
-
 def is_claude(p: Proc) -> bool:
     return p.name.lower() in ("claude.exe", "claude")
 
 
-def is_codex(p: Proc) -> bool:
-    n = p.name.lower()
-    return n in ("codex.exe", "codex") or (n in ("node.exe", "node") and bool(CODEX_RE.search(p.cmdline)))
-
-
-def collect_claude(procs: list[Proc] | None, listener_roots: list[int], gov: Path, now: dt.datetime | None = None,
-                   installed: Callable[[], bool] = lambda: bool(shutil.which("claude")), login: bool | None = None) -> AgentStatus:
-    """So conta como 'executando' o claude.exe DESCENDENTE do executor monitorado. Processos vivos fora dele sao separados em
-    sessoes interativas (Claude Code) e auxiliares do app Desktop; sessoes historicas (so em disco) nunca entram aqui."""
-    n = _now(now)
+def collect_claude(procs: list[Proc] | None, installed: Callable[[], bool] = lambda: bool(shutil.which("claude")),
+                   login: bool | None = None) -> AgentStatus:
+    """Claude Code nesta maquina. COR = conexao: verde logado, vermelho sem login, cinza sem CLI ou sem leitura.
+    Sessoes interativas vivas e auxiliares do app Desktop aparecem no detalhe; nenhuma delas vira "trabalhando" por
+    suposicao (nao ha fonte que diga o que uma sessao esta fazendo)."""
     if procs is None:
         return AgentStatus("Claude", Level.GRAY, "Indisponivel", "tabela de processos nao observavel")
     claudes = [p for p in procs if is_claude(p)]
-    mine = [p for p in descendants(procs, set(listener_roots)) if is_claude(p)] if listener_roots else []
-    mine_ids = {p.pid for p in mine}
-    others = [p for p in claudes if p.pid not in mine_ids]
-    desktop = [p for p in others if DESKTOP_RE.search(p.cmdline)]
-    sessions = [p for p in others if not DESKTOP_RE.search(p.cmdline)]
+    desktop = [p for p in claudes if DESKTOP_RE.search(p.cmdline)]
+    sessions = [p for p in claudes if not DESKTOP_RE.search(p.cmdline)]
     extra = ""
     if sessions:
-        extra += f"; {len(sessions)} sessao(oes) interativa(s) viva(s) fora do orquestrador (pid {', '.join(str(p.pid) for p in sessions[:3])})"
+        extra += f"; {len(sessions)} sessao(oes) interativa(s) viva(s) (pid {', '.join(str(p.pid) for p in sessions[:3])})"
     if desktop:
-        extra += f"; app Desktop: {len(desktop)} processo(s) auxiliar(es), nao sao execucao"
-    if mine:
-        p = mine[0]
-        return AgentStatus("Claude", Level.BLUE, "Executando", f"filho do executor, ha {_age(p.created, n)}s" + extra, p.pid, p.created, short_cmd(p.cmdline))
-    step = [p for p in sessions if STEP_RE.search(p.cmdline)]
-    if step:                                                                  # o botao "Dar andamento": nao e o executor, mas e trabalho real da FP-060 em curso
-        p = step[0]
-        return AgentStatus("Claude", Level.BLUE, "Passo FP-060 (botao)",
-                           f"sessao aberta pelo botao, ha {_age(p.created, n)}s" + ("" if listener_roots else "; sem orquestrador") + extra, p.pid, p.created, short_cmd(p.cmdline))
-    last = _last_run(gov)
-    if login is not None:                                                     # COR = conexao: verde logado, vermelho sem login, cinza sem CLI (trabalhando e o logo animado, acima)
-        if not installed():
-            return AgentStatus("Claude", Level.GRAY, "Nao instalado", "CLI nao encontrada" + extra)
-        if login is False:
-            return AgentStatus("Claude", Level.RED, "Sem login", "CLI sem credencial valida: rode `claude auth login`" + extra)
-        if listener_roots and last and last["failed"]:
-            return AgentStatus("Claude", Level.RED, "Ultima execucao falhou", f"{last['name']}" + extra)
+        extra += f"; app Desktop: {len(desktop)} processo(s) auxiliar(es)"
+    if not installed():
+        return AgentStatus("Claude", Level.GRAY, "Nao instalado", "CLI nao encontrada" + extra)
+    if login is False:
+        return AgentStatus("Claude", Level.RED, "Sem login", "CLI sem credencial valida: rode `claude auth login`" + extra)
+    if login is True:
         return AgentStatus("Claude", Level.GREEN, "Conectado", "logado (claude.ai)" + extra)
-    if not listener_roots:
-        if sessions:                                                          # Claude Code vivo, mas sem vinculo com o executor: nao e cinza ("desligado"), nem "executando"
-            return AgentStatus("Claude", Level.YELLOW, "Sessao interativa", "Claude Code vivo, sem vinculo com o executor" + extra)
-        return AgentStatus("Claude", Level.GRAY, "Sem orquestrador", ("CLI instalada" if installed() else "CLI nao instalada") + extra)
-    if last and last["failed"]:
-        return AgentStatus("Claude", Level.RED, "Ultima execucao falhou", f"{last['name']}" + extra)
-    return AgentStatus("Claude", Level.YELLOW, "Ocioso", (f"ultima execucao: {last['name']}" if last else "nenhuma execucao registrada") + extra)
+    if sessions:                                                              # vivo, mas o login nao foi confirmado: atencao, nunca verde
+        return AgentStatus("Claude", Level.YELLOW, "Sessao interativa", "Claude Code vivo; login nao confirmado" + extra)
+    return AgentStatus("Claude", Level.GRAY, "Login nao verificado", "CLI instalada; `claude auth status` sem resposta" + extra)
 
 
-def _last_run(gov: Path) -> dict | None:
-    d = gov / "executor"
-    try:
-        logs = sorted(d.glob("*.log"), key=lambda p: p.stat().st_mtime, reverse=True)
-    except OSError:
-        return None
-    if not logs:
-        return None
-    p = logs[0]
-    try:
-        text = p.read_text(encoding="utf-8", errors="replace").lower()
-    except OSError:
-        return None
-    failed = '"is_error": true' in text or ("entrega" in text and ("blocked_guards" in text or "failed_checks" in text))
-    return {"name": p.name, "failed": failed, "mtime": p.stat().st_mtime}
-
-
-def read_codex_record(gov: Path) -> dict | None:
-    """Contrato para a futura integracao: `runs/governance/codex/last_review.json` {status, pr, sha, verdict, at, error}. Ausente = nao integrado."""
-    try:
-        d = json.loads((gov / "codex" / "last_review.json").read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
-    return d if isinstance(d, dict) and d.get("status") in ("running", "done", "failed") else None
-
-
-def collect_codex(procs: list[Proc] | None = None, listener_roots: list[int] | None = None, gov: Path | None = None,
-                  which: Callable[[str], str | None] = shutil.which, now: dt.datetime | None = None, login: bool | None = None) -> AgentStatus:
-    """Separa: instalado / analise manual / vinculado ao orquestrador / revisando PR / falhou. O revisor AUTOMATICO so seria 'operacional'
-    com registro de integracao (nao existe): enquanto o E2E Claude<->Codex nao for comprovado o detalhe diz isso explicitamente."""
-    n = _now(now)
-    installed = bool(which("codex"))
-    note = "revisor automatico NAO operacional (E2E Claude<->Codex nao comprovado)"
-    rec = read_codex_record(gov) if gov else None
-    if rec and rec["status"] == "failed":
-        err = str(rec.get("error", "sem detalhe"))
-        where = f"PR #{rec.get('pr', '?')} {str(rec.get('sha', ''))[:7]}"
-        age = _age_text(rec.get("at"), n)
-        if err.startswith("RATE_LIMITED"):                                    # limite de uso da conta do revisor: nao e erro nem desconexao; volta sozinho no reset
-            return AgentStatus("Codex", Level.YELLOW, "Limite de uso", f"{where}: revisor suspenso ate o reset da conta; {age}{err[:100]}")
-        return AgentStatus("Codex", Level.RED, "Falhou", f"{where}: {err[:100]}")
-    if procs is None:
-        return AgentStatus("Codex", Level.GRAY, "Indisponivel", "tabela de processos nao observavel")
-    live = [p for p in procs if is_codex(p)]
-    linked_ids = {p.pid for p in descendants(procs, set(listener_roots or []))} if listener_roots else set()
-    linked = [p for p in live if p.pid in linked_ids]
-    manual = [p for p in live if p.pid not in linked_ids]
-    if linked:
-        p = linked[0]
-        reviewing = bool(re.search(r"\b(exec|review)\b", p.cmdline))
-        return AgentStatus("Codex", Level.BLUE, "Revisando PR (vinculado)" if reviewing else "Vinculado ao orquestrador",
-                           f"filho do executor, ha {_age(p.created, n)}s", p.pid, p.created, short_cmd(p.cmdline))
-    working = [p for p in manual if re.search(r"\b(exec|review)\b", p.cmdline)]       # so exec/review e trabalho; o app Codex aberto (app-server) nao
-    if working:
-        p = working[0]
-        return AgentStatus("Codex", Level.BLUE, "Analise manual", f"fora do orquestrador, ha {_age(p.created, n)}s; {note}", p.pid, p.created,
-                           short_cmd(p.cmdline))
-    if login is not None:                                                     # COR = conexao: verde logado, vermelho sem login, cinza sem CLI
-        if not installed:
-            return AgentStatus("Codex", Level.GRAY, "Nao instalado", "CLI nao encontrada; " + note)
-        if login is False:
-            return AgentStatus("Codex", Level.RED, "Sem login", "rode `codex login`; " + note)
-        app = f"app aberto (pid {manual[0].pid}); " if manual else ""
-        done = f"ultimo parecer: PR #{rec.get('pr', '?')} {rec.get('verdict', '?')}; " if rec and rec["status"] == "done" else ""
-        return AgentStatus("Codex", Level.GREEN, "Conectado", f"logado (ChatGPT); {app}{done}{note}")
-    if rec and rec["status"] == "done":
-        return AgentStatus("Codex", Level.YELLOW, "Ocioso", f"ultimo parecer: PR #{rec.get('pr', '?')} {rec.get('verdict', '?')}")
-    return AgentStatus("Codex", Level.GRAY, "Nao integrado", ("CLI instalada; " if installed else "CLI nao encontrada; ") + note)
-
-
-def _age_text(iso: object, now: dt.datetime) -> str:
-    """Idade de um registro em cache ("registrado ha 2d; "), para estado velho nao passar por atual. Sem data => diz isso."""
-    at = parse_iso(iso)
-    if at is None:
-        return "registrado sem data; "
-    s = int((now - at).total_seconds())
-    unit = f"{s // 86400}d" if s >= 86400 else f"{s // 3600}h" if s >= 3600 else f"{max(s, 0) // 60}min"
-    return f"registrado ha {unit}; "
-
-
-def lock_status(holder: str | None, procs: list[Proc] | None, roots: list[int]) -> str:
-    """Correlaciona o PID do InstanceLock com o processo REAL: pertence a cadeia do executor? vivo? orfao?"""
-    if holder is None:
-        return "sem lock (ninguem consome a fila)" if procs is not None else "indisponivel"
-    if procs is None:
-        return f"pid {holder}: processo nao verificavel"
-    try:
-        pid = int(holder)
-    except ValueError:
-        return f"conteudo invalido: {holder!r}"
-    by = {p.pid: p for p in procs}
-    chain = set(roots) | {p.pid for p in descendants(procs, set(roots))}
-    if pid in chain:
-        return f"pid {pid} vivo e da cadeia do executor"
-    if pid in by:
-        return f"pid {pid} vivo mas FORA da cadeia do executor (reuso de PID?)"
-    return f"pid {pid} NAO existe (lock velho; o SO libera o lock real)"
-
-
-def executor_summary(bridge: dict | None, now: dt.datetime) -> tuple[str, str, str]:
-    """(resumo de fila/tentativas/execucoes, trabalho, review/SHA atual). Tudo do event_bridge.json."""
-    if not bridge:
-        return "indisponivel", "indisponivel", ""
-    q = [i for i in bridge.get("queue", []) if isinstance(i, dict)]
-    runs = [parse_iso(r) for r in bridge.get("runs", [])]
-    runs24 = sum(1 for r in runs if r and (now - r).total_seconds() <= 86400)
-    states: dict[str, int] = {}
-    for i in q:
-        states[str(i.get("state"))] = states.get(str(i.get("state")), 0) + 1
-    failed = [i for i in q if i.get("state") == "FAILED"]
-    att = ", ".join(f"PR #{i.get('pr')} tentativa {i.get('attempts', 0)}/3" for i in failed[:3])
-    parts = [f"fila {len(q)} ({', '.join(f'{k}={v}' for k, v in sorted(states.items())) or 'vazia'})", f"execucoes 24h: {runs24}/6"]
-    if failed:
-        parts.append(f"falhas: {att}")
-    running = [i for i in q if i.get("state") == "RUNNING"]
-    cur = (running or [i for i in q if i.get("state") in ("QUEUED", "FAILED")] or q or [None])[-1]
-    ref = f"{cur.get('event_id', '?')} @ {str(cur.get('head_sha', ''))[:7]} (PR #{cur.get('pr')})" if cur else ""
-    work = "TRABALHANDO (executando uma tarefa)" if running else "apenas monitorando (nenhuma tarefa em execucao)"
-    return "; ".join(parts), work, ref
+def collect_github_status(gh: Callable[[list[str]], tuple[int, str]] = run_gh, queue: PrQueue | None = None,
+                          board: Board | None = None) -> AgentStatus:
+    """GitHub alcançável = uma leitura REAL desta coleta deu certo (fila de PRs da org ou Project). `gh auth status` sozinho
+    não prova acesso (com limite de API ele chega a declarar o token inválido) e só explica a falha quando nada foi lido."""
+    q_ok = queue is not None and queue.error is None
+    b_ok = board is not None and board.error is None
+    if q_ok or b_ok:
+        parts = [f"{len(queue.rows)} PR(s) abertos na org" if q_ok else f"fila de PRs indisponivel: {queue.error if queue else 'nao coletada'}"]
+        parts.append("Project lido" if b_ok else f"Project indisponivel: {board.error if board else 'nao coletado'}")
+        return AgentStatus("GitHub", Level.GREEN, "Conectado", "; ".join(parts))
+    rc, out = gh(["auth", "status"])
+    if rc == 127:
+        return AgentStatus("GitHub", Level.GRAY, "Nao instalado", "gh nao encontrado")
+    first = next((ln.strip(" -X") for ln in out.splitlines() if ln.strip() and "github.com" != ln.strip()), "")
+    if rc != 0:
+        return AgentStatus("GitHub", Level.RED, "Sem acesso", (first or "gh sem credencial") + "; nenhuma leitura desta coleta funcionou")
+    return AgentStatus("GitHub", Level.YELLOW, "Logado, leituras falhando",
+                       (queue.error if queue and queue.error else "sem leitura") + " (gh auth status ok)")
 
 
 class BackgroundCache:
@@ -562,66 +240,7 @@ class GithubCache:
         return v
 
 
-def current_pr(bridge: dict | None) -> int | None:
-    """PR atual = item de fila mais recente em andamento; senao o ultimo item da fila. Sem fila => None (nao inventa)."""
-    q = [i for i in (bridge or {}).get("queue", []) if isinstance(i, dict) and isinstance(i.get("pr"), int)]
-    if not q:
-        return None
-    active = [i for i in q if i.get("state") in ("RUNNING", "QUEUED", "FAILED", "DONE_AWAITING_REREVIEW")]
-    return (active or q)[-1]["pr"]
-
-
-def collect_github(pr: int | None, gh: Callable[[list[str]], tuple[int, str]] = run_gh, repo: str = "GFCDOTA/sketchup-mcp"
-                   ) -> tuple[AgentStatus, dict]:
-    rc, out = gh(["api", "user", "--jq", ".login"])
-    if rc != 0:
-        return AgentStatus("GitHub", Level.RED, "Sem conexao/auth", out[:120]), {"checks": "indisponivel", "pr_url": None}
-    login = out.strip()
-    if pr is None:
-        return AgentStatus("GitHub", Level.GREEN, "Conectado", f"login {login}; sem PR em andamento"), {"checks": "sem PR", "pr_url": None}
-    rc, out = gh(["pr", "view", str(pr), "--repo", repo, "--json", "url,state,headRefOid,reviewDecision,statusCheckRollup"])
-    try:
-        d = json.loads(out) if rc == 0 else None
-    except ValueError:
-        d = None
-    if not isinstance(d, dict):
-        return AgentStatus("GitHub", Level.YELLOW, "PR ilegivel", f"login {login}; PR #{pr} nao lido"), {"checks": "indisponivel", "pr_url": None}
-    rolls = [c.get("conclusion") or c.get("status") or "" for c in d.get("statusCheckRollup") or [] if isinstance(c, dict)]
-    ok = sum(1 for c in rolls if c in ("SUCCESS", "NEUTRAL", "SKIPPED"))
-    bad = sum(1 for c in rolls if c in ("FAILURE", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE"))
-    pend = len(rolls) - ok - bad
-    summary = f"{ok} ok / {pend} pendente(s) / {bad} falha(s)" if rolls else "sem checks"
-    head = str(d.get("headRefOid") or "")[:7]
-    rev = d.get("reviewDecision") or "sem decisao"
-    detail = f"PR #{pr} {head}: {summary}; review {rev}"
-    changes = rev == "CHANGES_REQUESTED"
-    lvl = Level.RED if bad else Level.YELLOW if (pend or not rolls or changes) else Level.GREEN
-    label = "Falha em checks" if bad else "Checks pendentes" if pend else "Review pede mudancas" if changes else "Conectado"
-    return AgentStatus("GitHub", lvl, label, detail), \
-        {"checks": summary, "pr_url": d.get("url")}
-
-
-ERROR_RE = re.compile(r"FAIL|FATAL|ERROR|BLOCKED|LOST|REFUSED|SUPERSEDED", re.I)
 BACKLOG_COLUMNS = DEFAULT_COLUMNS                                                # colunas do Plan2Space Project #2 (configuravel: targets.py)
-
-
-def group_events(events: list[Event], limit: int = 20) -> list[GroupedEvent]:
-    """`events` do mais novo para o mais antigo. Consecutivos identicos (acao/item/motivo) => 1 linha com contagem."""
-    out: list[GroupedEvent] = []
-    for e in events:
-        if out and (out[-1].action, out[-1].item, out[-1].reason) == (e.action, e.item, e.reason):
-            g = out[-1]
-            out[-1] = GroupedEvent(e.at, g.last_at, g.action, g.item, g.reason, g.count + 1, g.error)     # first_at = mais antigo
-        else:
-            out.append(GroupedEvent(e.at, e.at, e.action, e.item, e.reason, 1, bool(ERROR_RE.search(f"{e.action} {e.reason}"))))
-    return out[:limit]
-
-
-def recent_events(gov: Path, n: int = 200) -> list[Event]:
-    logs, _bad, _nul = read_log_tail(gov, n)
-    ev = [Event(str(r.get("at", "?")), str(r.get("action") or ("FATAL" if r.get("fatal") else "ciclo")), str(r.get("item") or ""),
-                str(r.get("reason") or r.get("fatal") or "")) for r in logs]
-    return list(reversed(ev))
 
 
 BOARD_QUERY = ("query($after:String){organization(login:\"%s\"){projectV2(number:%d){id title url items(first:100,after:$after){"
@@ -701,11 +320,6 @@ def collect_backlog(gh: Callable[[list[str]], tuple[int, str]] = run_gh, owner: 
     return {k: v for k, v in b.counts.items() if k != "(sem status)"}, b.error, b.synced
 
 
-PR_QUEUE_QUERY = ("query($owner:String!,$name:String!,$after:String){repository(owner:$owner,name:$name){pullRequests(states:OPEN,first:50,after:$after){"
-                  "pageInfo{hasNextPage endCursor} nodes{number title url isDraft mergeable headRefOid reviews(last:1){nodes{state commit{oid}}} "
-                  "commits(last:1){nodes{commit{statusCheckRollup{state}}}}}}}}")
-
-
 def classify_pr(node: dict) -> str:
     """O que precisa acontecer com este PR (so fatos do GitHub; nunca inventa): rascunho | conflito | ci | pronto | corrigir | aguarda.
     `pronto` exige APPROVED no HEAD ATUAL e checks SUCCESS: aprovacao de outro commit ou CI ausente/pendente nunca conta."""
@@ -727,34 +341,6 @@ def classify_pr(node: dict) -> str:
     return "aguarda"
 
 
-def collect_pr_queue(gh: Callable[[list[str]], tuple[int, str]] = run_gh, owner: str = "GFCDOTA", repo: str = "sketchup-mcp",
-                     now: dt.datetime | None = None, max_pages: int = 4) -> PrQueue:
-    """Fila de PRs abertos numa consulta GraphQL enxuta (50 por pagina). Falha/pagina incompleta => `error`, nunca uma lista vazia como se fosse "sem PRs"."""
-    nodes: list[dict] = []
-    after = None
-    for _ in range(max_pages):
-        args = ["api", "graphql", "-f", "query=" + PR_QUEUE_QUERY, "-f", f"owner={owner}", "-f", f"name={repo}"] + (["-f", f"after={after}"] if after else [])
-        rc, out = gh(args)
-        if rc != 0:
-            return PrQueue(error=f"gh api graphql rc={rc}: {(out.splitlines() or ['sem saida'])[0][:160]}")
-        try:
-            data = json.loads(out)
-            if data.get("errors"):
-                return PrQueue(error="GraphQL: " + str(data["errors"][0].get("message", "erro"))[:160])
-            page = data["data"]["repository"]["pullRequests"]
-            nodes += [n for n in page["nodes"] if isinstance(n, dict)]
-            if not page["pageInfo"]["hasNextPage"]:
-                break
-            after = page["pageInfo"]["endCursor"]
-        except (ValueError, TypeError, KeyError, AttributeError) as exc:
-            return PrQueue(error=f"resposta do GraphQL ilegivel: {type(exc).__name__}: {exc}"[:200])
-    else:
-        return PrQueue(error=f"mais de {max_pages * 50} PRs abertos: contagem incompleta recusada")
-    rows = [PrRow(int(n["number"]), str(n.get("title") or ""), str(n.get("url") or ""), classify_pr(n)) for n in nodes if isinstance(n.get("number"), int)]
-    rows.sort(key=lambda r: (PR_STATE_ORDER.index(r.state), r.number))
-    return PrQueue(rows=rows, synced=_now(now).strftime("%Y-%m-%dT%H:%M:%SZ"))
-
-
 ORG_PR_QUERY = ("query($q:String!,$after:String){search(query:$q,type:ISSUE,first:50,after:$after){pageInfo{hasNextPage endCursor} "
                 "nodes{... on PullRequest{number title url isDraft mergeable headRefOid repository{nameWithOwner} "
                 "reviews(last:1){nodes{state commit{oid}}} commits(last:1){nodes{commit{statusCheckRollup{state}}}}}}}}")
@@ -762,7 +348,7 @@ ORG_PR_QUERY = ("query($q:String!,$after:String){search(query:$q,type:ISSUE,firs
 
 def collect_org_pr_queue(gh: Callable[[list[str]], tuple[int, str]] = run_gh, owner: str = "Plan2Space",
                          now: dt.datetime | None = None, max_pages: int = 4) -> PrQueue:
-    """PRs abertos de TODOS os repos da org numa busca GraphQL (50/pagina). Mesmas regras de `collect_pr_queue`: falha => erro, nunca lista vazia."""
+    """PRs abertos de TODOS os repos da org numa busca GraphQL (50/pagina). Falha => erro, nunca lista vazia."""
     nodes: list[dict] = []
     after = None
     for _ in range(max_pages):
@@ -789,30 +375,17 @@ def collect_org_pr_queue(gh: Callable[[list[str]], tuple[int, str]] = run_gh, ow
     return PrQueue(rows=rows, synced=_now(now).strftime("%Y-%m-%dT%H:%M:%SZ"))
 
 
-def collect_snapshot(gov: Path | None = None, procs_fn=list_processes, task_fn=task_state, gh=run_gh, cache: GithubCache | None = None,
-                     backlog_cache: GithubCache | None = None, now: dt.datetime | None = None, queue_cache: GithubCache | None = None,
-                     claude_login: Callable[[], bool | None] | None = None, codex_login: Callable[[], bool | None] | None = None,
-                     targets: Targets | None = None, approval_cache: GithubCache | None = None) -> Snapshot:
+def collect_snapshot(procs_fn=list_processes, gh=run_gh, cache: GithubCache | None = None, backlog_cache: GithubCache | None = None,
+                     now: dt.datetime | None = None, queue_cache: GithubCache | None = None,
+                     claude_login: Callable[[], bool | None] | None = None, targets: Targets | None = None,
+                     approval_cache: GithubCache | None = None) -> Snapshot:
     """Uma coleta completa. Chamar FORA da thread de UI."""
-    g = gov or default_gov_dir()
     n = _now(now)
     t = targets or load_targets()
-    procs = procs_fn()
-    listener, ex = collect_listener(g, procs, task_fn(), n)
-    loop = review_loop(procs)
-    if loop is not None and listener.level not in (Level.GREEN, Level.RED):   # a automacao viva da FP-060 e o laco de revisao; o listener FP-057 segue desligado de proposito
-        listener = AgentStatus("Listener", Level.GREEN, "Laco de revisao ativo",
-                               f"pr_lifecycle run (pid {loop.pid}, ha {_age(loop.created, n)}s); listener FP-057 {listener.label.lower()}", loop.pid, loop.created, short_cmd(loop.cmdline))
-    claude = collect_claude(procs, ex["roots"], g, n, login=claude_login() if claude_login else None)
-    codex = collect_codex(procs, list(ex["roots"]) + ([loop.pid] if loop is not None else []), g, now=n, login=codex_login() if codex_login else None)
-    bridge = read_bridge(g)
-    pr = current_pr(bridge)
-    fetch = lambda: collect_github(pr, gh)  # noqa: E731
-    github, gx = cache.get(f"pr{pr}", fetch) if cache else fetch()
+    claude = collect_claude(procs_fn(), login=claude_login() if claude_login else None)
     bfetch = lambda: collect_board(gh, t, now=n)  # noqa: E731
     board = backlog_cache.get(f"board:{t.org}/{t.project}", bfetch) if backlog_cache else bfetch()     # falha = erro na tela, sem numero antigo
     counts = {k: v for k, v in board.counts.items() if k != "(sem status)"}
-    berr, bsync = board.error, board.synced
     qfetch = lambda: collect_org_pr_queue(gh, owner=t.org, now=n)  # noqa: E731
     pr_queue = queue_cache.get("pr_queue", qfetch) if queue_cache else qfetch()
     if queue_cache is not None:
@@ -820,11 +393,11 @@ def collect_snapshot(gov: Path | None = None, procs_fn=list_processes, task_fn=t
             queue_cache.last_good = pr_queue
         elif getattr(queue_cache, "last_good", None):                            # erro agora, mas ha leitura anterior: mostra a antiga E sinaliza
             pr_queue = PrQueue(rows=queue_cache.last_good.rows, error=pr_queue.error, synced=queue_cache.last_good.synced)
-    summary, work, ref = executor_summary(bridge, n)
-    log = _latest_log(g)
+    gfetch = lambda: collect_github_status(gh, pr_queue, board)  # noqa: E731
+    github = cache.get("gh_auth", gfetch) if cache else gfetch()
     from agent_bar.observability import collect_observation
 
-    observation = collect_observation(g, now=n.timestamp())
+    observation = collect_observation(now=n.timestamp())
     from agent_bar.runs import collect_runs, runs_dir_from_env
 
     runs = collect_runs(runs_dir_from_env())
@@ -836,22 +409,6 @@ def collect_snapshot(gov: Path | None = None, procs_fn=list_processes, task_fn=t
     refs = [(r.repo, r.number) for r in pr_queue.rows if r.repo and r.state != "rascunho"]
     afetch = lambda: collect_approvals(gh, refs, runs=runs, store_path=Path(observation.db_path) if observation.db_path else None)  # noqa: E731
     approvals = approval_cache.get("approvals:" + ",".join(f"{a}#{b}" for a, b in refs), afetch) if approval_cache else afetch()
-    return Snapshot(at=n.isoformat(), claude=claude, codex=codex, listener=listener, github=github, pr=pr,
-                    pr_url=gx.get("pr_url"), mode=ex["mode"], heartbeat_age_s=ex["heartbeat_age_s"], kill_switch=ex["kill_switch"],
-                    concurrent_instances=ex["concurrent_instances"], lock_holder=ex["lock_holder"],
-                    lock_status=lock_status(ex["lock_holder"], procs, ex["roots"]), last_error=ex["last_error"],
-                    events=group_events(recent_events(g)), backlog=counts, backlog_error=berr, backlog_synced=bsync,
-                    github_checks=gx.get("checks", "indisponivel"), executor_summary=summary, work=work, review_ref=ref,
-                    log_path=str(log) if log else None, observation=observation, pr_queue=pr_queue, runs=runs, board=board,
+    return Snapshot(at=n.isoformat(), claude=claude, github=github, backlog=counts, backlog_error=board.error,
+                    backlog_synced=board.synced, observation=observation, pr_queue=pr_queue, runs=runs, board=board,
                     approvals=approvals, benchmark=benchmark)
-
-
-def _latest_log(gov: Path) -> Path | None:
-    try:
-        runs = sorted((gov / "executor").glob("*.log"), key=lambda p: p.stat().st_mtime, reverse=True)
-    except OSError:
-        runs = []
-    if runs:
-        return runs[0]
-    cyc = gov / "event_bridge.log"
-    return cyc if cyc.exists() else None
