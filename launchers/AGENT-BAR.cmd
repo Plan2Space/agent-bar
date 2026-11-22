@@ -1,5 +1,5 @@
 @echo off
-rem Plan2Space Agent Bar: abre a barra DESTE checkout com o pythonw.exe do proprio .venv (nunca o python global). Somente observacao.
+rem P2S Studio (Plan2Space): abre a barra DESTE checkout com o pythonw.exe do proprio .venv (nunca o python global). Somente observacao.
 rem Abrir de novo com a barra aberta so traz a existente para a frente (instancia unica no proprio app).
 rem Fontes de dados da maquina: launchers\local.env (fora do git; modelo em local.example.env). Log: %LOCALAPPDATA%\agent_bar\logs
 rem ASCII puro (cmd). Sem contornar a ExecutionPolicy do PowerShell. Atalho na Area de Trabalho: launchers\install_shortcut.ps1

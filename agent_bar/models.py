@@ -105,7 +105,7 @@ class Snapshot:
         """Texto para a area de transferencia. Sem segredos: so estado observado."""
         def n(v, suffix=""):
             return "indisponivel" if v is None else f"{v}{suffix}"
-        rows = [f"Agent bar snapshot {self.at}"]
+        rows = [f"P2S Studio snapshot {self.at}"]
         rows += [a.line() + (f" | cmd: {a.command}" if a.command else "") + (f" | inicio: {a.since}" if a.since else "") for a in self.agents()]
         rows += ["backlog: " + (", ".join(f"{k}={n(v)}" for k, v in self.backlog.items()) if self.backlog else "indisponivel")
                  + (f" (erro: {self.backlog_error})" if self.backlog_error else f" (sync {self.backlog_synced or 'nunca'})"),

@@ -14,6 +14,20 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 LOGGER = "agent_bar"
+APP_NAME = "P2S Studio"                                                     # nome do produto (o pacote continua agent_bar)
+
+
+def checkout_version(root: Path, run=None) -> str:
+    """Commit (sha40) do checkout que esta abrindo o app, ou "" quando nao da para saber (sem git, sem repositorio)."""
+    import re
+    import subprocess
+    try:
+        r = (run or subprocess.run)(["git", "-C", str(root), "rev-parse", "HEAD"], capture_output=True, text=True, timeout=10,
+                                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0), check=False)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    out = (r.stdout or "").strip()
+    return out if r.returncode == 0 and re.fullmatch(r"[0-9a-f]{40}", out) else ""
 
 
 def log_dir(env: Mapping[str, str] | None = None) -> Path:
@@ -76,4 +90,4 @@ def report_fatal(exc: BaseException, log_path: Path | None, show: Callable[[str,
     for h in logging.getLogger(LOGGER).handlers:
         h.flush()
     where = f"\n\nDetalhes no log:\n{log_path}" if log_path else ""
-    show("Plan2Space Agent Bar", f"A barra nao conseguiu iniciar.\n\n{type(exc).__name__}: {exc}{where}")
+    show(APP_NAME, f"O P2S Studio nao conseguiu iniciar.\n\n{type(exc).__name__}: {exc}{where}")

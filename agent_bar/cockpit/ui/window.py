@@ -22,7 +22,7 @@ class CockpitWindow(QMainWindow):
     def __init__(self, gh: GhClient | None = None, repos: list[str] | None = None, discover_fn=None, specs_root=None,
                  dev_kwargs: dict | None = None, review_kwargs: dict | None = None, **chat_kwargs) -> None:
         super().__init__()
-        self.setWindowTitle("Cockpit ACP — Agent Bar")
+        self.setWindowTitle("P2S Studio — Cockpit")
         self.resize(980, 720)
         self.runtime = AsyncRuntime("cockpit")
         self.tabs = QTabWidget()

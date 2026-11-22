@@ -58,7 +58,8 @@ def _run_gui(ns: argparse.Namespace, log: logging.Logger) -> int:
     from agent_bar.window import Bar
     app = QApplication(sys.argv[:1])
     app.setQuitOnLastWindowClosed(False)
-    app.setApplicationName("Plan2Space Agent Bar")
+    from agent_bar.startup import APP_NAME, checkout_version
+    app.setApplicationName(APP_NAME)
     if ICON.is_file():
         app.setWindowIcon(QIcon(str(ICON)))
     instance = None
@@ -66,10 +67,12 @@ def _run_gui(ns: argparse.Namespace, log: logging.Logger) -> int:
         from agent_bar.single_instance import SingleInstance
         from agent_bar.startup import log_dir
         holder: dict = {}
-        instance = SingleInstance(lock_dir=log_dir().parent)
-        if not instance.acquire(on_activate=lambda: _bring_forward(holder.get("bar"), log)):
-            log.info("ja existe uma barra aberta: pedido para vir para a frente enviado; esta instancia sai")
-            return 0
+        instance = SingleInstance(lock_dir=log_dir().parent, version=checkout_version(ROOT))
+        activate = lambda: _bring_forward(holder.get("bar"), log)  # noqa: E731
+        quit_for_update = lambda: _quit_for_update(holder.get("bar"), log)  # noqa: E731
+        if not instance.acquire(on_activate=activate, on_quit=quit_for_update, notify=False):
+            if not _replace_older_instance(app, instance, activate, quit_for_update, log):
+                return 0
         app.aboutToQuit.connect(instance.release)
     bar = Bar(cfg.load())
     if instance is not None:
@@ -98,6 +101,49 @@ def _run_gui(ns: argparse.Namespace, log: logging.Logger) -> int:
         delay = os.environ.get("AGENT_BAR_SCREENSHOT_DELAY_S", "7")                # coletas em fundo (aprovacoes) podem pedir mais tempo
         QTimer.singleShot(int(float(delay) * 1000) if delay.replace(".", "", 1).isdigit() else 7000, shot)
     return app.exec()
+
+
+def _replace_older_instance(app, instance, activate, quit_for_update, log: logging.Logger) -> bool:
+    """Ja existe um P2S Studio aberto. Se ele e de um commit mais velho que este checkout, pergunta se troca pela versao
+    nova; sim = pede para a antiga se fechar (ela fecha normalmente, inclusive os agentes do cockpit) e assume. Senao, so
+    traz a existente para a frente. True = esta abertura continua."""
+    import time
+
+    from PySide6.QtWidgets import QMessageBox
+    info = instance.running_info() or {}
+    if not instance.newer_available():
+        instance.send("activate")
+        log.info("ja existe um P2S Studio aberto (mesma versao ou versao desconhecida): pedido para vir para a frente; esta abertura sai")
+        return False
+    old, new = str(info.get("version", ""))[:7], instance.version[:7]
+    answer = QMessageBox.question(None, "P2S Studio — versão nova disponível",
+                                  f"Já existe um P2S Studio aberto com uma versão mais velha ({old}) que a deste checkout ({new}).\n\n"
+                                  "Fechar a antiga e abrir a nova?")
+    if answer != QMessageBox.StandardButton.Yes:
+        instance.send("activate")
+        log.info("versao nova disponivel (%s -> %s), mas o usuario manteve a antiga", old, new)
+        return False
+    log.info("versao nova disponivel (%s -> %s): pedindo para a antiga se fechar", old, new)
+    instance.send("quit")
+    end = time.monotonic() + 20
+    while time.monotonic() < end:
+        app.processEvents()
+        if instance.acquire(on_activate=activate, on_quit=quit_for_update, notify=False):
+            return True
+        time.sleep(0.25)
+    QMessageBox.warning(None, "P2S Studio", "A versão antiga não fechou em 20 s. Feche-a pelo menu da barra e abra de novo.")
+    log.info("a instancia antiga nao fechou em 20 s; esta abertura sai")
+    return False
+
+
+def _quit_for_update(bar, log: logging.Logger) -> None:
+    """Pedido de uma versao nova: fecha esta instancia normalmente (encerra os agentes do cockpit e a coleta)."""
+    log.info("uma versao nova pediu para esta instancia fechar")
+    if bar is not None:
+        bar.close_app()
+    else:
+        from PySide6.QtWidgets import QApplication
+        QApplication.quit()
 
 
 def _bring_forward(bar, log: logging.Logger) -> None:

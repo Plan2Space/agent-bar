@@ -319,7 +319,7 @@ class TitleBar(QWidget):
         lay = QHBoxLayout(self)
         lay.setContentsMargins(12, 0, 6, 0)
         lay.setSpacing(2)
-        self.title = QLabel("Agent Control")
+        self.title = QLabel("P2S Studio")
         self.title.setStyleSheet("color:#f0f0f0;font-size:12px;font-weight:600")
         lay.addWidget(self.title)
         lay.addStretch(1)
@@ -356,7 +356,7 @@ class Details(QWidget):
 
     def __init__(self, bar: "Bar"):
         super().__init__(None, Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.Tool)
-        self.setWindowTitle("Agent Bar")
+        self.setWindowTitle("P2S Studio")
         self.bar = bar
         self.user_moved = False                                  # depois que o usuario move o painel, ele NAO segue mais a barra
         self.collapsed = False
@@ -529,7 +529,7 @@ class Details(QWidget):
         self.operations.setVisible(self.full_mode)
         self.backlog.setVisible(not self.full_mode)
         self.mode_button.setText("Painel expandido  ↙" if self.full_mode else "Central completa  ↗")
-        title = "Central completa" if self.full_mode else "Agent Control"
+        title = "P2S Studio · Central completa" if self.full_mode else "P2S Studio"
         if self.bar.snap and self.bar.snap.observation.source == "demonstração":
             title += " · DEMONSTRAÇÃO"
         self.titlebar.title.setText(title)
@@ -573,9 +573,9 @@ class Details(QWidget):
         self.backlog.setText(board_html(s.board))
         obs = s.observation
         if obs.source == "demonstração":
-            self.titlebar.title.setText(("Central completa" if self.full_mode else "Agent Control") + " · DEMONSTRAÇÃO")
+            self.titlebar.title.setText(("P2S Studio · Central completa" if self.full_mode else "P2S Studio") + " · DEMONSTRAÇÃO")
         else:
-            self.titlebar.title.setText("Central completa" if self.full_mode else "Agent Control")
+            self.titlebar.title.setText("P2S Studio · Central completa" if self.full_mode else "P2S Studio")
         if obs.source in ("lido", "demonstração"):
             counts = " · ".join(f"{k} {obs.counts.get(k, 0)}" for k in ("PENDING", "RUNNING", "DLQ"))
             age = "sem eventos" if obs.last_event_age_s is None else f"último evento há {age_text(obs.last_event_age_s)}"
@@ -598,7 +598,7 @@ class Bar(QWidget):
 
     def __init__(self, settings: cfg.Settings):
         super().__init__(None, Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.Tool)
-        self.setWindowTitle("Agent Bar")
+        self.setWindowTitle("P2S Studio")
         self.settings = settings
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setWindowOpacity(settings.opacity)
@@ -652,7 +652,7 @@ class Bar(QWidget):
             from PySide6.QtGui import QIcon
             ico = Path(__file__).resolve().parents[1] / "launchers" / "agent_bar.ico"
             self.tray.setIcon(QIcon(str(ico)) if ico.is_file() else QApplication.windowIcon())
-            self.tray.setToolTip("Plan2Space Agent Bar")
+            self.tray.setToolTip("P2S Studio")
             self.tray.messageClicked.connect(self._open_notice)
             self.tray.show()
         self.notifier = InboxNotifier(show=self._notify_human, enabled=lambda: self.settings.notify_human)
@@ -914,7 +914,7 @@ class Bar(QWidget):
             self.labels[a.name].setToolTip(tip)
             self.icons[a.name].setToolTip(tip)
             if self.settings.notifications and self.tray and a.level is Level.RED and self._levels.get(a.name) not in (None, Level.RED):
-                self.tray.showMessage("Agent bar", a.line(), QSystemTrayIcon.MessageIcon.Warning)
+                self.tray.showMessage("P2S Studio", a.line(), QSystemTrayIcon.MessageIcon.Warning)
             self._levels[a.name] = a.level
         self._sync_animation()
         self.inbox = human_inbox(s.approvals)
@@ -924,7 +924,7 @@ class Bar(QWidget):
         self.pr.setText(f"PRs {len(q.rows)}" if not (q.error and not q.rows) else "PRs ?")
         self.pr.setToolTip("fila de PRs da org: " + (", ".join(f"{k} {v}" for k, v in q.counts().items()) or "nenhum aberto")
                            + (f" (erro: {q.error})" if q.error else ""))
-        self.gear.setToolTip(f"runtime: {self.runtime_pin.message}" if getattr(self, "runtime_pin", None) else "Agent Bar")
+        self.gear.setToolTip(f"runtime: {self.runtime_pin.message}" if getattr(self, "runtime_pin", None) else "P2S Studio")
         self.details.update_snapshot(s)
         if self._refresh_pending:
             self._refresh_pending = None
