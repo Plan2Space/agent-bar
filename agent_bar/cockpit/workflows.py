@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from agent_bar.cockpit.acp import AcpClient, AcpError, AsyncRuntime, PermissionRequest, Update
+from agent_bar.cockpit.devmode import irreversible_request
 from agent_bar.cockpit.library import git_sha
 from agent_bar.cockpit.store import atomic_write_json, data_dir
 
@@ -233,6 +234,32 @@ class WorkflowRunner:
         self._emit(type="workflow", status=result)
         return result
 
+    def permission_handler(self, i: int, st: Stage) -> Callable[[PermissionRequest, Callable[[str | None], None]], None]:
+        """Decide cada pedido de permissao da etapa: irreversivel nunca e aprovado sozinho (R31); auto_approve so
+        escolhe allow_once (R27); sem auto_approve, vai ao callback da UI (ou e recusado)."""
+
+        def on_perm(req: PermissionRequest, respond: Callable[[str | None], None]) -> None:
+            title = (req.tool_call or {}).get("title", "ferramenta")
+            danger = irreversible_request(req.tool_call or {})
+            if self.wf.auto_approve and danger:
+                st.add_log(f"permissão automática RECUSADA (irreversível: {danger}): {title}")
+                self._emit(type="log", stage=i, line=st.log[-1])
+                if self.on_permission is not None:
+                    self.on_permission(i, req, respond)
+                else:
+                    respond(None)
+            elif self.wf.auto_approve:
+                choice = req.strongest_once()
+                st.add_log(f"permissão automática ({'allow_once' if choice else 'sem allow_once: recusada'}): {title}")
+                self._emit(type="log", stage=i, line=st.log[-1])
+                respond(choice)
+            elif self.on_permission is not None:
+                self.on_permission(i, req, respond)
+            else:
+                respond(None)
+
+        return on_perm
+
     async def _stage(self, i: int) -> str:
         st = self.wf.stages[i]
         previous = [s for s in self.wf.stages[:i] if s.status == "done"]
@@ -251,20 +278,8 @@ class WorkflowRunner:
                 st.add_log(line)
                 self._emit(type="log", stage=i, line=line)
 
-        def on_perm(req: PermissionRequest, respond: Callable[[str | None], None]) -> None:
-            title = (req.tool_call or {}).get("title", "ferramenta")
-            if self.wf.auto_approve:
-                choice = req.strongest_once()
-                st.add_log(f"permissão automática ({'allow_once' if choice else 'sem allow_once: recusada'}): {title}")
-                self._emit(type="log", stage=i, line=st.log[-1])
-                respond(choice)
-            elif self.on_permission is not None:
-                self.on_permission(i, req, respond)
-            else:
-                respond(None)
-
         client = self.client_factory(list(self.argv_for(st)), self.wf.workspace, runtime=self.rt, on_update=on_update,
-                                     on_permission=on_perm,
+                                     on_permission=self.permission_handler(i, st),
                                      stderr_path=(self.stderr_dir / f"wf-{self.wf.id}-{st.name}.stderr.log") if self.stderr_dir else None)
         self.clients[i] = client
         self._set(i, "running")
