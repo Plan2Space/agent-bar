@@ -492,6 +492,17 @@ class ChatView(QWidget):
         self._refresh_history()
         self.ensure_client()
 
+    def prefill(self, workspace: str, prompt: str) -> None:
+        """Conversa nova no workspace dado, com o texto ja no campo de entrada (o envio e manual)."""
+        i = self.workspace_box.findData(workspace)
+        if i < 0:
+            self.workspace_box.insertItem(0, Path(workspace).name, workspace)
+            i = 0
+        self.workspace_box.setCurrentIndex(i)
+        self.new_chat()
+        self.input.setPlainText(prompt)
+        self.input.setFocus()
+
     def _history_activated(self, idx: int) -> None:
         cid = self.history_box.itemData(idx)
         if cid:
