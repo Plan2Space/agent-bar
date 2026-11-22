@@ -188,7 +188,12 @@ def main() -> None:
             if os.environ.get("AGENT_BAR_FAKE_NO_SAFE_MODE"):
                 available = [m for m in available if m["id"] != "default"]
             _sessions[0] += 1                                # s-1, s-2...: varias sessoes no mesmo processo
-            send({"jsonrpc": "2.0", "id": rid, "result": {"sessionId": f"s-{_sessions[0]}", "modes": {
+            new_sid = f"s-{_sessions[0]}"
+            state = os.environ.get("AGENT_BAR_FAKE_STATE_DIR")
+            if state:                                        # sessoes "em disco": sobrevivem ao processo, ids unicos
+                new_sid = f"s-{os.getpid()}-{_sessions[0]}"
+                open(os.path.join(state, new_sid), "w").close()
+            send({"jsonrpc": "2.0", "id": rid, "result": {"sessionId": new_sid, "modes": {
                 "currentModeId": os.environ.get("AGENT_BAR_FAKE_START_MODE", "default"), "availableModes": available},
                 "configOptions": config_options()}})
         elif method == "session/set_config_option":
@@ -197,7 +202,11 @@ def main() -> None:
             _closed_sessions.add(params.get("sessionId", ""))
             send({"jsonrpc": "2.0", "id": rid, "result": {}})
         elif method == "session/load":
-            send({"jsonrpc": "2.0", "id": rid, "result": {}})
+            state = os.environ.get("AGENT_BAR_FAKE_STATE_DIR")
+            if state and not os.path.exists(os.path.join(state, str(params.get("sessionId", "")))):
+                send({"jsonrpc": "2.0", "id": rid, "error": {"code": -32002, "message": "Session not found"}})
+            else:                                            # sem AGENT_BAR_FAKE_STATE_DIR: aceita qualquer id (legado)
+                send({"jsonrpc": "2.0", "id": rid, "result": {"configOptions": config_options()}})
         elif method == "session/set_mode":
             update(params["sessionId"], {"sessionUpdate": "current_mode_update", "currentModeId": params["modeId"]})
             send({"jsonrpc": "2.0", "id": rid, "result": {}})

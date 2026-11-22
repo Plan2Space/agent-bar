@@ -286,9 +286,38 @@ class AcpAdapter(ProviderAdapter):
         self._need()
         if not (self._agent.get("agentCapabilities") or {}).get("loadSession"):
             return super().resume_session(session_id)
-        if session_id not in self._sessions:
-            raise SessionNotFound(session_id)
-        return dict(self._sessions[session_id])
+        if session_id in self._sessions:
+            return dict(self._sessions[session_id])
+        return self._load_session(session_id)                                # outro processo: o agente guarda a sessao
+
+    def _load_session(self, session_id: str) -> dict:
+        """`session/load` de uma sessao que este processo nao abriu (recuperacao depois de o agente cair, F4). Recusa do
+        agente = SessionNotFound. A sessao volta no modo que pede permissao, como uma nova."""
+        assert self.client is not None
+        try:
+            res = self.client.call("session/load", {"sessionId": session_id, "cwd": self.cwd, "mcpServers": []},
+                                   TIMEOUT).result(TIMEOUT + 5)
+        except AcpError as exc:
+            raise SessionNotFound(f"{session_id}: {exc.message}") from None
+        res = res if isinstance(res, dict) else {}
+        self._config[session_id] = [o for o in res.get("configOptions") or [] if isinstance(o, dict)]
+        modes = res.get("modes") or {}
+        if modes.get("availableModes") and not mode_is_safe(str(modes.get("currentModeId") or ""), modes):
+            safe = safe_mode_id(modes)
+            if safe is None:
+                raise ProviderUnavailable("o agente nao anuncia um modo que peca permissao")
+            self.client.call("session/set_mode", {"sessionId": session_id, "modeId": safe}, TIMEOUT).result(TIMEOUT + 5)
+        model = find_config(self._config[session_id], "model")
+        rec = {
+            "schema": "p2s.session.v1", "session_id": session_id, "provider_id": self.provider_id,
+            "model_requested": None, "model_accepted": str(model.get("currentValue")) if model else None,
+            "effort_requested": None, "effort_accepted": None, "workspace": None,
+            "links": {k: None for k in ("spec", "issue", "pr", "run")},
+            "state": "READY", "created_at": datetime.now(UTC).isoformat(timespec="seconds"),
+        }
+        with self._lock:
+            self._sessions[session_id] = rec
+        return dict(rec)
 
     def send_prompt(self, session_id: str, text: str, on_event) -> cf.Future:
         self._need()
