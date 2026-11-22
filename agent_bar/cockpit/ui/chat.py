@@ -67,6 +67,7 @@ class ChatView(QWidget):
         self.client_factory = client_factory
         self.ask_permission = ask_permission
         self.client: AcpClient | None = None
+        self._closing: list = []                                             # close() de clientes descartados
         self.gen = 0
         self.ready = False
         self.busy = False
@@ -241,7 +242,8 @@ class ChatView(QWidget):
 
     def _drop_client(self) -> None:
         if self.client is not None:
-            self.client.close()
+            self._closing = [f for f in self._closing if not f.done()]
+            self._closing.append(self.client.close())
         self.client = None
         self.ready = False
         self.gen += 1                                                      # sinais do cliente antigo passam a ser ignorados
@@ -533,13 +535,15 @@ class ChatView(QWidget):
         self._add(Notice("— histórico recarregado —"))
 
     def shutdown(self) -> None:
-        """Encerra o cliente desta aba (e so ele) e o runtime proprio."""
+        """Encerra os clientes que esta aba iniciou (e so eles) e o runtime proprio."""
         if self.client is not None:
-            fut = self.client.close()
+            self._closing.append(self.client.close())
+        for fut in self._closing:                                          # inclusive clientes trocados antes (workspace/agente)
             try:
                 fut.result(8)
             except Exception:                                              # noqa: BLE001 - encerrando de qualquer jeito
                 log.exception("falha ao encerrar o cliente ACP")
+        self._closing = []
         self.client = None
         if self._own_rt:
             self.rt.stop()
