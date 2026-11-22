@@ -32,6 +32,7 @@ from agent_bar.cockpit.acp import (
     PermissionRequest,
     Update,
     classify,
+    find_config,
     mode_is_safe,
 )
 from agent_bar.cockpit.library import compose_prompt
@@ -49,6 +50,26 @@ log = logging.getLogger("agent_bar.cockpit.chat")
 
 FLUSH_MS = 50
 AUTOSCROLL_PX = 80
+def _choices(option: dict) -> list[tuple[str, str]]:
+    """(valor exato, texto da UI). O "default" mostra a descricao (ex.: "Default (recommended) — Opus 5.5")."""
+    items = []
+    for item in option.get("options") or []:
+        if isinstance(item, dict) and isinstance(item.get("options"), list):
+            items.extend(x for x in item["options"] if isinstance(x, dict))
+        elif isinstance(item, dict):
+            items.append(item)
+    out = []
+    for x in items:
+        if "value" not in x:
+            continue
+        value = str(x["value"])
+        text = str(x.get("name") or value)
+        if value == "default" and x.get("description"):
+            text = f"{text} — {x['description']}"
+        out.append((value, text))
+    return out
+
+
 RISKY_SUFFIX = " (decide sem pedir permissão)"
 
 
@@ -91,6 +112,8 @@ class ChatView(QWidget):
         self.confirm_mode = confirm_mode
         self.no_safe_mode = False                                            # agente sem modo que pede permissao: envio bloqueado
         self._modes: dict = {}
+        self._config: list[dict] = []
+        self._config_pending = False
         self.client: AcpClient | None = None
         self._closing: list = []                                             # close() de clientes descartados
         self.gen = 0
@@ -145,10 +168,15 @@ class ChatView(QWidget):
         self.workspace_box.addItem("Escolher pasta…", "")
         self.mode_box = QComboBox()
         self.mode_box.setToolTip("Modos anunciados pelo agente. O padrão pede permissão.")
+        self.model_box, self.effort_box = QComboBox(), QComboBox()
+        self.model_box.setToolTip("Modelos anunciados pelo agente. Vale o que o agente confirmar.")
+        self.effort_box.setToolTip("Esforços que o agente anuncia para ESTE modelo. Vale o que o agente confirmar.")
+        self.confirmed = QLabel("")
+        self.confirmed.setStyleSheet("color:#7ee2a8;font-size:11px")
         self.history_box = QComboBox()
         self.history_box.setToolTip("Conversas salvas")
         self.new_btn = QPushButton("Nova conversa")
-        for w in (self.agent_box, self.workspace_box, self.mode_box, self.history_box):
+        for w in (self.agent_box, self.workspace_box, self.mode_box, self.history_box, self.model_box, self.effort_box):
             w.setStyleSheet(COMBO_CSS)
         self.new_btn.setStyleSheet(BTN_CSS)
         for label, w, stretch in (("Agente", self.agent_box, 2), ("Workspace", self.workspace_box, 2),
@@ -159,6 +187,14 @@ class ChatView(QWidget):
             head.addWidget(w, stretch)
         head.addWidget(self.new_btn)
         lay.addLayout(head)
+        cfg = QHBoxLayout()                                                   # modelo e esforco: so o que o agente anuncia
+        self.model_label, self.effort_label = QLabel("Modelo"), QLabel("Esforço")
+        for cap, w, stretch in ((self.model_label, self.model_box, 2), (self.effort_label, self.effort_box, 1)):
+            cap.setStyleSheet("color:#8f8f98;font-size:11px")
+            cfg.addWidget(cap)
+            cfg.addWidget(w, stretch)
+        cfg.addWidget(self.confirmed, 3)
+        lay.addLayout(cfg)
         self.banner = QFrame()
         self.banner.setStyleSheet("QFrame{background:#3a1717;border:1px solid #7a2a2a;border-radius:6px}")
         bl = QHBoxLayout(self.banner)
@@ -207,6 +243,8 @@ class ChatView(QWidget):
         self.agent_box.currentIndexChanged.connect(lambda _i: self._restart("agente trocado"))
         self.workspace_box.activated.connect(self._workspace_activated)
         self.mode_box.activated.connect(self._mode_activated)
+        self.model_box.activated.connect(lambda _i: self._config_activated("model", self.model_box))
+        self.effort_box.activated.connect(lambda _i: self._config_activated("thought_level", self.effort_box))
         self.history_box.activated.connect(self._history_activated)
         self.chat.workspace = self.workspace()
         self.chat.agent = self.profile().key
@@ -232,6 +270,57 @@ class ChatView(QWidget):
     def _set_busy(self, busy: bool) -> None:
         self.busy = busy
         self.send_btn.setText("Parar" if busy else "Enviar")
+        self._enable_config()
+
+    # ---------------------------------------------------------------------------------------- modelo e esforco
+    CONFIG_BOXES = (("model", "model_box", "model_label"), ("thought_level", "effort_box", "effort_label"))
+
+    def _populate_config(self, options: list) -> None:
+        """Preenche os seletores com as opcoes ANUNCIADAS e seleciona o valor que o agente diz estar valendo."""
+        self._config = [o for o in options if isinstance(o, dict)]
+        for cid, box_name, label_name in self.CONFIG_BOXES:
+            box, label = getattr(self, box_name), getattr(self, label_name)
+            opt = find_config(self._config, cid)
+            box.blockSignals(True)
+            box.clear()
+            if opt is not None:
+                for value, text in _choices(opt):
+                    box.addItem(text, value)
+                idx = box.findData(str(opt.get("currentValue", "")))
+                if idx >= 0:
+                    box.setCurrentIndex(idx)
+            box.blockSignals(False)
+            box.setVisible(opt is not None)
+            label.setVisible(opt is not None)
+        self._enable_config()
+        self.confirmed.setText(self._confirmed_text())
+
+    def _confirmed_text(self) -> str:
+        parts = []
+        for cid, title in (("model", "modelo"), ("thought_level", "esforço")):
+            opt = find_config(self._config, cid)
+            if opt is not None:
+                current = str(opt.get("currentValue", ""))
+                parts.append(f"{title} {dict(_choices(opt)).get(current, current)}")
+        return ("confirmado pelo agente: " + " · ".join(parts)) if parts else ""
+
+    def _enable_config(self) -> None:
+        on = self.ready and not self.busy and self.client is not None and not self._config_pending
+        for _cid, box_name, _label in self.CONFIG_BOXES:
+            box = getattr(self, box_name)
+            box.setEnabled(on and box.count() > 0)
+
+    def _config_activated(self, cid: str, box: QComboBox) -> None:
+        opt = find_config(self._config, cid)
+        value = box.currentData()
+        if self.client is None or not self.ready or opt is None or value is None or value == opt.get("currentValue"):
+            return
+        self._config_pending = True
+        self._enable_config()
+        self.confirmed.setText(f"aguardando confirmação do agente: {opt.get('name', cid)} = {box.currentText()}…")
+        gen = self.gen
+        self.client.set_config_option(str(opt["id"]), str(value)).add_done_callback(
+            lambda f, g=gen: self._emit_done(g, f"config:{cid}", f))
 
     def _show_error(self, exc: BaseException | None, text: str = "") -> None:
         kind = classify(exc) if exc is not None else "error"
@@ -253,6 +342,7 @@ class ChatView(QWidget):
         self.gen += 1
         gen = self.gen
         self.no_safe_mode = False
+        self._populate_config([])                                            # nada do agente anterior fica nos seletores
         self.ready = False
         p = self.profile()
         self.banner.setVisible(False)
@@ -271,6 +361,7 @@ class ChatView(QWidget):
         self.bridge.done.emit(gen, tag, None if exc else fut.result(), exc)
 
     def _drop_client(self) -> None:
+        self._config_pending = False
         if self.client is not None:
             self._closing = [f for f in self._closing if not f.done()]
             self._closing.append(self.client.close())
@@ -397,6 +488,7 @@ class ChatView(QWidget):
                 self._add(Notice("— o agente não recarrega sessões: sessão nova, histórico anterior só visual —", "#ffc233"))
             self.chat.session_id = str(info.get("session_id") or "")
             self._populate_modes(info.get("modes") or {})
+            self._populate_config(info.get("config_options") or [])
             if info.get("mode_forced_from"):
                 self._add(Notice(f"o agente abriu no modo \"{info['mode_forced_from']}\", que decide sem pedir permissão; "
                                  "o Studio trocou para o modo que pede permissão", "#ffc233"))
@@ -411,6 +503,14 @@ class ChatView(QWidget):
             if self.pending_prompt:
                 text, self.pending_prompt = self.pending_prompt, None
                 self._prompt(text)
+            return
+        if tag.startswith("config:"):
+            self._config_pending = False
+            if exc is not None:                                               # volta ao que o agente confirmou antes
+                self._populate_config(self.client.config_options if self.client else [])
+                self._show_error(exc)  # type: ignore[arg-type]
+            else:
+                self._populate_config(result if isinstance(result, list) else [])
             return
         if tag.startswith("mode:"):
             if exc is not None:
@@ -498,6 +598,8 @@ class ChatView(QWidget):
                 self._add(self.plan_card)
             self.plan_card.set_entries(u.data.get("entries") or [])
             self.text_block = None
+        elif u.kind == "config_option_update" and isinstance(u.data.get("configOptions"), list):
+            self._populate_config(u.data["configOptions"])
         elif u.kind == "current_mode_update" and u.data.get("currentModeId"):
             self.chat.mode = str(u.data["currentModeId"])                     # o agente e a fonte do modo atual
             self._select_mode(self.chat.mode)
