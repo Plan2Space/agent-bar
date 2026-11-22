@@ -274,6 +274,29 @@ def parse_update(params: Mapping[str, Any]) -> Update:
     return Update(raw if raw in UPDATE_KINDS else "unknown", sid, data, raw_kind=raw)
 
 
+SAFE_MODE_IDS = ("default",)                                                # o modo "pede permissao" do Claude Code / Codex
+SAFE_MODE_NAMES = ("manual", "ask")
+READ_ONLY_MODE_IDS = ("plan",)                                               # so planeja, nao altera nada
+
+
+def safe_mode_id(modes: Mapping[str, Any]) -> str | None:
+    """O modo que pede permissao antes de agir, entre os anunciados. None = nao ha como saber (fail closed)."""
+    available = [m for m in modes.get("availableModes") or [] if isinstance(m, dict)]
+    ids = [str(m.get("id", "")) for m in available]
+    for sid in SAFE_MODE_IDS:
+        if sid in ids:
+            return sid
+    for m in available:
+        if str(m.get("name", "")).strip().lower() in SAFE_MODE_NAMES:
+            return str(m.get("id", ""))
+    return None
+
+
+def mode_is_safe(mode_id: str, modes: Mapping[str, Any]) -> bool:
+    """Seguro = pede permissao (ou so planeja). Qualquer outro (auto, acceptEdits, bypass...) decide sem perguntar."""
+    return bool(mode_id) and (mode_id == safe_mode_id(modes) or mode_id in READ_ONLY_MODE_IDS)
+
+
 @dataclass
 class Timeouts:
     initialize: float = 30.0
@@ -295,7 +318,8 @@ class AcpClient:
     def __init__(self, argv: Sequence[str], cwd: str | Path, *, on_update: Callable[[Update], None] | None = None,
                  on_permission: PermissionCallback | None = None, on_exit: Callable[[int | None], None] | None = None,
                  runtime: AsyncRuntime | None = None, env: Mapping[str, str] | None = None,
-                 stderr_path: str | Path | None = None, timeouts: Timeouts | None = None) -> None:
+                 stderr_path: str | Path | None = None, timeouts: Timeouts | None = None,
+                 enforce_safe_mode: bool = True) -> None:
         if not argv:
             raise ValueError("argv vazio")
         self.argv = list(argv)
@@ -308,6 +332,7 @@ class AcpClient:
         self.env = dict(env) if env is not None else isolated_env()
         self.stderr_path = Path(stderr_path) if stderr_path else None
         self.timeouts = timeouts or Timeouts()
+        self.enforce_safe_mode = enforce_safe_mode
         self.proc: asyncio.subprocess.Process | None = None
         self.pid: int | None = None
         self.session_id: str | None = None
@@ -353,7 +378,26 @@ class AcpClient:
                 self.session_id = None
         if not loaded:
             await self._new_session(self.cwd)
-        return {"agent": agent, "session_id": self.session_id, "modes": self.modes, "loaded": loaded}
+        forced_from, safe = await self._ensure_safe_mode()
+        return {"agent": agent, "session_id": self.session_id, "modes": self.modes, "loaded": loaded,
+                "mode_forced_from": forced_from, "safe_mode": safe}
+
+    async def _ensure_safe_mode(self) -> tuple[str | None, bool]:
+        """Modo perigoso nunca implicito: se o agente abriu a sessao num modo que decide sem pedir (o claude-agent-acp
+        0.109 abre em "auto"), troca para o modo que pede permissao e so considera feito com a resposta do agente.
+        Devolve (modo de onde saiu ou None, ha modo seguro?). Agente sem modos: nada a trocar."""
+        if not self.enforce_safe_mode or not self.modes.get("availableModes"):
+            return None, True
+        safe = safe_mode_id(self.modes)
+        current = str(self.modes.get("currentModeId") or "")
+        if safe is None:
+            return None, False
+        if mode_is_safe(current, self.modes):
+            return None, True
+        await self._request("session/set_mode", {"sessionId": self._sid(), "modeId": safe}, self.timeouts.request)
+        self.modes = {**self.modes, "currentModeId": safe}
+        log.info("modo inicial %r trocado para %r (seguro por padrao)", current, safe)
+        return current or None, True
 
     def new_session(self, cwd: str | Path | None = None) -> cf.Future:
         return self.rt.submit(self._new_session(str(Path(cwd).resolve()) if cwd else self.cwd))
@@ -543,6 +587,8 @@ class AcpClient:
             self._emit(parse_update(params))
 
     def _emit(self, upd: Update) -> None:
+        if upd.kind == "current_mode_update" and upd.data.get("currentModeId"):
+            self.modes = {**self.modes, "currentModeId": str(upd.data["currentModeId"])}
         if self.on_update is None:
             return
         try:

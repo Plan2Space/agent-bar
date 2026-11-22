@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QMessageBox,
     QPlainTextEdit,
     QPushButton,
     QScrollArea,
@@ -25,7 +26,14 @@ from PySide6.QtWidgets import (
 )
 
 from agent_bar.cockpit import profiles as prof
-from agent_bar.cockpit.acp import AcpClient, AsyncRuntime, PermissionRequest, Update, classify
+from agent_bar.cockpit.acp import (
+    AcpClient,
+    AsyncRuntime,
+    PermissionRequest,
+    Update,
+    classify,
+    mode_is_safe,
+)
 from agent_bar.cockpit.library import compose_prompt
 from agent_bar.cockpit.store import Chat, ChatStore, data_dir
 from agent_bar.cockpit.ui.widgets import (
@@ -41,7 +49,17 @@ log = logging.getLogger("agent_bar.cockpit.chat")
 
 FLUSH_MS = 50
 AUTOSCROLL_PX = 80
-BYPASS_MODES = ("bypass", "yolo", "dangerous")
+RISKY_SUFFIX = " (decide sem pedir permissão)"
+
+
+def confirm_risky_mode(name: str, parent: QWidget) -> bool:
+    """Modo que decide sozinho so com escolha explicita; o padrao do dialogo e "nao"."""
+    box = QMessageBox(QMessageBox.Icon.Warning, "Modo sem pedir permissão",
+                      f"No modo \"{name}\" o agente decide sozinho e não pede sua permissão antes de agir "
+                      "(editar arquivos, rodar comandos).\n\nUsar este modo nesta conversa?",
+                      QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, parent)
+    box.setDefaultButton(QMessageBox.StandardButton.No)
+    return box.exec() == QMessageBox.StandardButton.Yes
 
 COMBO_CSS = "QComboBox{background:#26262c;color:#e6e6e6;border:1px solid #3a3a44;border-radius:5px;padding:2px 6px}"
 BTN_CSS = ("QPushButton{background:#2a2a30;color:#e6e6e6;border:1px solid #3a3a44;border-radius:5px;padding:4px 10px}"
@@ -59,6 +77,7 @@ class ChatView(QWidget):
     def __init__(self, store: ChatStore | None = None, runtime: AsyncRuntime | None = None, *,
                  client_factory: Callable[..., AcpClient] = AcpClient,
                  ask_permission: Callable[[PermissionRequest, QWidget], str | None] = ask_permission_dialog,
+                 confirm_mode: Callable[[str, QWidget], bool] = confirm_risky_mode,
                  profiles_fn: Callable[[], list[prof.AgentProfile]] = prof.profiles,
                  workspaces_fn: Callable[[], list[Path]] = prof.workspaces,
                  context_provider: Callable[[], str] | None = None) -> None:
@@ -69,6 +88,9 @@ class ChatView(QWidget):
         self._own_rt = runtime is None
         self.client_factory = client_factory
         self.ask_permission = ask_permission
+        self.confirm_mode = confirm_mode
+        self.no_safe_mode = False                                            # agente sem modo que pede permissao: envio bloqueado
+        self._modes: dict = {}
         self.client: AcpClient | None = None
         self._closing: list = []                                             # close() de clientes descartados
         self.gen = 0
@@ -226,6 +248,7 @@ class ChatView(QWidget):
             return
         self.gen += 1
         gen = self.gen
+        self.no_safe_mode = False
         self.ready = False
         p = self.profile()
         self.banner.setVisible(False)
@@ -279,25 +302,33 @@ class ChatView(QWidget):
             self._restart("workspace trocado")
 
     def _mode_activated(self, _idx: int) -> None:
-        mode = self.mode_box.currentData()
-        if self.client is not None and self.ready and mode:
-            self.chat.mode = str(mode)
-            self.client.set_mode(str(mode))
+        mode = str(self.mode_box.currentData() or "")
+        if self.client is None or not self.ready or not mode or mode == self.chat.mode:
+            return
+        if not mode_is_safe(mode, self._modes):
+            name = self.mode_box.currentText().replace("⚠ ", "").replace(RISKY_SUFFIX, "")
+            if not self.confirm_mode(name, self):
+                self._select_mode(self.chat.mode)                            # recusou: volta ao modo confirmado pelo agente
+                return
+        gen = self.gen
+        self.client.set_mode(mode).add_done_callback(lambda f, g=gen, m=mode: self._emit_done(g, f"mode:{m}", f))
+
+    def _select_mode(self, mode: str) -> None:
+        idx = self.mode_box.findData(mode)
+        if idx >= 0:
+            self.mode_box.setCurrentIndex(idx)
 
     def _populate_modes(self, modes: dict) -> None:
+        """Mostra o modo que o AGENTE confirmou (o cliente ja trocou para o seguro no connect); nunca um modo so na tela."""
+        self._modes = dict(modes)
         self.mode_box.clear()
         current = str(modes.get("currentModeId", ""))
         for m in modes.get("availableModes") or []:
             mid = str(m.get("id", ""))
-            risky = any(b in mid.lower() for b in BYPASS_MODES)
-            self.mode_box.addItem(("⚠ " if risky else "") + str(m.get("name", mid)) + (" (sem pedir permissão)" if risky else ""), mid)
-        idx = self.mode_box.findData(current)
-        if idx >= 0 and not any(b in current.lower() for b in BYPASS_MODES):
-            self.mode_box.setCurrentIndex(idx)
-        else:
-            safe = self.mode_box.findData("default")
-            self.mode_box.setCurrentIndex(max(safe, 0))
-        self.chat.mode = str(self.mode_box.currentData() or "")
+            risky = not mode_is_safe(mid, modes)
+            self.mode_box.addItem(("⚠ " if risky else "") + str(m.get("name", mid)) + (RISKY_SUFFIX if risky else ""), mid)
+        self._select_mode(current)
+        self.chat.mode = current
 
     # ---------------------------------------------------------------------------------------------- envio
     def _send_or_stop(self) -> None:
@@ -309,6 +340,9 @@ class ChatView(QWidget):
     def send(self, text: str) -> None:
         text = text.strip()
         if not text or self.busy:
+            return
+        if self.no_safe_mode:
+            self._add(Notice("envio bloqueado: o agente não anuncia um modo que peça permissão", "#ff6b6b"))
             return
         self.input.clear()
         self.empty.setVisible(False)
@@ -359,10 +393,28 @@ class ChatView(QWidget):
                 self._add(Notice("— o agente não recarrega sessões: sessão nova, histórico anterior só visual —", "#ffc233"))
             self.chat.session_id = str(info.get("session_id") or "")
             self._populate_modes(info.get("modes") or {})
+            if info.get("mode_forced_from"):
+                self._add(Notice(f"o agente abriu no modo \"{info['mode_forced_from']}\", que decide sem pedir permissão; "
+                                 "o Studio trocou para o modo que pede permissão", "#ffc233"))
+            if info.get("safe_mode") is False:
+                self.no_safe_mode = True
+                self.pending_prompt = None
+                self._set_busy(False)
+                self._add(Notice("este agente não anuncia um modo que peça permissão: envio bloqueado", "#ff6b6b"))
+                self.status.setText("bloqueado: agente sem modo que peça permissão")
+                return
             self.status.setText(f"conectado · {self.profile().label} · sessão {self.chat.session_id}")
             if self.pending_prompt:
                 text, self.pending_prompt = self.pending_prompt, None
                 self._prompt(text)
+            return
+        if tag.startswith("mode:"):
+            if exc is not None:
+                self._select_mode(self.chat.mode)
+                self._show_error(exc)  # type: ignore[arg-type]
+            else:
+                self.chat.mode = tag.split(":", 1)[1]
+                self._select_mode(self.chat.mode)
             return
         if tag == "prompt":
             self.flush()
@@ -442,10 +494,9 @@ class ChatView(QWidget):
                 self._add(self.plan_card)
             self.plan_card.set_entries(u.data.get("entries") or [])
             self.text_block = None
-        elif u.kind == "current_mode_update":
-            idx = self.mode_box.findData(u.data.get("currentModeId"))
-            if idx >= 0:
-                self.mode_box.setCurrentIndex(idx)
+        elif u.kind == "current_mode_update" and u.data.get("currentModeId"):
+            self.chat.mode = str(u.data["currentModeId"])                     # o agente e a fonte do modo atual
+            self._select_mode(self.chat.mode)
 
     def _kick(self) -> None:
         if not self.flush_timer.isActive():

@@ -235,3 +235,56 @@ def test_close_during_start_leaves_no_orphan_process(tmp_path):
     assert ei.value.code in ("CLOSED", "ACP_DOWN")
     assert acp.live_clients() == [] or c not in acp.live_clients()
     assert not c.process_running
+
+
+# ------------------------------------------------------------------------------- modo perigoso nunca implicito (F6)
+def _connect_with(tmp_path, **env):
+    c = AcpClient([sys.executable, str(STUB)], tmp_path, env=acp.isolated_env(env | {"PATH": sys.prefix}),
+                  stderr_path=tmp_path / "stderr.log")
+    return c, c.connect().result(T)
+
+
+@pytest.mark.parametrize("start", ["auto", "bypassPermissions", "acceptEdits"])
+def test_a_session_opened_in_a_mode_that_decides_alone_is_switched_to_manual(tmp_path, start):
+    """O claude-agent-acp 0.109 abre a sessao em "auto". O Studio troca para o modo que pede permissao, com resposta."""
+    c, info = _connect_with(tmp_path, AGENT_BAR_FAKE_START_MODE=start)
+    try:
+        assert info["mode_forced_from"] == start and info["safe_mode"] is True
+        assert c.modes["currentModeId"] == "default" and info["modes"]["currentModeId"] == "default"
+    finally:
+        c.close().result(T)
+
+
+@pytest.mark.parametrize("start", ["default", "plan"])
+def test_a_session_already_in_a_safe_mode_is_left_alone(tmp_path, start):
+    c, info = _connect_with(tmp_path, AGENT_BAR_FAKE_START_MODE=start)
+    try:
+        assert info["mode_forced_from"] is None and info["safe_mode"] is True and c.modes["currentModeId"] == start
+    finally:
+        c.close().result(T)
+
+
+def test_an_agent_without_a_recognisable_safe_mode_is_reported_not_trusted(tmp_path):
+    c, info = _connect_with(tmp_path, AGENT_BAR_FAKE_START_MODE="auto", AGENT_BAR_FAKE_NO_SAFE_MODE="1")
+    try:
+        assert info["safe_mode"] is False and info["mode_forced_from"] is None
+    finally:
+        c.close().result(T)
+
+
+def test_mode_updates_from_the_agent_keep_the_client_state_current(client):
+    c, _ = client
+    c.set_mode("plan").result(T)
+    end = time.time() + T
+    while time.time() < end and c.modes.get("currentModeId") != "plan":
+        time.sleep(0.02)
+    assert c.modes["currentModeId"] == "plan"
+
+
+def test_safe_mode_classification():
+    modes = {"availableModes": [{"id": "default", "name": "Manual"}, {"id": "auto", "name": "Auto"},
+                                {"id": "plan", "name": "Plan"}, {"id": "bypassPermissions", "name": "Bypass"}]}
+    assert acp.safe_mode_id(modes) == "default"
+    assert [m for m in ("default", "plan", "auto", "bypassPermissions", "acceptEdits", "") if acp.mode_is_safe(m, modes)] == ["default", "plan"]
+    assert acp.safe_mode_id({"availableModes": [{"id": "ask-first", "name": "Ask"}]}) == "ask-first"
+    assert acp.safe_mode_id({"availableModes": [{"id": "auto", "name": "Auto"}]}) is None
