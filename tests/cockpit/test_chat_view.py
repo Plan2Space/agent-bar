@@ -57,14 +57,14 @@ class CountingFactory:
         return c
 
 
-def make_view(app, tmp_path, *, ask=lambda req, parent: None, argv=None, spaces=None):
+def make_view(app, tmp_path, *, ask=lambda req, parent: None, argv=None, spaces=None, confirm=lambda name, parent: False):
     os.environ["AGENT_BAR_COCKPIT_DATA"] = str(tmp_path / "data")
     ws = spaces or [tmp_path / "ws1", tmp_path / "ws2"]
     for w in ws:
         w.mkdir(exist_ok=True)
     factory = CountingFactory()
     prof = AgentProfile("stub", "Stub", tuple(argv or (sys.executable, str(STUB))))
-    view = ChatView(ChatStore(tmp_path / "data"), client_factory=factory, ask_permission=ask,
+    view = ChatView(ChatStore(tmp_path / "data"), client_factory=factory, ask_permission=ask, confirm_mode=confirm,
                     profiles_fn=lambda: [prof], workspaces_fn=lambda: ws)
     return view, factory
 
@@ -210,13 +210,70 @@ def test_missing_agent_shows_classified_banner(app, tmp_path):
         dispose(view)
 
 
-def test_bypass_mode_is_never_the_default(app, tmp_path):
+def test_the_mode_box_shows_what_the_agent_confirmed_and_marks_modes_that_decide_alone(app, tmp_path):
+    """Antes a caixa mostrava "default" enquanto o agente seguia em bypass. Agora mostra o estado real, com o aviso."""
     view, _ = make_view(app, tmp_path)
     try:
         view._populate_modes({"currentModeId": "bypassPermissions", "availableModes": [
-            {"id": "default", "name": "Ask"}, {"id": "bypassPermissions", "name": "Bypass"}]})
-        assert view.mode_box.currentData() == "default"
-        assert any("⚠" in view.mode_box.itemText(i) for i in range(view.mode_box.count()))
+            {"id": "default", "name": "Ask"}, {"id": "auto", "name": "Auto"}, {"id": "plan", "name": "Plan"},
+            {"id": "bypassPermissions", "name": "Bypass"}]})
+        assert view.mode_box.currentData() == "bypassPermissions" and view.chat.mode == "bypassPermissions"
+        marked = {view.mode_box.itemData(i) for i in range(view.mode_box.count()) if "⚠" in view.mode_box.itemText(i)}
+        assert marked == {"auto", "bypassPermissions"}
+    finally:
+        dispose(view)
+
+
+def notices(view):
+    return [n.text() for n in view.transcript.findChildren(W.Notice)]
+
+
+def test_an_agent_that_opens_in_auto_is_switched_to_manual_and_the_user_is_told(app, tmp_path, monkeypatch):
+    monkeypatch.setenv("AGENT_BAR_FAKE_START_MODE", "auto")
+    view, factory = make_view(app, tmp_path)
+    try:
+        turn(app, view, "echo 2")
+        assert factory.made[0].modes["currentModeId"] == "default"
+        assert view.mode_box.currentData() == "default" and view.chat.mode == "default"
+        assert any('"auto"' in n and "trocou" in n for n in notices(view))
+    finally:
+        dispose(view)
+
+
+def _pick(view, mode):
+    view.mode_box.setCurrentIndex(view.mode_box.findData(mode))
+    view._mode_activated(view.mode_box.currentIndex())
+
+
+def test_choosing_a_mode_that_decides_alone_needs_an_explicit_yes(app, tmp_path):
+    asked = []
+    view, factory = make_view(app, tmp_path, confirm=lambda name, parent: asked.append(name) or False)
+    try:
+        turn(app, view, "echo 1")
+        _pick(view, "auto")
+        assert asked == ["Auto"] and view.mode_box.currentData() == "default"
+        assert factory.made[0].modes["currentModeId"] == "default"
+        view.confirm_mode = lambda name, parent: True
+        _pick(view, "auto")
+        assert wait(app, lambda: view.chat.mode == "auto")
+        assert factory.made[0].modes["currentModeId"] == "auto" and view.mode_box.currentData() == "auto"
+        _pick(view, "plan")                                                  # modo seguro nao pergunta
+        assert wait(app, lambda: view.chat.mode == "plan") and asked == ["Auto"]
+    finally:
+        dispose(view)
+
+
+def test_an_agent_without_a_mode_that_asks_permission_cannot_receive_prompts(app, tmp_path, monkeypatch):
+    monkeypatch.setenv("AGENT_BAR_FAKE_START_MODE", "auto")
+    monkeypatch.setenv("AGENT_BAR_FAKE_NO_SAFE_MODE", "1")
+    view, factory = make_view(app, tmp_path)
+    try:
+        view.send("echo 3")
+        assert wait(app, lambda: view.no_safe_mode and not view.busy)
+        assert [m["role"] for m in view.chat.messages] == ["user"]           # o prompt nao foi ao agente
+        view.send("echo 4")
+        assert [m["role"] for m in view.chat.messages] == ["user"]
+        assert any("envio bloqueado" in n for n in notices(view))
     finally:
         dispose(view)
 

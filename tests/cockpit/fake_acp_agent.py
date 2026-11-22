@@ -146,10 +146,14 @@ def main() -> None:
             send({"jsonrpc": "2.0", "id": rid, "result": {"protocolVersion": 1,
                                                           "agentCapabilities": {"loadSession": True}, "authMethods": []}})
         elif method == "session/new":
+            # AGENT_BAR_FAKE_START_MODE simula o claude-agent-acp 0.109, que abre a sessao em "auto"
+            available = [{"id": "default", "name": "Ask"}, {"id": "acceptEdits", "name": "Accept edits"},
+                         {"id": "plan", "name": "Plan"}, {"id": "auto", "name": "Auto"},
+                         {"id": "bypassPermissions", "name": "Bypass"}]
+            if os.environ.get("AGENT_BAR_FAKE_NO_SAFE_MODE"):
+                available = [m for m in available if m["id"] != "default"]
             send({"jsonrpc": "2.0", "id": rid, "result": {"sessionId": "s-1", "modes": {
-                "currentModeId": "default", "availableModes": [
-                    {"id": "default", "name": "Ask"}, {"id": "acceptEdits", "name": "Accept edits"},
-                    {"id": "plan", "name": "Plan"}, {"id": "bypassPermissions", "name": "Bypass"}]}}})
+                "currentModeId": os.environ.get("AGENT_BAR_FAKE_START_MODE", "default"), "availableModes": available}}})
         elif method == "session/load":
             send({"jsonrpc": "2.0", "id": rid, "result": {}})
         elif method == "session/set_mode":
