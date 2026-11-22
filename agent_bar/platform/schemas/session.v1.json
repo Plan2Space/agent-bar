@@ -1,0 +1,108 @@
+{
+  "$id": "p2s.session.v1",
+  "type": "object",
+  "required": [
+    "schema",
+    "session_id",
+    "provider_id",
+    "model_requested",
+    "model_accepted",
+    "effort_requested",
+    "effort_accepted",
+    "workspace",
+    "links",
+    "state",
+    "created_at"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema": {
+      "const": "p2s.session.v1"
+    },
+    "session_id": {
+      "type": "string"
+    },
+    "provider_id": {
+      "type": "string"
+    },
+    "model_requested": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "model_accepted": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "effort_requested": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "effort_accepted": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "workspace": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "links": {
+      "type": "object",
+      "required": [
+        "spec",
+        "issue",
+        "pr",
+        "run"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "spec": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "issue": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "pr": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "run": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "state": {
+      "enum": [
+        "CREATING",
+        "READY",
+        "RUNNING",
+        "CANCELLING",
+        "CLOSED",
+        "ERROR"
+      ]
+    },
+    "created_at": {
+      "type": "string"
+    }
+  }
+}

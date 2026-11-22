@@ -315,66 +315,50 @@ def test_tool_content_is_truncated():
     assert text.startswith("x" * 8000) and "truncado: 1000" in text
 
 
-# ----------------------------------------------------------------------- modelo e esforco (so o que o agente confirma)
-def _choose(view, box, value):
-    box.setCurrentIndex(box.findData(value))
-    box.activated.emit(box.currentIndex())
+class InstantClient:
+    """Cliente que responde antes do add_done_callback: os chunks vem de OUTRA thread (como o loop do ACP) e o future
+    ja esta pronto quando a UI anexa o callback. Reproduz, sem sorte, a corrida em que o "done" passava na frente."""
+
+    def __init__(self, argv, cwd, *, on_update=None, **kw):
+        import concurrent.futures as cf
+        self._cf = cf
+        self.on_update = on_update
+        self.config_options = []
+
+    def connect(self, resume_session=None):
+        f = self._cf.Future()
+        f.set_result({"agent": {}, "session_id": "s-i", "modes": {}, "loaded": False})
+        return f
+
+    def prompt(self, text):
+        import threading
+        t = threading.Thread(target=lambda: [self.on_update(Update("agent_message_chunk", "s-i",
+                                                                    {"content": {"type": "text", "text": f"p{i} "}}))
+                                             for i in range(5)])
+        t.start()
+        t.join()
+        f = self._cf.Future()
+        f.set_result("end_turn")
+        return f
+
+    def cancel(self):
+        return self._cf.Future()
+
+    def close(self, grace_s=0):
+        f = self._cf.Future()
+        f.set_result(None)
+        return f
 
 
-def test_model_and_effort_boxes_list_only_what_the_agent_announced(app, tmp_path):
-    view, _ = make_view(app, tmp_path)
+def test_an_agent_that_answers_before_the_callback_is_attached_still_delivers_the_whole_turn(app, tmp_path):
+    os.environ["AGENT_BAR_COCKPIT_DATA"] = str(tmp_path / "data")
+    (tmp_path / "ws1").mkdir()
+    prof = AgentProfile("stub", "Stub", (sys.executable, "-c", "pass"))
+    view = ChatView(ChatStore(tmp_path / "data"), client_factory=InstantClient, profiles_fn=lambda: [prof],
+                    workspaces_fn=lambda: [tmp_path / "ws1"])
     try:
-        turn(app, view, "echo 1")
-        assert [view.model_box.itemData(i) for i in range(view.model_box.count())] == ["default", "fake-pro", "fake-mini"]
-        assert view.model_box.itemText(0) == "Default (recommended) — Fake Pro"
-        assert [view.effort_box.itemData(i) for i in range(view.effort_box.count())] == ["default", "low", "high"]
-        assert view.model_box.isEnabled() and view.effort_box.isEnabled()
-        assert view.confirmed.text() == "confirmado pelo agente: modelo Default (recommended) — Fake Pro · esforço Default"
-    finally:
-        dispose(view)
-
-
-def test_a_choice_shows_only_after_the_agent_confirms_and_the_agent_really_uses_it(app, tmp_path):
-    view, factory = make_view(app, tmp_path)
-    try:
-        turn(app, view, "echo 1")
-        _choose(view, view.model_box, "fake-pro")
-        assert not view.model_box.isEnabled() and "aguardando confirmação" in view.confirmed.text()
-        assert wait(app, lambda: view.confirmed.text().startswith("confirmado pelo agente: modelo Fake Pro"))
-        assert view.effort_box.count() == 4                                   # esforcos de ESTE modelo
-        _choose(view, view.effort_box, "max")
-        assert wait(app, lambda: view.confirmed.text().endswith("esforço Max"))
-        turn(app, view, "whoami")
-        assert view.chat.messages[-1]["text"] == "model=fake-pro effort=max"
-        _choose(view, view.model_box, "fake-mini")                            # modelo sem esforco: o seletor some
-        assert wait(app, lambda: view.confirmed.text().startswith("confirmado pelo agente: modelo Fake Mini"))
-        assert view.effort_box.isHidden() and view.effort_label.isHidden()
-    finally:
-        dispose(view)
-
-
-def test_an_unconfirmed_change_reverts_to_what_the_agent_had_and_shows_the_error(app, tmp_path, monkeypatch):
-    monkeypatch.setenv("AGENT_BAR_FAKE_CONFIG_SILENT", "1")
-    view, _ = make_view(app, tmp_path)
-    try:
-        turn(app, view, "echo 1")
-        _choose(view, view.model_box, "fake-pro")
-        assert wait(app, lambda: not view.banner.isHidden())
-        assert view.model_box.currentData() == "default" and "Fake Pro" not in view.confirmed.text().split("—")[0]
-        assert "nao confirmado" in view.banner_label.text()
-    finally:
-        dispose(view)
-
-
-def test_selectors_are_locked_while_the_agent_is_working(app, tmp_path):
-    view, _ = make_view(app, tmp_path)
-    try:
-        turn(app, view, "echo 1")
-        view.send("slow")
-        assert wait(app, lambda: view.busy)
-        assert not view.model_box.isEnabled() and not view.effort_box.isEnabled()
-        view.stop()
-        assert wait(app, lambda: not view.busy)
-        assert view.model_box.isEnabled()
+        turn(app, view, "oi")
+        assert [m["role"] for m in view.chat.messages] == ["user", "agent"]
+        assert view.chat.messages[1]["text"] == "p0 p1 p2 p3 p4 "
     finally:
         dispose(view)

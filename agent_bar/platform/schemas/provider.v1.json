@@ -1,0 +1,407 @@
+{
+  "$id": "p2s.provider.v1",
+  "type": "object",
+  "required": [
+    "schema",
+    "provider_id",
+    "display_name",
+    "provider_type",
+    "adapter_id",
+    "executable_path",
+    "endpoint",
+    "version",
+    "auth_status",
+    "connection_status",
+    "capabilities",
+    "discovery_source",
+    "last_verified_at",
+    "cost_class"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema": {
+      "const": "p2s.provider.v1"
+    },
+    "provider_id": {
+      "type": "string"
+    },
+    "display_name": {
+      "type": "string"
+    },
+    "provider_type": {
+      "enum": [
+        "ACP",
+        "CLI",
+        "HTTP_API",
+        "LOCAL_HTTP"
+      ]
+    },
+    "adapter_id": {
+      "type": "string"
+    },
+    "executable_path": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "endpoint": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "version": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "auth_status": {
+      "enum": [
+        "AUTHENTICATED",
+        "AUTH_REQUIRED",
+        "UNKNOWN",
+        "UNSUPPORTED",
+        "ERROR"
+      ]
+    },
+    "connection_status": {
+      "enum": [
+        "NOT_FOUND",
+        "DISCONNECTED",
+        "CONNECTING",
+        "CONNECTED",
+        "ERROR"
+      ]
+    },
+    "capabilities": {
+      "type": "object",
+      "required": [
+        "streaming",
+        "sessions",
+        "resume",
+        "tool_calls",
+        "cancel",
+        "model_select",
+        "effort_select",
+        "images"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "streaming": {
+          "type": "object",
+          "required": [
+            "state",
+            "evidence"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "state": {
+              "enum": [
+                "SUPPORTED",
+                "UNSUPPORTED",
+                "UNKNOWN",
+                "ERROR"
+              ]
+            },
+            "evidence": {
+              "type": "object",
+              "required": [
+                "version",
+                "method"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "version": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "method": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "sessions": {
+          "type": "object",
+          "required": [
+            "state",
+            "evidence"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "state": {
+              "enum": [
+                "SUPPORTED",
+                "UNSUPPORTED",
+                "UNKNOWN",
+                "ERROR"
+              ]
+            },
+            "evidence": {
+              "type": "object",
+              "required": [
+                "version",
+                "method"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "version": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "method": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "resume": {
+          "type": "object",
+          "required": [
+            "state",
+            "evidence"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "state": {
+              "enum": [
+                "SUPPORTED",
+                "UNSUPPORTED",
+                "UNKNOWN",
+                "ERROR"
+              ]
+            },
+            "evidence": {
+              "type": "object",
+              "required": [
+                "version",
+                "method"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "version": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "method": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "tool_calls": {
+          "type": "object",
+          "required": [
+            "state",
+            "evidence"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "state": {
+              "enum": [
+                "SUPPORTED",
+                "UNSUPPORTED",
+                "UNKNOWN",
+                "ERROR"
+              ]
+            },
+            "evidence": {
+              "type": "object",
+              "required": [
+                "version",
+                "method"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "version": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "method": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "cancel": {
+          "type": "object",
+          "required": [
+            "state",
+            "evidence"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "state": {
+              "enum": [
+                "SUPPORTED",
+                "UNSUPPORTED",
+                "UNKNOWN",
+                "ERROR"
+              ]
+            },
+            "evidence": {
+              "type": "object",
+              "required": [
+                "version",
+                "method"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "version": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "method": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "model_select": {
+          "type": "object",
+          "required": [
+            "state",
+            "evidence"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "state": {
+              "enum": [
+                "SUPPORTED",
+                "UNSUPPORTED",
+                "UNKNOWN",
+                "ERROR"
+              ]
+            },
+            "evidence": {
+              "type": "object",
+              "required": [
+                "version",
+                "method"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "version": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "method": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "effort_select": {
+          "type": "object",
+          "required": [
+            "state",
+            "evidence"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "state": {
+              "enum": [
+                "SUPPORTED",
+                "UNSUPPORTED",
+                "UNKNOWN",
+                "ERROR"
+              ]
+            },
+            "evidence": {
+              "type": "object",
+              "required": [
+                "version",
+                "method"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "version": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "method": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "images": {
+          "type": "object",
+          "required": [
+            "state",
+            "evidence"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "state": {
+              "enum": [
+                "SUPPORTED",
+                "UNSUPPORTED",
+                "UNKNOWN",
+                "ERROR"
+              ]
+            },
+            "evidence": {
+              "type": "object",
+              "required": [
+                "version",
+                "method"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "version": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "method": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "discovery_source": {
+      "type": "string"
+    },
+    "last_verified_at": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "cost_class": {
+      "enum": [
+        "local",
+        "subscription_cli",
+        "paid_api"
+      ]
+    }
+  }
+}
