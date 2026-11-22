@@ -240,3 +240,15 @@ def test_utf8_text_from_agent_round_trips(client):
     c, rec = client
     c.prompt("acentos").result(T)
     assert rec.texts()[-1] == "ação é ü ✓"
+
+
+def test_close_during_start_leaves_no_orphan_process(tmp_path):
+    # troca rapida de conversa/workspace: close() chega enquanto o spawn ainda esta em andamento
+    c = AcpClient([sys.executable, str(STUB)], tmp_path)
+    started = c.start()
+    c.close().result(T)
+    with pytest.raises(AcpError) as ei:
+        started.result(T)
+    assert ei.value.code in ("CLOSED", "ACP_DOWN")
+    assert acp.live_clients() == [] or c not in acp.live_clients()
+    assert not c.process_running

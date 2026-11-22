@@ -22,6 +22,7 @@ import subprocess
 import sys
 import threading
 import time
+import weakref
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -289,6 +290,8 @@ PermissionCallback = Callable[[PermissionRequest, Callable[[str | None], None]],
 class AcpClient:
     """Cliente de UM processo de agente ACP. Metodos publicos sao thread-safe e devolvem `cf.Future`."""
 
+    _instances: "weakref.WeakSet[AcpClient]" = weakref.WeakSet()
+
     def __init__(self, argv: Sequence[str], cwd: str | Path, *, on_update: Callable[[Update], None] | None = None,
                  on_permission: PermissionCallback | None = None, on_exit: Callable[[int | None], None] | None = None,
                  runtime: AsyncRuntime | None = None, env: Mapping[str, str] | None = None,
@@ -318,6 +321,8 @@ class AcpClient:
         self._stderr_file = None
         self._job: _Job | None = None
         self._closed = False
+        self._starting: asyncio.Future | None = None
+        AcpClient._instances.add(self)
         self.returncode: int | None = None
 
     # ------------------------------------------------------------------------------------------- API (thread-safe)
@@ -388,8 +393,15 @@ class AcpClient:
         return [found, *self.argv[1:]]
 
     async def _start(self) -> dict:
-        if self.proc is not None:
+        if self.proc is not None or self._starting is not None:
             raise AcpError("RPC", "cliente ja iniciado")
+        self._starting = asyncio.get_running_loop().create_future()
+        try:
+            return await self._spawn_and_initialize()
+        finally:
+            self._starting.set_result(None)
+
+    async def _spawn_and_initialize(self) -> dict:
         argv = self._resolve_argv()
         self._wlock = asyncio.Lock()
         stderr: Any = subprocess.DEVNULL
@@ -406,6 +418,9 @@ class AcpClient:
         self._job.assign(self.pid)
         log.info("agente iniciado pid=%s exe=%s", self.pid, Path(argv[0]).name)
         self._reader = asyncio.ensure_future(self._read_loop())
+        if self._closed:                                                   # close() chegou durante o spawn: nao deixar orfao
+            await self._shutdown_proc(1.0)
+            raise AcpError("CLOSED", "cliente encerrado durante o start")
         res = await self._request("initialize", {
             "protocolVersion": PROTOCOL_VERSION,
             "clientCapabilities": {"fs": {"readTextFile": False, "writeTextFile": False}, "terminal": False},
@@ -569,6 +584,8 @@ class AcpClient:
             except asyncio.TimeoutError:
                 self.returncode = None
         self._perm_pending.clear()
+        if self.returncode is not None:
+            self._close_transport()
         for fut in list(self._pending.values()):
             if not fut.done():
                 fut.set_exception(AcpError("CLOSED" if self._closed else "ACP_DOWN",
@@ -584,9 +601,18 @@ class AcpClient:
                 log.exception("on_exit falhou")
 
     async def _close(self, grace_s: float) -> int | None:
+        starting = self._starting
+        if self.proc is None and starting is not None and not starting.done():
+            self._closed = True                                                  # o _start ve a marca, encerra o processo
+            await asyncio.shield(starting)                                       # e so entao este close termina
+            return self.returncode
         if self.proc is None:
             self._closed = True
             return None
+        return await self._shutdown_proc(grace_s)
+
+    async def _shutdown_proc(self, grace_s: float) -> int | None:
+        assert self.proc is not None
         self._closed = True
         for rid in list(self._perm_pending):
             await self._answer_permission(rid, None)
@@ -609,4 +635,21 @@ class AcpClient:
             except (asyncio.TimeoutError, asyncio.CancelledError):
                 self._reader.cancel()
         self.returncode = self.proc.returncode
+        self._close_transport()
         return self.returncode
+
+    def _close_transport(self) -> None:
+        """Fecha pipes e transporte do subprocesso ja terminado (sem isso o GC reclama de transporte aberto)."""
+        transport = getattr(self.proc, "_transport", None)
+        if transport is not None and not transport.is_closing():
+            transport.close()
+
+    @property
+    def process_running(self) -> bool:
+        """O processo que este cliente iniciou ainda existe (independente de `close` ter sido pedido)."""
+        return self.proc is not None and self.proc.returncode is None
+
+
+def live_clients() -> list[AcpClient]:
+    """Clientes cujo processo de agente ainda roda (diagnostico e testes de vazamento)."""
+    return [c for c in list(AcpClient._instances) if c.process_running]
