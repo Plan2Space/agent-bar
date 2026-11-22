@@ -283,6 +283,16 @@ class OperationsView(QWidget):
             rows.append(f"<b>{_clean(r.run_id)}</b> · {_clean(r.status)} · <span style='color:{color}'><b>{_clean(r.verdict or 'sem relatório')}</b></span>"
                         f" · visual {_clean(r.visual_verdict or '?')}<br>&nbsp;&nbsp;HEAD {_clean(r.engine_repo)}@{_clean(r.engine_commit[:12] or '?')}"
                         f"{dur} · {steps}<br>&nbsp;&nbsp;{links or 'nenhum arquivo conferido'}")
+            if r.continuity is not None:
+                c = r.continuity
+                color = "#3ddc84" if c.continuous else "#ff9a9b"
+                rows.append(f"&nbsp;&nbsp;<span style='color:{color}'>continuidade: {c.solids} sólido{'s' if c.solids != 1 else ''} · "
+                            f"{c.seams} emenda(s) · {c.internal_faces} face(s) interna(s)"
+                            + (f" · {c.non_manifold} não-manifold" if c.non_manifold else "")
+                            + (f" · {c.overlaps} sobreposição(ões)" if c.overlaps else "")
+                            + f"</span> <span style='color:#9aa5b5'>(C4 v{_clean(r.geometry_version)})</span>")
+            elif r.geometry_version and r.geometry_version.startswith("1."):
+                rows.append(f"&nbsp;&nbsp;<span style='color:#9aa5b5'>continuidade não medida (C4 v{_clean(r.geometry_version)})</span>")
             if r.plan_override:
                 rows.append("&nbsp;&nbsp;<span style='color:#ffc233'>plano forçado (plan_override): execução de teste do caminho de erro</span>")
             if r.failed_checks:
