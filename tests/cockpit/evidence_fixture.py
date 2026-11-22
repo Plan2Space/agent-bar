@@ -52,7 +52,20 @@ CAM_V1 = [
     {"name": "iso_sw", "projection": "perspective", "eye": [-5, -7, 7], "target": [1, 1, 1], "up": [0, 0, 1], "fov": 35},
     {"name": "interno", "projection": "perspective", "eye": [3, 2, 1.6], "target": [0, 2, 1], "up": [0, 0, 1], "fov": 75},
 ]
-PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
+
+
+def png(seed: str, w: int = 16, h: int = 10) -> bytes:
+    """PNG valido e deterministico (cor derivada do nome): o leitor e a UI conseguem abrir de verdade."""
+    import struct
+    import zlib
+    r, g, bl = hashlib.sha256(seed.encode()).digest()[:3]
+    raw = b"".join(b"\x00" + bytes((r, g, bl)) * w for _ in range(h))
+
+    def chunk(kind: bytes, data: bytes) -> bytes:
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
+
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(raw, 9)) + chunk(b"IEND", b""))
 
 
 def _sha(b: bytes) -> str:
@@ -96,7 +109,7 @@ def _run(root: Path, stage: str, run_id: str, cams_rel: str, cams_sha: str, cams
     for c in cams + ["pdf_x_skp"]:
         p = d / "views" / f"{c}.png"
         p.parent.mkdir(parents=True, exist_ok=True)
-        data = PNG + c.encode()
+        data = png(f"{stage}/{c}")
         p.write_bytes(data)
         files[f"views/{c}.png"] = data
     files["verdicts/geometry.json"] = _wj(d / "verdicts" / "geometry.json", {"kind": "geometry", "verdict": "PASS",

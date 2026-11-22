@@ -128,6 +128,40 @@ class Run:
         c = (self.manifest or {}).get("comparison")
         return c if isinstance(c, dict) else None
 
+    def render_views(self) -> list[dict]:
+        """Vistas de renderizador real (PoC 03). Nenhuma = render ausente; nunca se usa imagem sintetica no lugar."""
+        return [v for v in self.views() if v.get("source") == "render" or "render" in str(v.get("name", "")).lower()]
+
+    def pixel_fraction(self, camera: str, other: Run) -> float | None:
+        """Fracao de pixels alterados do compare/ deste run contra `other`, se o run a registrou (R40: nao e veredito)."""
+        c = self.comparison() or {}
+        ag = c.get("against") or {}
+        if (ag.get("stage"), ag.get("run_id")) != (other.stage, other.run_id):
+            return None
+        val = (c.get("changed_pixel_fraction") or {}).get(camera)
+        return float(val) if isinstance(val, (int, float)) else None
+
+    def missing(self) -> list[str]:
+        """Evidencias ausentes deste run, ditas explicitamente na UI (nunca omitidas)."""
+        if not self.published:
+            return ["run não publicado no evidence"]
+        if not self.present:
+            return ["pasta do run ausente no disco"]
+        out = []
+        if self.verdict("functional") is None:
+            out.append("verdicts/functional.json (FUNCTIONAL_PASS)")
+        if self.verdict("human") is None:
+            out.append("verdicts/human.json (HUMAN_APPROVAL → PENDING_HUMAN)")
+        if not self.llm_reviews():
+            out.append("reviews/llm/ (VISUAL_REVIEW)")
+        if not self.references():
+            out.append("references/ (referência visual)")
+        if not self.render_views():
+            out.append("render de renderizador real (PoC 03)")
+        if self.comparison() is None:
+            out.append("comparison/compare/ com a etapa anterior")
+        return out
+
     def human_errors(self) -> list[str]:
         return [e for e in self.errors if "verdicts/human" in e]
 
