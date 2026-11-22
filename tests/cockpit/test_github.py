@@ -229,7 +229,7 @@ def test_window_review_opens_prefilled_chat_without_sending(gh, tmp_path, monkey
     win = CockpitWindow(gh=gh, repos=[REPO], profiles_fn=lambda: [AgentProfile("stub", "Stub", (sys.executable, str(stub)))],
                         workspaces_fn=lambda: [tmp_path / "other"])
     try:
-        assert [win.tabs.tabText(i) for i in range(win.tabs.count())] == ["Chat", "Biblioteca", "PRs", "Actions"]
+        assert [win.tabs.tabText(i) for i in range(win.tabs.count())] == ["Chat", "Fluxos", "Biblioteca", "PRs", "Actions"]
         win.open_review(str(ws), "Revise o PR X#1")
         assert win.tabs.currentWidget() is win.chat
         assert win.chat.workspace() == str(ws)

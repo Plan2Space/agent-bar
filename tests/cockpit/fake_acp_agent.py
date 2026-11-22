@@ -65,6 +65,9 @@ def handle_prompt(rid: int, params: dict) -> None:
     text = " ".join(b.get("text", "") for b in params.get("prompt", []) if b.get("type") == "text").strip()
     word, _, rest = text.partition(" ")
     reason = "end_turn"
+    for kw, w in (("STUB-SLEEP", "sleep"), ("STUB-SLOW", "slow"), ("STUB-PERM", "perm"), ("STUB-FAIL", "die")):
+        if kw in text:                                       # gatilhos em qualquer lugar do prompt (etapas de fluxo)
+            word = w
     if "ECHO-PROMPT" in text:                                # devolve o texto EXATO recebido (teste da biblioteca)
         word = "echo-prompt"
         chunk(sid, text)
@@ -110,6 +113,9 @@ def handle_prompt(rid: int, params: dict) -> None:
             update(sid, {"sessionUpdate": "tool_call_update", "toolCallId": "x", "status": st})
         update(sid, {"sessionUpdate": "plan", "entries": [{"content": "ler", "priority": "high", "status": "completed"}]})
         chunk(sid, "hmm", kind="agent_thought_chunk")
+    elif word == "sleep":
+        time.sleep(0.6)
+        chunk(sid, "slept")
     elif word == "unknown":
         update(sid, {"sessionUpdate": "something_new", "x": 1})
     elif word == "askfs":
