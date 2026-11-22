@@ -10,12 +10,19 @@ import asyncio
 import os
 import time
 import uuid
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Collection, Sequence
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-from agent_bar.cockpit.acp import AcpClient, AcpError, AsyncRuntime, PermissionRequest, Update
+from agent_bar.cockpit.acp import (
+    AcpClient,
+    AcpError,
+    AsyncRuntime,
+    PermissionRequest,
+    Update,
+    mode_is_safe,
+)
 from agent_bar.cockpit.devmode import irreversible_request
 from agent_bar.cockpit.library import git_sha
 from agent_bar.cockpit.store import atomic_write_json, data_dir
@@ -170,8 +177,10 @@ class WorkflowRunner:
                  spec_text: str, context_for: Callable[[Stage], str] = lambda s: "",
                  on_event: Callable[[Event], None] = lambda e: None,
                  on_permission: Callable[[int, PermissionRequest, Callable[[str | None], None]], None] | None = None,
-                 client_factory: ClientFactory = AcpClient, stderr_dir: Path | None = None) -> None:
+                 client_factory: ClientFactory = AcpClient, stderr_dir: Path | None = None,
+                 confirmed_modes: Collection[tuple[str, str]] = ()) -> None:
         self.wf = wf
+        self.confirmed_modes = {(str(n), str(m)) for n, m in confirmed_modes}   # (etapa, modo) que o Felipe aceitou
         self.rt = runtime
         self.argv_for = argv_for
         self.spec_text = spec_text
@@ -234,6 +243,16 @@ class WorkflowRunner:
         self._emit(type="workflow", status=result)
         return result
 
+    def _check_stage_mode(self, st: Stage, modes: dict) -> None:
+        """H-011: modo de etapa so vale se o agente o anuncia e, se decide sozinho (auto, acceptEdits, bypass...),
+        se o Felipe o confirmou para ESTA etapa ao iniciar o fluxo. Bypass anularia R27/R31 (aprovacao automatica so
+        allow_once; irreversivel nunca sozinho), entao sem confirmacao a etapa falha em vez de rodar."""
+        announced = {str(m.get("id", "")) for m in modes.get("availableModes") or [] if isinstance(m, dict)}
+        if st.mode not in announced:
+            raise AcpError("RPC", f"modo {st.mode!r} da etapa nao e anunciado pelo agente")
+        if not mode_is_safe(st.mode, modes) and (st.name, st.mode) not in self.confirmed_modes:
+            raise AcpError("RPC", f"modo {st.mode!r} decide sem pedir permissao: recusado sem confirmacao explicita")
+
     def permission_handler(self, i: int, st: Stage) -> Callable[[PermissionRequest, Callable[[str | None], None]], None]:
         """Decide cada pedido de permissao da etapa: irreversivel nunca e aprovado sozinho (R31); auto_approve so
         escolhe allow_once (R27); sem auto_approve, vai ao callback da UI (ou e recusado)."""
@@ -286,6 +305,7 @@ class WorkflowRunner:
         try:
             await asyncio.wrap_future(client.connect())
             if st.mode:
+                self._check_stage_mode(st, client.modes)
                 await asyncio.wrap_future(client.set_mode(st.mode))
             reason = await asyncio.wrap_future(client.prompt(prompt))
             body = "".join(text).strip()
@@ -304,3 +324,11 @@ class WorkflowRunner:
             self.clients.pop(i, None)
         self._set(i, status, summary=st.summary)
         return status
+
+
+SAFE_STAGE_MODES = ("", "default", "plan")                                    # pedem permissao ou so planejam
+
+
+def risky_stage_modes(wf: Workflow) -> list[tuple[str, str]]:
+    """(etapa, modo) que vao precisar de confirmacao explicita antes de o fluxo rodar (H-011)."""
+    return [(st.name, st.mode) for st in wf.stages if st.mode not in SAFE_STAGE_MODES]

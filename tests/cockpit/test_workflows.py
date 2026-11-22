@@ -182,7 +182,7 @@ def _wait(app, cond, timeout=T):
     return False
 
 
-def _tab(tmp_path, rt, ask=lambda req, parent: None):
+def _tab(tmp_path, rt, ask=lambda req, parent: None, confirm=None):
     from agent_bar.cockpit.profiles import AgentProfile
     from agent_bar.cockpit.ui.workflows_tab import WorkflowsTab
     specs = tmp_path / "specs"
@@ -192,7 +192,7 @@ def _tab(tmp_path, rt, ask=lambda req, parent: None):
     ws.mkdir()
     return WorkflowsTab(rt, lambda: str(ws), context_fn=lambda: "CTX", store=W.WorkflowStore(tmp_path / "data"),
                         profiles_fn=lambda: [AgentProfile("stub", "Stub", (sys.executable, str(STUB)))],
-                        specs_root=specs, ask_permission=ask)
+                        specs_root=specs, ask_permission=ask, confirm_modes=confirm)
 
 
 def _dispose(tab):
@@ -257,5 +257,89 @@ def test_tab_stop_cancels_everything(tmp_path, rt):
         tab.stop().result(T)
         assert _wait(app, lambda: tab.runner is None)
         assert [s.status for s in tab.wf.stages] == ["cancelled"] * 3
+    finally:
+        _dispose(tab)
+
+
+# ---------------------------------------------------------------------- H-011: modo de etapa que decide sozinho
+class RecordingFactory:
+    def __init__(self):
+        self.modes: list[str] = []
+
+    def __call__(self, *a, **kw):
+        from agent_bar.cockpit.acp import AcpClient
+        c = AcpClient(*a, **kw)
+        real = c.set_mode
+
+        def set_mode(mode):
+            self.modes.append(mode)
+            return real(mode)
+        c.set_mode = set_mode
+        return c
+
+
+def _stage_mode_wf(tmp_path, mode):
+    wf = make_wf(tmp_path, {"spec": "echo 1"})
+    wf.stages[0].mode = mode
+    return wf
+
+
+@pytest.mark.parametrize("mode", ["bypassPermissions", "auto", "acceptEdits"])
+def test_a_stage_mode_that_decides_alone_is_refused_without_confirmation(tmp_path, rt, mode):
+    wf = _stage_mode_wf(tmp_path, mode)
+    factory = RecordingFactory()
+    runner, _ = run(wf, rt, client_factory=factory)
+    assert runner.start().result(T) == "error"
+    assert wf.stages[0].status == "error" and "recusado sem confirmacao" in wf.stages[0].summary
+    assert factory.modes == []                                               # o agente nunca recebeu o modo
+
+
+def test_a_confirmed_risky_stage_mode_is_applied(tmp_path, rt):
+    wf = _stage_mode_wf(tmp_path, "bypassPermissions")
+    factory = RecordingFactory()
+    runner, _ = run(wf, rt, client_factory=factory, confirmed_modes=[("spec", "bypassPermissions")])
+    assert runner.start().result(T) == "done" and factory.modes == ["bypassPermissions"]
+
+
+def test_confirmation_is_per_stage_and_mode(tmp_path, rt):
+    wf = _stage_mode_wf(tmp_path, "bypassPermissions")
+    runner, _ = run(wf, rt, confirmed_modes=[("spec", "auto"), ("plan", "bypassPermissions")])
+    assert runner.start().result(T) == "error"
+
+
+def test_a_mode_the_agent_does_not_announce_is_refused(tmp_path, rt):
+    wf = _stage_mode_wf(tmp_path, "turbo")
+    runner, _ = run(wf, rt, confirmed_modes=[("spec", "turbo")])
+    assert runner.start().result(T) == "error" and "nao e anunciado" in wf.stages[0].summary
+
+
+def test_plan_mode_needs_no_confirmation(tmp_path, rt):
+    wf = _stage_mode_wf(tmp_path, "plan")
+    factory = RecordingFactory()
+    runner, _ = run(wf, rt, client_factory=factory)
+    assert runner.start().result(T) == "done" and factory.modes == ["plan"]
+
+
+def test_risky_stage_modes_lists_what_needs_a_yes():
+    wf = W.Workflow.new("x")
+    wf.stages[0].mode, wf.stages[1].mode, wf.stages[2].mode = "bypassPermissions", "plan", "auto"
+    assert W.risky_stage_modes(wf) == [("spec", "bypassPermissions"), ("implement", "auto")]
+
+
+def test_tab_does_not_start_a_flow_whose_risky_stage_mode_was_declined(tmp_path, rt):
+    app = _app()
+    asked = []
+    tab = _tab(tmp_path, rt, confirm=lambda risky, parent: asked.append(list(risky)) or False)
+    try:
+        tab.wf.stages = tab.wf.stages[:1]
+        tab.wf.stages[0].instructions, tab.wf.stages[0].mode = "echo 1", "bypassPermissions"
+        tab._render()
+        tab.run()
+        assert asked == [[("spec", "bypassPermissions")]] and tab.runner is None
+        assert "não iniciado" in tab.status.text() and "bypassPermissions" in tab.log.toPlainText()
+        tab.confirm_modes = lambda risky, parent: True
+        tab.run()
+        assert _wait(app, lambda: tab.runner is None and tab.run_btn.isEnabled())
+        assert tab.wf.stages[0].status == "done"
     finally:
         _dispose(tab)

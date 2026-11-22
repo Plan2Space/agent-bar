@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMessageBox,
     QPlainTextEdit,
     QPushButton,
     QSplitter,
@@ -36,6 +37,17 @@ def _one_line(text: str, limit: int = 160) -> str:
     return " ".join(text.split())[-limit:]
 
 
+
+def confirm_risky_stage_modes(risky: list[tuple[str, str]], parent: QWidget) -> bool:
+    lines = "\n".join(f"• {name}: {mode}" for name, mode in risky)
+    box = QMessageBox(QMessageBox.Icon.Warning, "Etapas sem pedir permissão",
+                      "Estas etapas rodam num modo em que o agente decide sozinho e não pede permissão antes de agir "
+                      f"(editar arquivos, rodar comandos):\n\n{lines}\n\nRodar o fluxo assim?",
+                      QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, parent)
+    box.setDefaultButton(QMessageBox.StandardButton.No)
+    return box.exec() == QMessageBox.StandardButton.Yes
+
+
 class _Bridge(QObject):
     event = Signal(object)
     permission = Signal(int, object, object)
@@ -46,8 +58,10 @@ class WorkflowsTab(QWidget):
                  context_fn: Callable[[], str] = lambda: "", store: W.WorkflowStore | None = None,
                  profiles_fn: Callable[[], list[prof.AgentProfile]] = prof.profiles,
                  specs_root: Path | None = None,
-                 ask_permission: Callable[[PermissionRequest, QWidget], str | None] = ask_permission_dialog) -> None:
+                 ask_permission: Callable[[PermissionRequest, QWidget], str | None] = ask_permission_dialog,
+                 confirm_modes: Callable[[list[tuple[str, str]], QWidget], bool] | None = None) -> None:
         super().__init__()
+        self.confirm_modes = confirm_modes or confirm_risky_stage_modes
         self.rt = runtime
         self.workspace_fn = workspace_fn
         self.context_fn = context_fn
@@ -251,6 +265,12 @@ class WorkflowsTab(QWidget):
             self.status.setText(f"SPEC ilegível: {exc}")
             return
         self.wf.spec_sha = sha
+        risky = W.risky_stage_modes(self.wf)                                 # H-011: modo que decide sozinho so com sim
+        if risky and not self.confirm_modes(risky, self):
+            self.status.setText("não iniciado: modo sem pedir permissão recusado")
+            self.log.appendPlainText("— não iniciado: " + ", ".join(f"{n} em {m}" for n, m in risky)
+                                     + " decide sem pedir permissão e não foi confirmado —")
+            return
         for st in self.wf.stages:
             st.status, st.summary, st.log = "pending", "", []
         self._render()
@@ -260,7 +280,7 @@ class WorkflowsTab(QWidget):
         self.runner = W.WorkflowRunner(self.wf, runtime=self.rt, argv_for=self._argv_for, spec_text=spec_text,
                                        context_for=lambda st: context, on_event=self.bridge.event.emit,
                                        on_permission=lambda i, req, respond: self.bridge.permission.emit(i, req, respond),
-                                       stderr_dir=data_dir() / "logs")
+                                       stderr_dir=data_dir() / "logs", confirmed_modes=risky)
         self.run_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
         self.run_future = self.runner.start()
