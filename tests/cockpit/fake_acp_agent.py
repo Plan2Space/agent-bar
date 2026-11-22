@@ -65,6 +65,9 @@ def handle_prompt(rid: int, params: dict) -> None:
     text = " ".join(b.get("text", "") for b in params.get("prompt", []) if b.get("type") == "text").strip()
     word, _, rest = text.partition(" ")
     reason = "end_turn"
+    if "ECHO-PROMPT" in text:                                # devolve o texto EXATO recebido (teste da biblioteca)
+        word = "echo-prompt"
+        chunk(sid, text)
     if word == "echo":
         for i in range(int(rest or "3")):
             chunk(sid, f"c{i} ")

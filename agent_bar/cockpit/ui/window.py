@@ -1,4 +1,4 @@
-"""window.py — janela do cockpit ACP (D2): QMainWindow redimensionavel com abas Chat, PRs e Actions."""
+"""window.py — janela do cockpit ACP (D2): QMainWindow redimensionavel com abas Chat, Biblioteca, PRs e Actions."""
 from __future__ import annotations
 
 from PySide6.QtWidgets import QMainWindow, QTabWidget
@@ -7,6 +7,7 @@ from agent_bar.cockpit.acp import AsyncRuntime
 from agent_bar.cockpit.github import GhClient, configured_repos
 from agent_bar.cockpit.ui.chat import ChatView
 from agent_bar.cockpit.ui.github_tabs import ActionsTab, PrsTab
+from agent_bar.cockpit.ui.library_tab import LibraryTab
 from agent_bar.targets import load_targets
 
 TAB_CSS = ("QTabWidget::pane{border:0;background:#16161a}QTabBar::tab{background:#202026;color:#bdbdc4;padding:6px 14px;"
@@ -15,15 +16,19 @@ TAB_CSS = ("QTabWidget::pane{border:0;background:#16161a}QTabBar::tab{background
 
 
 class CockpitWindow(QMainWindow):
-    def __init__(self, gh: GhClient | None = None, repos: list[str] | None = None, **chat_kwargs) -> None:
+    def __init__(self, gh: GhClient | None = None, repos: list[str] | None = None, discover_fn=None, **chat_kwargs) -> None:
         super().__init__()
         self.setWindowTitle("Cockpit ACP — Agent Bar")
         self.resize(980, 720)
         self.runtime = AsyncRuntime("cockpit")
         self.tabs = QTabWidget()
         self.tabs.setStyleSheet(TAB_CSS)
-        self.chat = ChatView(runtime=self.runtime, **chat_kwargs)
+        self.library: LibraryTab | None = None
+        self.chat = ChatView(runtime=self.runtime, context_provider=lambda: self.library.context() if self.library else "",
+                             **chat_kwargs)
+        self.library = LibraryTab(self.chat.workspace, **({"discover_fn": discover_fn} if discover_fn else {}))
         self.tabs.addTab(self.chat, "Chat")
+        self.tabs.addTab(self.library, "Biblioteca")
         gh = gh or GhClient()
         repos = repos or configured_repos(load_targets().org)
         self.prs = PrsTab(gh, repos=repos)
@@ -40,6 +45,8 @@ class CockpitWindow(QMainWindow):
         tab = self.tabs.widget(idx)
         if isinstance(tab, (PrsTab, ActionsTab)) and tab.req == 0:            # primeira visita: carrega
             tab.refresh()
+        elif tab is self.library:                                            # workspace pode ter mudado no Chat
+            self.library.ensure_loaded()
 
     def open_review(self, workspace: str, prompt: str) -> None:
         """Revisao assistida (R21): conversa nova no checkout do repo com o prompt pronto. Enviar e com o Felipe."""
@@ -51,6 +58,7 @@ class CockpitWindow(QMainWindow):
             return
         self._closed = True
         self.prs.shutdown()
+        self.library.shutdown()
         self.actions.shutdown()
         self.chat.shutdown()
         self.runtime.stop()

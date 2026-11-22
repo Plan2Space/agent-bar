@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
 
 from agent_bar.cockpit import profiles as prof
 from agent_bar.cockpit.acp import AcpClient, AsyncRuntime, PermissionRequest, Update, classify
+from agent_bar.cockpit.library import compose_prompt
 from agent_bar.cockpit.store import Chat, ChatStore, data_dir
 from agent_bar.cockpit.ui.widgets import (
     Notice,
@@ -59,8 +60,10 @@ class ChatView(QWidget):
                  client_factory: Callable[..., AcpClient] = AcpClient,
                  ask_permission: Callable[[PermissionRequest, QWidget], str | None] = ask_permission_dialog,
                  profiles_fn: Callable[[], list[prof.AgentProfile]] = prof.profiles,
-                 workspaces_fn: Callable[[], list[Path]] = prof.workspaces) -> None:
+                 workspaces_fn: Callable[[], list[Path]] = prof.workspaces,
+                 context_provider: Callable[[], str] | None = None) -> None:
         super().__init__()
+        self.context_provider = context_provider                          # F4: biblioteca (texto exato do preview)
         self.store = store or ChatStore()
         self.rt = runtime or AsyncRuntime("cockpit-chat")
         self._own_rt = runtime is None
@@ -310,17 +313,23 @@ class ChatView(QWidget):
         self.input.clear()
         self.empty.setVisible(False)
         self._add(UserBubble(text))
-        self.chat.add("user", text)
+        context = self.context_provider() if self.context_provider else ""
+        if context:
+            self._add(Notice(f"biblioteca anexada ao prompt: {len(context)} caracteres (texto exato na aba Biblioteca)", "#4aa8ff"))
+            self.chat.add("user", text, context_chars=len(context))
+        else:
+            self.chat.add("user", text)
+        full = compose_prompt(context, text)
         self.store.save(self.chat)
         self._refresh_history()
         self._set_busy(True)
         self.text_block = self.thought_block = None
         self._turn_text, self._turn_thought = [], []
         if self.client is None or not self.ready:
-            self.pending_prompt = text
+            self.pending_prompt = full
             self.ensure_client()
             return
-        self._prompt(text)
+        self._prompt(full)
 
     def _prompt(self, text: str) -> None:
         assert self.client is not None
