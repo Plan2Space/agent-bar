@@ -313,3 +313,68 @@ def test_tool_content_is_truncated():
     big = [{"type": "content", "content": {"type": "text", "text": "x" * 9000}}]
     text = W.content_text(big)
     assert text.startswith("x" * 8000) and "truncado: 1000" in text
+
+
+# ----------------------------------------------------------------------- modelo e esforco (so o que o agente confirma)
+def _choose(view, box, value):
+    box.setCurrentIndex(box.findData(value))
+    box.activated.emit(box.currentIndex())
+
+
+def test_model_and_effort_boxes_list_only_what_the_agent_announced(app, tmp_path):
+    view, _ = make_view(app, tmp_path)
+    try:
+        turn(app, view, "echo 1")
+        assert [view.model_box.itemData(i) for i in range(view.model_box.count())] == ["default", "fake-pro", "fake-mini"]
+        assert view.model_box.itemText(0) == "Default (recommended) — Fake Pro"
+        assert [view.effort_box.itemData(i) for i in range(view.effort_box.count())] == ["default", "low", "high"]
+        assert view.model_box.isEnabled() and view.effort_box.isEnabled()
+        assert view.confirmed.text() == "confirmado pelo agente: modelo Default (recommended) — Fake Pro · esforço Default"
+    finally:
+        dispose(view)
+
+
+def test_a_choice_shows_only_after_the_agent_confirms_and_the_agent_really_uses_it(app, tmp_path):
+    view, factory = make_view(app, tmp_path)
+    try:
+        turn(app, view, "echo 1")
+        _choose(view, view.model_box, "fake-pro")
+        assert not view.model_box.isEnabled() and "aguardando confirmação" in view.confirmed.text()
+        assert wait(app, lambda: view.confirmed.text().startswith("confirmado pelo agente: modelo Fake Pro"))
+        assert view.effort_box.count() == 4                                   # esforcos de ESTE modelo
+        _choose(view, view.effort_box, "max")
+        assert wait(app, lambda: view.confirmed.text().endswith("esforço Max"))
+        turn(app, view, "whoami")
+        assert view.chat.messages[-1]["text"] == "model=fake-pro effort=max"
+        _choose(view, view.model_box, "fake-mini")                            # modelo sem esforco: o seletor some
+        assert wait(app, lambda: view.confirmed.text().startswith("confirmado pelo agente: modelo Fake Mini"))
+        assert view.effort_box.isHidden() and view.effort_label.isHidden()
+    finally:
+        dispose(view)
+
+
+def test_an_unconfirmed_change_reverts_to_what_the_agent_had_and_shows_the_error(app, tmp_path, monkeypatch):
+    monkeypatch.setenv("AGENT_BAR_FAKE_CONFIG_SILENT", "1")
+    view, _ = make_view(app, tmp_path)
+    try:
+        turn(app, view, "echo 1")
+        _choose(view, view.model_box, "fake-pro")
+        assert wait(app, lambda: not view.banner.isHidden())
+        assert view.model_box.currentData() == "default" and "Fake Pro" not in view.confirmed.text().split("—")[0]
+        assert "nao confirmado" in view.banner_label.text()
+    finally:
+        dispose(view)
+
+
+def test_selectors_are_locked_while_the_agent_is_working(app, tmp_path):
+    view, _ = make_view(app, tmp_path)
+    try:
+        turn(app, view, "echo 1")
+        view.send("slow")
+        assert wait(app, lambda: view.busy)
+        assert not view.model_box.isEnabled() and not view.effort_box.isEnabled()
+        view.stop()
+        assert wait(app, lambda: not view.busy)
+        assert view.model_box.isEnabled()
+    finally:
+        dispose(view)
