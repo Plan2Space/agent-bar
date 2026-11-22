@@ -115,7 +115,7 @@ def kill_tree(pid: int) -> bool:
             return True
         except OSError:
             return False
-    r = subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True, text=True,
+    r = subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True,     # bytes: saida em OEM codepage
                        creationflags=CREATE_NO_WINDOW, check=False)
     return r.returncode == 0
 
@@ -202,9 +202,24 @@ class AsyncRuntime:
         self.loop.call_soon_threadsafe(fn, *args)
 
     def stop(self) -> None:
+        """Cancela e aguarda as tasks pendentes (leitores de clientes ja encerrados), para o loop e o fecha."""
+        if self.loop.is_closed():
+            return
         if self.loop.is_running():
+            async def _drain() -> None:
+                tasks = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
+                for t in tasks:
+                    t.cancel()
+                await asyncio.gather(*tasks, return_exceptions=True)
+
+            try:
+                asyncio.run_coroutine_threadsafe(_drain(), self.loop).result(8)
+            except Exception:                                                    # noqa: BLE001 - parar de qualquer jeito
+                log.warning("runtime parou com tasks pendentes")
             self.loop.call_soon_threadsafe(self.loop.stop)
         self.thread.join(timeout=5)
+        if not self.thread.is_alive() and not self.loop.is_closed():
+            self.loop.close()
 
 
 # ---------------------------------------------------------------------------------------------------- tipos
@@ -313,6 +328,27 @@ class AcpClient:
     def start(self) -> cf.Future:
         """Inicia o processo e faz `initialize`. Resultado: o dict do agente (agentCapabilities, authMethods...)."""
         return self.rt.submit(self._start())
+
+    def connect(self, resume_session: str | None = None) -> cf.Future:
+        """`start` + `session/load` (se pedido e suportado) ou `session/new`. Resultado:
+        {"agent": dict, "session_id": str, "modes": dict, "loaded": bool}. Falha no load cai para sessao nova."""
+        return self.rt.submit(self._connect(resume_session))
+
+    async def _connect(self, resume_session: str | None) -> dict:
+        agent = await self._start()
+        loaded = False
+        if resume_session and (agent.get("agentCapabilities") or {}).get("loadSession"):
+            try:
+                res = await self._load_session(resume_session, self.cwd)
+                self.modes = res.get("modes") or self.modes
+                loaded = True
+            except AcpError as exc:
+                if exc.code != "RPC":
+                    raise
+                self.session_id = None
+        if not loaded:
+            await self._new_session(self.cwd)
+        return {"agent": agent, "session_id": self.session_id, "modes": self.modes, "loaded": loaded}
 
     def new_session(self, cwd: str | Path | None = None) -> cf.Future:
         return self.rt.submit(self._new_session(str(Path(cwd).resolve()) if cwd else self.cwd))

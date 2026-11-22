@@ -22,6 +22,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--once-json", action="store_true", help="imprime o diagnostico da coleta e sai (sem GUI)")
     ap.add_argument("--screenshot", help="grava um PNG da barra (e do painel expandido) apos a 1a coleta e sai")
     ap.add_argument("--open-panel", action="store_true", help="abre o painel expandido ao iniciar (evidencia/teste)")
+    ap.add_argument("--cockpit", action="store_true", help="abre o cockpit ACP ao iniciar")
     ap.add_argument("--full", action="store_true", help="com --screenshot: grava tambem a Central completa (ARQ_full.png)")
     ns = ap.parse_args(argv)
     from agent_bar import startup
@@ -77,6 +78,8 @@ def _run_gui(ns: argparse.Namespace, log: logging.Logger) -> int:
     log.info("barra visivel em %s,%s (%sx%s)", bar.x(), bar.y(), bar.width(), bar.height())
     if ns.open_panel:
         QTimer.singleShot(4000, bar.toggle_details)
+    if ns.cockpit:
+        QTimer.singleShot(1500, bar.action_cockpit)
     if ns.screenshot:
         def shot() -> None:
             bar.details.show()
