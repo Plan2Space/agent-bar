@@ -151,3 +151,17 @@ def test_real_local_ollama_passes_the_contract_and_streams():
         a.disconnect()
     assert failures == {}, failures
 
+
+
+def test_close_session_stops_a_running_turn_and_forgets_the_session(adapter, server):
+    import threading as _t
+
+    from agent_bar.platform.adapter import SessionNotFound
+    sid = adapter.create_session(SessionRequest(model_id="chat-a"))["session_id"]
+    first = _t.Event()
+    fut = adapter.send_prompt(sid, "conte devagar", lambda e: first.set())
+    assert first.wait(5)
+    adapter.close_session(sid)
+    assert fut.result(5).stop_reason == "cancelled" and sid not in adapter.get_status().sessions
+    with pytest.raises(SessionNotFound):
+        adapter.send_prompt(sid, "diga ok", lambda e: None)

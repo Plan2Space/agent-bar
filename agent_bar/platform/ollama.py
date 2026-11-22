@@ -313,3 +313,13 @@ class OllamaAdapter(ProviderAdapter):
         if run is not None:
             run["cancel"].set()
             self._close_resp(run)
+
+    def close_session(self, session_id: str) -> None:
+        """Interrompe o turno em curso (se houver) e esquece a sessao e o historico dela."""
+        self._need()
+        if session_id not in self._sessions:
+            raise SessionNotFound(session_id)
+        self.cancel(session_id)
+        with self._lock:
+            self._sessions.pop(session_id, None)
+            self._history.pop(session_id, None)
