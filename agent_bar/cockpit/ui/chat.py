@@ -70,6 +70,17 @@ def _choices(option: dict) -> list[tuple[str, str]]:
     return out
 
 
+def _default_provider_client(profile, workspace: str, **kw):
+    """Cliente do Chat para provedor nao-ACP. Hoje: Ollama no endpoint descoberto (OLLAMA_HOST ou o padrao)."""
+    from agent_bar.cockpit.provider_client import ProviderClient
+    from agent_bar.platform.discovery import discover
+    from agent_bar.platform.ollama import OllamaAdapter
+    if profile.adapter != "ollama":
+        raise ValueError(f"adaptador desconhecido: {profile.adapter}")
+    endpoint = next(p["endpoint"] for p in discover(which=lambda _n: None) if p["provider_id"] == "ollama")
+    return ProviderClient(OllamaAdapter(endpoint, timeout=30), **kw)
+
+
 RISKY_SUFFIX = " (decide sem pedir permissão)"
 
 
@@ -101,13 +112,15 @@ class ChatView(QWidget):
                  confirm_mode: Callable[[str, QWidget], bool] = confirm_risky_mode,
                  profiles_fn: Callable[[], list[prof.AgentProfile]] = prof.profiles,
                  workspaces_fn: Callable[[], list[Path]] = prof.workspaces,
-                 context_provider: Callable[[], str] | None = None) -> None:
+                 context_provider: Callable[[], str] | None = None,
+                 provider_factory: Callable[..., object] | None = None) -> None:
         super().__init__()
         self.context_provider = context_provider                          # F4: biblioteca (texto exato do preview)
         self.store = store or ChatStore()
         self.rt = runtime or AsyncRuntime("cockpit-chat")
         self._own_rt = runtime is None
         self.client_factory = client_factory
+        self.provider_factory = provider_factory or _default_provider_client
         self.ask_permission = ask_permission
         self.confirm_mode = confirm_mode
         self.no_safe_mode = False                                            # agente sem modo que pede permissao: envio bloqueado
@@ -185,6 +198,8 @@ class ChatView(QWidget):
             cap.setStyleSheet("color:#8f8f98;font-size:11px")
             head.addWidget(cap)
             head.addWidget(w, stretch)
+            if w is self.mode_box:
+                self.mode_label = cap
         head.addWidget(self.new_btn)
         lay.addLayout(head)
         cfg = QHBoxLayout()                                                   # modelo e esforco: so o que o agente anuncia
@@ -347,6 +362,13 @@ class ChatView(QWidget):
         p = self.profile()
         self.banner.setVisible(False)
         self.status.setText(f"conectando a {p.label} em {Path(ws).name}…")
+        if p.adapter != "acp":                                               # provedor da plataforma (F1/F2): mesmo Chat
+            self.client = self.provider_factory(
+                p, ws, on_update=lambda u, g=gen: self.bridge.update.emit(g, u),
+                on_exit=lambda code, g=gen: self.bridge.exited.emit(g, code))
+            fut = self.client.connect(None)
+            fut.add_done_callback(lambda f, g=gen: self._emit_done(g, "connect", f))
+            return
         self.client = self.client_factory(
             list(p.argv), ws, runtime=self.rt,
             on_update=lambda u, g=gen: self.bridge.update.emit(g, u),
@@ -379,7 +401,8 @@ class ChatView(QWidget):
         self.chat.agent = self.profile().key
         self.chat.session_id = ""
         if had or why:
-            self._add(Notice(f"— {why}: novo cliente ACP em {Path(self.workspace()).name or '?'} (histórico visual mantido) —"))
+            self._add(Notice(f"— {why}: nova conexão com {self.profile().label} em {Path(self.workspace()).name or '?'} "
+                             "(histórico visual mantido) —"))
         self.ensure_client()
 
     def reconnect(self) -> None:
@@ -424,6 +447,9 @@ class ChatView(QWidget):
             self.mode_box.addItem(("⚠ " if risky else "") + str(m.get("name", mid)) + (RISKY_SUFFIX if risky else ""), mid)
         self._select_mode(current)
         self.chat.mode = current
+        has_modes = self.mode_box.count() > 0                                # provedor sem modos de permissao: nada a mostrar
+        self.mode_box.setVisible(has_modes)
+        self.mode_label.setVisible(has_modes)
 
     # ---------------------------------------------------------------------------------------------- envio
     def _send_or_stop(self) -> None:
@@ -511,6 +537,11 @@ class ChatView(QWidget):
                 self._show_error(exc)  # type: ignore[arg-type]
             else:
                 self._populate_config(result if isinstance(result, list) else [])
+                if (getattr(self.client, "config_opens_new_session", False) and self.chat.messages
+                        and getattr(self, "_new_session_notice_at", -1) != len(self.chat.messages)):
+                    self._new_session_notice_at = len(self.chat.messages)       # um aviso entre dois turnos, nao um por seletor
+                    self._add(Notice("— o provedor abriu uma sessão nova com essa configuração: as mensagens anteriores "
+                                     "ficam na tela, mas o modelo não as recebe —", "#ffc233"))
             return
         if tag.startswith("mode:"):
             if exc is not None:
