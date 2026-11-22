@@ -1,5 +1,7 @@
 # Modelo de dados
 
+> **Histórico (2026-11-22):** este documento descreve peças do orquestrador legado FP-057/FP-060 (listener/event bridge, laço de revisão do Codex, chip GPT, passo "Dar andamento", `AGENT_BAR_GOV_DIR`) que **saíram** do Agent Bar. O estado atual está no README e em [`docs/audit/legacy-cleanup-2026-11-22.md`](../audit/legacy-cleanup-2026-11-22.md).
+
 As estruturas abaixo são `dataclass` em `models.py` (sem Qt, sem I/O) e `observability.py`. O `Snapshot` é o único objeto que atravessa da thread de coleta para a UI.
 
 ## Diagrama

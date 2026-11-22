@@ -1,5 +1,7 @@
 # Configuração
 
+> **Histórico (2026-11-22):** este documento descreve peças do orquestrador legado FP-057/FP-060 (listener/event bridge, laço de revisão do Codex, chip GPT, passo "Dar andamento", `AGENT_BAR_GOV_DIR`) que **saíram** do Agent Bar. O estado atual está no README e em [`docs/audit/legacy-cleanup-2026-11-22.md`](../audit/legacy-cleanup-2026-11-22.md).
+
 Tudo é opcional: sem nenhuma configuração a barra abre e mostra o que conseguir observar (o que faltar aparece como "indisponível"). Existem duas camadas: **variáveis de ambiente** (de onde ler e como agir) e `settings.json` (preferências da janela).
 
 ## Variáveis de ambiente

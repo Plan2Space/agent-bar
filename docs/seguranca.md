@@ -1,5 +1,7 @@
 # Segurança
 
+> **Histórico (2026-11-22):** este documento descreve peças do orquestrador legado FP-057/FP-060 (listener/event bridge, laço de revisão do Codex, chip GPT, passo "Dar andamento", `AGENT_BAR_GOV_DIR`) que **saíram** do Agent Bar. O estado atual está no README e em [`docs/audit/legacy-cleanup-2026-11-22.md`](audit/legacy-cleanup-2026-11-22.md).
+
 O Agent Bar roda na sua conta, enxerga processos, logs e o estado de uma orquestração, e **pode** iniciar um processo (o passo do Claude). Esta página registra o modelo de ameaça, cada proteção (com o teste que a sustenta) e os **riscos que permanecem**.
 
 ## O que a barra faz e não faz

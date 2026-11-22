@@ -1,5 +1,7 @@
 # ADR 0005: Passo do Claude sem tela, com terminal embutido somente leitura
 
+> **Status: substituída em 2026-11-22.** A peça desta decisão saiu do Agent Bar junto com o orquestrador legado FP-057/FP-060 ([`docs/audit/legacy-cleanup-2026-11-22.md`](../audit/legacy-cleanup-2026-11-22.md)). Mantida como histórico.
+
 - **Status:** Aceito
 - **Data:** 2026-11-18
 

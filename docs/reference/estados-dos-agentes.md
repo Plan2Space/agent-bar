@@ -1,5 +1,7 @@
 # Estados dos agentes
 
+> **Histórico (2026-11-22):** este documento descreve peças do orquestrador legado FP-057/FP-060 (listener/event bridge, laço de revisão do Codex, chip GPT, passo "Dar andamento", `AGENT_BAR_GOV_DIR`) que **saíram** do Agent Bar. O estado atual está no README e em [`docs/audit/legacy-cleanup-2026-11-22.md`](../audit/legacy-cleanup-2026-11-22.md).
+
 Esta página responde: **por que a bolinha de cada agente está daquela cor?** As regras estão em `collectors.py` e são avaliadas **em ordem de prioridade** (a primeira que casa vence). Para a semântica geral das cores, ver [Modelo de dados](../architecture/04-modelo-de-dados.md#level-a-semântica-das-cores) e [ADR 0002](../adr/0002-cor-igual-conexao-logo-igual-trabalho.md).
 
 ## A regra única

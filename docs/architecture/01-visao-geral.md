@@ -1,5 +1,7 @@
 # Visão geral
 
+> **Histórico (2026-11-22):** este documento descreve peças do orquestrador legado FP-057/FP-060 (listener/event bridge, laço de revisão do Codex, chip GPT, passo "Dar andamento", `AGENT_BAR_GOV_DIR`) que **saíram** do Agent Bar. O estado atual está no README e em [`docs/audit/legacy-cleanup-2026-11-22.md`](../audit/legacy-cleanup-2026-11-22.md).
+
 ## O que é
 
 O Agent Bar é uma **barra flutuante do Windows** (PySide6/Qt) que responde, num relance, a quatro perguntas:

@@ -9,7 +9,9 @@
 > O leitor somente-leitura do EventStore do `agent-runtime` está em `agent_bar/store_reader.py`
 > (contrato: [`docs/contracts/READER_CONTRACT.md`](docs/contracts/READER_CONTRACT.md)). O Agent Bar **nunca** grava no EventStore.
 
-Barra flutuante do Windows (PySide6) que mostra, num relance, se **Claude Code, Codex, GPT, a automação (laço de revisão / listener) e o GitHub** estão conectados, e quando um deles está **trabalhando**. É só observação: não faz merge, não faz push e não altera o que os agentes estão fazendo (a única ação é o botão de "dar andamento", abaixo, sempre com confirmação).
+Barra flutuante do Windows (PySide6) que mostra, num relance, se o **Claude Code** e o **GitHub** estão conectados, a fila de PRs da org Plan2Space e o que espera por você. É só observação: não faz merge, não faz push e não inicia nem para agentes. Conversar com agentes, rodar fluxos e revisar runs visualmente é no **cockpit ACP** (botão **Cockpit**).
+
+> **Limpeza do legado (2026-11-22):** o orquestrador FP-057/FP-060 do `sketchup-mcp` (listener/event bridge, laço de revisão do Codex, passo "Dar andamento" e chip GPT) saiu da barra. Inventário e decisões: [`docs/audit/legacy-cleanup-2026-11-22.md`](docs/audit/legacy-cleanup-2026-11-22.md). Partes de `docs/` que descrevem essas peças são histórico.
 
 > **Documentação completa:** [`docs/README.md`](docs/README.md): arquitetura, fontes de dados, regras exatas de cada estado, interface, fila de PRs, passo do Claude, segurança, testes, limitações/roadmap e [ADRs](docs/adr/README.md) (13 decisões), com diagramas Mermaid.
 
@@ -19,20 +21,19 @@ Barra flutuante do Windows (PySide6) que mostra, num relance, se **Claude Code, 
 | --- | --- |
 | bolinha **verde** | conectado (CLI logada / processo vivo) |
 | bolinha **cinza** | desconectado, sem CLI ou sem integração (nunca é "sucesso") |
-| bolinha **âmbar** | atenção (por exemplo: limite de uso do revisor, heartbeat atrasado) |
+| bolinha **âmbar** | atenção (por exemplo: sessão do Claude viva com login não confirmado) |
 | bolinha **vermelha** | erro (por exemplo: CLI sem login) |
 | **logo animado** do agente | está **trabalhando** agora |
 
-Cada agente tem o seu logo animado (estrela do Claude, balão `>_` do Codex, roseta do GPT, arcos do laço de revisão, órbita do GitHub). Para usar logos oficiais, coloque `claude.png`, `codex.png`, `gpt.png`, `listener.png` ou `github.png` em `%APPDATA%\agent_bar\icons\` (ou aponte `AGENT_BAR_ICONS`).
+O GitHub fica verde só quando uma leitura real da coleta (fila de PRs ou Project) funcionou; quando nada foi lido, o `gh auth status` explica o porquê. Para usar logos oficiais, coloque `claude.png` ou `github.png` em `%APPDATA%\agent_bar\icons\` (ou aponte `AGENT_BAR_ICONS`).
 
 ## Painel (clique na barra)
 
 - estado detalhado de cada agente e legenda das cores;
-- **fila de PRs** abertos do repositório (pronto para mergear / a corrigir / conflito / CI falhando / aguardando revisão / rascunho), com links;
-- backlog do Project, eventos recentes e visão do EventStore (modo "Central completa");
-- **terminal embutido (somente leitura)** com o progresso do passo em andamento e botão **Parar passo**;
-- botão **Dar andamento (Claude)** (também como ▶ na própria barra): depois de confirmar, roda **um** passo (`claude -p`, modo auto) com a missão definida em `AGENT_BAR_MISSION`. Nunca faz merge.
-- botão **Cockpit ACP**: abre o cockpit (veja abaixo).
+- **"Precisa de você"**: PRs HIGH esperando a sua aprovação no HEAD atual;
+- **fila de PRs** abertos da org (pronto para mergear / a corrigir / conflito / CI falhando / aguardando revisão / rascunho), com links;
+- Project #2 e, na **Central completa**, o EventStore do agent-runtime, as execuções do motor, o benchmark e a aprovação S00-14;
+- botão **Cockpit ACP** (também **Cockpit** na própria barra): abre o cockpit (veja abaixo).
 
 ## Cockpit ACP
 
@@ -75,25 +76,24 @@ powershell -NoProfile -File launchers\uninstall_shortcut.ps1   # remove só esse
 - **Uma barra por usuário:** abrir de novo traz a barra existente para a frente e abre o painel.
 - **Log:** `%LOCALAPPDATA%\agent_bar\logs\agent_bar.log`. Se a barra falhar antes de aparecer, surge uma caixa de erro com o caminho do log.
 - **Fontes de dados da máquina** (EventStore, execuções do motor, board): `launchers\local.env`, fora do git. O modelo é `launchers\local.example.env`. Só valem chaves `AGENT_BAR_*` e `EVENT_STORE_DB_PATH`, e elas nunca sobrescrevem o ambiente.
-- Pelo Explorer também funciona `launchers\AGENT-BAR.cmd`.
+- Pelo Explorer também funciona `launchers\AGENT-BAR.cmd` (deste repositório).
 - Para trocar o checkout que o atalho abre (ex.: de uma worktree para `apps\agent-bar` depois do merge), rode o `install_shortcut.ps1` do checkout novo.
 
 Para demonstrar o Sprint 00, siga [`docs/demo/S00_demo_script.md`](docs/demo/S00_demo_script.md). Proposta de empacotamento (não implementada): [`docs/proposals/empacotamento-windows.md`](docs/proposals/empacotamento-windows.md).
 
-Requer Windows, Python 3.11+ e, para os estados reais, as CLIs `claude`, `codex` e `gh` no PATH.
+Requer Windows, Python 3.11+ e, para os estados reais, as CLIs `claude` e `gh` no PATH.
 
 ## Configuração (variáveis de ambiente, todas opcionais)
 
 | Variável | Para quê |
 | --- | --- |
-| `AGENT_BAR_GOV_DIR` | pasta de estado do orquestrador observado (fila do bridge, logs) |
-| `EVENT_STORE_DB_PATH` | banco SQLite do EventStore lido em modo somente leitura |
-| `AGENT_BAR_HARNESS_LOG` | log do laço de revisão, usado como fallback do terminal |
-| `AGENT_BAR_MISSION` | arquivo `.md` com a missão do botão "Dar andamento" |
-| `AGENT_BAR_WORKSPACE` | pasta de trabalho do passo (padrão: a primeira pasta acima que tem `ops/launchers`, senão o diretório atual) |
+| `EVENT_STORE_DB_PATH` | banco SQLite do EventStore do agent-runtime, lido em modo somente leitura (sem ele: "não configurado"; não há outra pasta de busca) |
+| `AGENT_BAR_RUNS_DIR` | execuções do motor (`artifacts\<cômodo>\<run_id>\run_manifest.json`) |
+| `AGENT_BAR_ORG` / `AGENT_BAR_PROJECT` / `AGENT_BAR_COLUMNS` | org, número do Project e colunas (padrão: Plan2Space, #2) |
+| `AGENT_BAR_EVIDENCE_DIR` | checkout local do `Plan2Space/evidence` lido pela Revisão visual do cockpit |
 | `AGENT_BAR_SETTINGS` | caminho do `settings.json` (padrão: `%APPDATA%\agent_bar\settings.json`) |
 | `AGENT_BAR_ICONS` | pasta com logos próprios |
-| `AGENT_BAR_OBSERVE_ONLY=1` | desativa todos os controles (parar/reiniciar listener, dar andamento) |
+| `AGENT_BAR_OBSERVE_ONLY=1` | desativa o botão de aprovação (S00-14) |
 | `AGENT_BAR_DEMO=1` | usa uma fixture rotulada "DEMONSTRAÇÃO" (nunca confundir com dado real) |
 
 ## Testes
@@ -107,7 +107,6 @@ $env:QT_QPA_PLATFORM = "offscreen"; .venv\Scripts\python -m pytest -q
 
 Extraído do repositório [GFCDOTA/sketchup-mcp](https://github.com/GFCDOTA/sketchup-mcp) (frentes FP-058 e FP-061). Veja `docs/agent_bar.md`, a [SPEC FP-061](https://github.com/Plan2Space/engineering-specs/blob/40b76f9ce10ab7e9a51e2a1e03495a9cd1ba2b72/agent-bar/FP-061_agent_bar_control_center.md) (no repo privado `Plan2Space/engineering-specs`, índice em `docs/specs/INDEX.md`) e as capturas de demonstração em `docs/reports/fp061/`.
 
-- **GPT**: ainda sem fonte de estado; aparece cinza ("sem integração").
 - **Mensagens entre agentes** (por exemplo, ChatGPT para Claude Code sem copiar e colar): ainda **não existem**; dependem de um contrato persistido e de uma API de comandos com autorização.
 - A evidência visual dos testes é de renderização *offscreen*; a validação em desktop real é do dono do projeto.
 - `tests/support/event_store.py` é uma cópia do EventStore do `sketchup-mcp`, usada só para criar o banco de fixture dos testes.

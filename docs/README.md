@@ -1,5 +1,7 @@
 # Documentação do Agent Bar
 
+> **Histórico (2026-11-22):** este documento descreve peças do orquestrador legado FP-057/FP-060 (listener/event bridge, laço de revisão do Codex, chip GPT, passo "Dar andamento", `AGENT_BAR_GOV_DIR`) que **saíram** do Agent Bar. O estado atual está no README e em [`docs/audit/legacy-cleanup-2026-11-22.md`](audit/legacy-cleanup-2026-11-22.md).
+
 Esta pasta documenta **tudo** o que o Agent Bar faz: de onde vêm os dados, como cada estado é decidido, o que cada botão executa, quais garantias de segurança existem (e quais testes as sustentam), e por que cada decisão de projeto foi tomada (ADRs).
 
 > Convenção: os nomes de arquivos, funções e variáveis aparecem em `código`. Tudo o que está aqui foi verificado contra o código e os testes deste repositório (145 testes). Onde algo **não** existe ou é limitado, está dito explicitamente em [limitações e roadmap](limitacoes-e-roadmap.md).

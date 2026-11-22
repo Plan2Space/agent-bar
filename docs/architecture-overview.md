@@ -1,5 +1,7 @@
 # Architecture map — Agent Bar and SketchUp MCP
 
+> **Histórico (2026-11-22):** este documento descreve peças do orquestrador legado FP-057/FP-060 (listener/event bridge, laço de revisão do Codex, chip GPT, passo "Dar andamento", `AGENT_BAR_GOV_DIR`) que **saíram** do Agent Bar. O estado atual está no README e em [`docs/audit/legacy-cleanup-2026-11-22.md`](audit/legacy-cleanup-2026-11-22.md).
+
 > Status: **documentation of the current design and proposed integration**, based on `GFCDOTA/agent-bar` `develop` inspected on 2026-11-18. This document is **not** an end-to-end production validation. The implementation of the orchestrator resides in the separate `GFCDOTA/sketchup-mcp` repository; statements about it here are integration contracts and architectural context, not a fresh audit of that repository.
 >
 > **Repository boundary:** `agent-bar` is the Windows **user interface / observer**, not the orchestrator. `sketchup-mcp` contains the automation, engineering workflows and SketchUp modeling pipeline.
