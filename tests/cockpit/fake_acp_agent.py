@@ -32,7 +32,7 @@ _next = [1000]
 
 def send(msg: dict) -> None:
     with _wlock:
-        sys.stdout.write(json.dumps(msg) + "\n")
+        sys.stdout.write(json.dumps(msg, ensure_ascii=False) + "\n")
         sys.stdout.flush()
 
 
@@ -112,11 +112,15 @@ def handle_prompt(rid: int, params: dict) -> None:
     elif word == "askfs":
         res = ask("fs/read_text_file", {"sessionId": sid, "path": "C:/x.txt"})
         chunk(sid, json.dumps(res.get("error", {}).get("code")))
+    elif word == "acentos":
+        chunk(sid, "ação é ü ✓")
     _cancelled.discard(sid)
     send({"jsonrpc": "2.0", "id": rid, "result": {"stopReason": reason}})
 
 
 def main() -> None:
+    sys.stdout.reconfigure(encoding="utf-8")                # ACP e UTF-8 (o padrao do Windows e cp1252)
+    sys.stdin.reconfigure(encoding="utf-8")
     for line in sys.stdin:
         line = line.strip()
         if not line:

@@ -32,6 +32,16 @@ Cada agente tem o seu logo animado (estrela do Claude, balão `>_` do Codex, ros
 - backlog do Project, eventos recentes e visão do EventStore (modo "Central completa");
 - **terminal embutido (somente leitura)** com o progresso do passo em andamento e botão **Parar passo**;
 - botão **Dar andamento (Claude)** (também como ▶ na própria barra): depois de confirmar, roda **um** passo (`claude -p`, modo auto) com a missão definida em `AGENT_BAR_MISSION`. Nunca faz merge.
+- botão **Cockpit ACP**: abre o cockpit (veja abaixo).
+
+## Cockpit ACP
+
+Janela própria, aberta pelo botão **Cockpit ACP** do painel ou com `python -m agent_bar.app --cockpit`. Nela você conversa com um agente de código pelo [Agent Client Protocol](https://agentclientprotocol.com). O cockpit mostra o texto e o raciocínio em streaming, um cartão por ferramenta e o plano do agente. Toda permissão pedida abre um diálogo, e fechar o diálogo recusa. O histórico fica em `%LOCALAPPDATA%\agent_bar\cockpit\chats\`.
+
+- **Agente:** o real é o adaptador ACP do Claude Code (`claude-code-acp`, ou outro comando em `AGENT_BAR_COCKPIT_AGENT`). Enquanto ele não estiver instalado, aparece como indisponível e o cockpit usa o agente **Demonstração (sem LLM)**, que não lê nem executa nada.
+- **Workspace:** as pastas de `E:\Claude\apps` com `.git` (ou `AGENT_BAR_COCKPIT_WORKSPACES`, separadas por `;`).
+- **Limites:** o agente roda com o ambiente filtrado, sem `ANTHROPIC_*`, `GH_*` nem nada com `TOKEN`, `SECRET` ou `KEY`. O app nunca faz commit, push nem abre PR. Fechar o cockpit encerra só os agentes que ele iniciou.
+- **SPEC:** `agent-bar/AGENT-BAR-COCKPIT-ACP.md` no `Plan2Space/engineering-specs`.
 
 ## Instalar e rodar
 

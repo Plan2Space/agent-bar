@@ -496,7 +496,7 @@ class Details(QWidget):
         specs = [("repo", "Org GitHub", bar.action_repo), ("project", f"Project #{ctl._TARGETS.project}", bar.action_project), ("pr", "PR atual", bar.action_pr),
                  ("logs", "Logs", bar.action_logs), ("diag", "Copiar diagn\u00f3stico", bar.action_copy_diag),
                  ("refresh", "Atualizar", bar.action_refresh), ("restart", "Reiniciar DRY_RUN", bar.action_restart), ("stop", "Parar", bar.action_stop),
-                 ("progress", "Dar andamento (Claude)", bar.action_progress)]
+                 ("progress", "Dar andamento (Claude)", bar.action_progress), ("cockpit", "Cockpit ACP", bar.action_cockpit)]
         for i, (key, text, fn) in enumerate(specs):
             b = QPushButton(text)
             b.setStyleSheet(BTN_CSS)
@@ -1109,8 +1109,22 @@ class Bar(QWidget):
     def confirm(self, text: str) -> bool:
         return QMessageBox.question(self, "Confirmar", text) == QMessageBox.StandardButton.Yes
 
+    def action_cockpit(self) -> None:
+        """Abre (ou traz para a frente) o cockpit ACP: janela propria, mesmo processo (SPEC AGENT-BAR-COCKPIT-ACP, D2)."""
+        win = getattr(self, "cockpit", None)
+        if win is None or win._closed:                                             # noqa: SLF001
+            from agent_bar.cockpit.ui.window import CockpitWindow
+            win = CockpitWindow()
+            self.cockpit = win
+        win.show()
+        win.raise_()
+        win.activateWindow()
+        win.chat.ensure_client()
+
     def close_app(self) -> None:
         self.stop_step()                                                           # nao deixa um passo orfao quando a barra fecha
+        if getattr(self, "cockpit", None) is not None:                             # encerra so os agentes ACP que o cockpit iniciou
+            self.cockpit.shutdown()
         self.worker.stop()
         self.details.close()
         QApplication.quit()

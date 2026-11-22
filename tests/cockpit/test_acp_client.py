@@ -225,3 +225,9 @@ def test_ui_never_waits_calls_return_futures_immediately(client):
     assert time.perf_counter() - t0 < 0.05
     c.cancel().result(T)
     fut.result(T)
+
+
+def test_utf8_text_from_agent_round_trips(client):
+    c, rec = client
+    c.prompt("acentos").result(T)
+    assert rec.texts()[-1] == "ação é ü ✓"
