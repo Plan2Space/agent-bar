@@ -154,7 +154,7 @@ def default_validator(sandbox: Path, timeout: float = 900.0) -> ValidatorResult:
     for args in ([sys.executable, "-m", "ruff", "check", "."], [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider"]):
         try:
             r = subprocess.run(args, cwd=sandbox, capture_output=True, timeout=timeout, check=False,
-                               env={**os.environ, "QT_QPA_PLATFORM": "offscreen", "PYTHONUTF8": "1"},
+                               env={**os.environ, "QT_QPA_PLATFORM": "offscreen"},       # o ambiente do Felipe, so sem tela
                                creationflags=CREATE_NO_WINDOW if os.name == "nt" else 0)
             text = (r.stdout + r.stderr).decode("utf-8", "replace")
             out.append(f"$ {' '.join(args[2:])} -> {r.returncode}\n{text[-4000:]}")
