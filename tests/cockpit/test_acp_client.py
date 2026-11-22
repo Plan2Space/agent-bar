@@ -288,3 +288,69 @@ def test_safe_mode_classification():
     assert [m for m in ("default", "plan", "auto", "bypassPermissions", "acceptEdits", "") if acp.mode_is_safe(m, modes)] == ["default", "plan"]
     assert acp.safe_mode_id({"availableModes": [{"id": "ask-first", "name": "Ask"}]}) == "ask-first"
     assert acp.safe_mode_id({"availableModes": [{"id": "auto", "name": "Auto"}]}) is None
+
+
+# --------------------------------------------------------------------- modelo e esforco (ACP configOptions)
+def _values(c, cid):
+    return acp.config_values(acp.find_config(c.config_options, cid))
+
+
+def test_session_exposes_model_and_effort_as_announced_by_the_agent(tmp_path):
+    c, info = _connect_with(tmp_path)
+    try:
+        assert [o["id"] for o in info["config_options"]] == ["model", "effort"]
+        assert _values(c, "model") == ["default", "fake-pro", "fake-mini"]
+        assert _values(c, "thought_level") == ["default", "low", "high"]           # achado tambem pela categoria
+    finally:
+        c.close().result(T)
+
+
+def test_setting_model_and_effort_returns_what_the_agent_confirmed_and_the_agent_really_uses_it(tmp_path):
+    c, rec = make(tmp_path)
+    try:
+        opts = c.set_config_option("model", "fake-pro").result(T)
+        assert acp.find_config(opts, "model")["currentValue"] == "fake-pro"
+        assert _values(c, "effort") == ["default", "low", "high", "max"]           # esforcos mudam com o modelo
+        c.set_config_option("effort", "max").result(T)
+        assert acp.find_config(c.config_options, "effort")["currentValue"] == "max"
+        c.prompt("whoami").result(T)
+        assert rec.texts()[-1] == "model=fake-pro effort=max"
+        c.set_config_option("model", "fake-mini").result(T)                        # modelo sem esforco: a opcao some
+        assert acp.find_config(c.config_options, "effort") is None
+    finally:
+        c.close().result(T)
+
+
+def test_a_value_the_agent_did_not_announce_is_refused_before_reaching_it(tmp_path):
+    c, rec = make(tmp_path)
+    try:
+        with pytest.raises(AcpError, match="fora das opcoes"):
+            c.set_config_option("effort", "ultra").result(T)
+        with pytest.raises(AcpError, match="nao anuncia"):
+            c.set_config_option("temperature", "1").result(T)
+        c.prompt("whoami").result(T)
+        assert rec.texts()[-1] == "model=default effort=default"
+    finally:
+        c.close().result(T)
+
+
+def test_an_agent_that_does_not_confirm_the_change_is_an_error_not_a_success(tmp_path):
+    c = AcpClient([sys.executable, str(STUB)], tmp_path,
+                  env=acp.isolated_env({"PATH": sys.prefix, "AGENT_BAR_FAKE_CONFIG_SILENT": "1"}))
+    try:
+        c.connect().result(T)
+        with pytest.raises(AcpError, match="nao confirmado"):
+            c.set_config_option("model", "fake-pro").result(T)
+        assert acp.find_config(c.config_options, "model")["currentValue"] == "default"
+    finally:
+        c.close().result(T)
+
+
+def test_config_option_update_notifications_refresh_the_client_state():
+    c = AcpClient(["x"], ".")
+    try:
+        opts = [{"id": "model", "currentValue": "b", "options": [{"value": "a"}, {"value": "b"}]}]
+        c._emit(acp.parse_update({"sessionId": "s", "update": {"sessionUpdate": "config_option_update", "configOptions": opts}}))
+        assert c.config_options == opts
+    finally:
+        c.rt.stop()

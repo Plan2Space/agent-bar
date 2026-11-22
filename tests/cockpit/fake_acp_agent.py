@@ -42,6 +42,37 @@ def raw(line: str) -> None:
         sys.stdout.flush()
 
 
+# configOptions no formato do claude-agent-acp 0.109: o esforco depende do modelo (fake-mini nao tem esforco)
+_config = {"model": "default", "effort": "default"}
+_EFFORTS = {"default": ["default", "low", "high"], "fake-pro": ["default", "low", "high", "max"], "fake-mini": []}
+
+
+def config_options() -> list[dict]:
+    opts = [{"id": "model", "name": "Model", "category": "model", "type": "select", "currentValue": _config["model"],
+             "options": [{"value": "default", "name": "Default (recommended)", "description": "Fake Pro"},
+                         {"value": "fake-pro", "name": "Fake Pro"}, {"value": "fake-mini", "name": "Fake Mini"}]}]
+    efforts = _EFFORTS[_config["model"]]
+    if efforts:
+        opts.append({"id": "effort", "name": "Effort", "category": "thought_level", "type": "select",
+                     "currentValue": _config["effort"], "options": [{"value": e, "name": e.title()} for e in efforts]})
+    return opts
+
+
+def set_config(rid, params: dict) -> None:
+    cid, value = params.get("configId"), params.get("value")
+    if os.environ.get("AGENT_BAR_FAKE_CONFIG_SILENT"):                       # agente que nao confirma (resposta vazia)
+        send({"jsonrpc": "2.0", "id": rid, "result": {}})
+        return
+    allowed = {o["id"]: [x["value"] for x in o["options"]] for o in config_options()}
+    if cid not in allowed or value not in allowed[cid]:
+        send({"jsonrpc": "2.0", "id": rid, "error": {"code": -32602, "message": f"invalid {cid}={value}"}})
+        return
+    _config[cid] = value
+    if cid == "model" and _config["effort"] not in (_EFFORTS[value] or ["default"]):
+        _config["effort"] = "default"
+    send({"jsonrpc": "2.0", "id": rid, "result": {"configOptions": config_options()}})
+
+
 def update(sid: str, upd: dict) -> None:
     send({"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": sid, "update": upd}})
 
@@ -71,6 +102,8 @@ def handle_prompt(rid: int, params: dict) -> None:
     if "ECHO-PROMPT" in text:                                # devolve o texto EXATO recebido (teste da biblioteca)
         word = "echo-prompt"
         chunk(sid, text)
+    if word == "whoami":                                     # o que o agente REALMENTE esta usando
+        chunk(sid, f"model={_config['model']} effort={_config['effort'] if _EFFORTS[_config['model']] else '-'}")
     if word == "echo":
         for i in range(int(rest or "3")):
             chunk(sid, f"c{i} ")
@@ -153,7 +186,10 @@ def main() -> None:
             if os.environ.get("AGENT_BAR_FAKE_NO_SAFE_MODE"):
                 available = [m for m in available if m["id"] != "default"]
             send({"jsonrpc": "2.0", "id": rid, "result": {"sessionId": "s-1", "modes": {
-                "currentModeId": os.environ.get("AGENT_BAR_FAKE_START_MODE", "default"), "availableModes": available}}})
+                "currentModeId": os.environ.get("AGENT_BAR_FAKE_START_MODE", "default"), "availableModes": available},
+                "configOptions": config_options()}})
+        elif method == "session/set_config_option":
+            set_config(rid, params)
         elif method == "session/load":
             send({"jsonrpc": "2.0", "id": rid, "result": {}})
         elif method == "session/set_mode":
