@@ -164,3 +164,22 @@ def test_real_suite01_d1_vs_poc01(tmp_path):
         assert not tab.pane_a.image.pixmap().isNull() and not tab.pane_b.image.pixmap().isNull()
     finally:
         dispose(tab)
+
+
+def test_a_failed_reload_never_keeps_showing_the_previous_pair(tmp_path):
+    """Auditoria F0 (#43): com o evidence indisponivel, estados/relatorios/historico do par anterior continuavam na tela."""
+    root = build(tmp_path / "ev")
+    tab = make(root)
+    try:
+        select(tab, "A", "B")
+        assert tab.states.topLevelItemCount() and tab.history.topLevelItemCount() and tab.reports.toPlainText()
+        tab.root_fn = lambda: tmp_path / "nao-existe"
+        tab.load_fn = lambda r: (_ for _ in ()).throw(FileNotFoundError(str(r)))
+        tab.reload()
+        assert wait(lambda: tab.catalog is None and tab.error)
+        assert tab.states.topLevelItemCount() == 0 and tab.history.topLevelItemCount() == 0
+        assert tab.reports.toPlainText() == "" and tab.absent.toPlainText() == "" and tab.cams.count() == 0
+        assert tab.selected_runs() == (None, None)
+        assert tab.pane_a.image.pixmap().isNull() and tab.pane_b.image.pixmap().isNull()
+    finally:
+        dispose(tab)
