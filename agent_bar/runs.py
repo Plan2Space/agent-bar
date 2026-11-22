@@ -37,6 +37,33 @@ class Step:
     elapsed_s: float | None
 
 
+GEOMETRY_MAJORS = ("1", "2")             # C4 v1 (evidencias antigas) e v2 (P2S-CONTRACTS 2.0 §10: walls.footprint + continuity)
+
+
+@dataclass(frozen=True)
+class Continuity:
+    """Resumo do `continuity` do geometry_report v2: so contagens do proprio relatorio, nada estimado."""
+    solids: int                  # grupos de parede (1 = paredes continuas num solido)
+    non_manifold: int            # grupos com manifold = false
+    seams: int                   # coplanar_seam_edges somados + cross_group_seams
+    internal_faces: int
+    overlaps: int
+
+    @property
+    def continuous(self) -> bool:
+        return self.solids == 1 and not (self.non_manifold or self.seams or self.internal_faces or self.overlaps)
+
+
+def continuity_of(raw: object) -> Continuity | None:
+    if not isinstance(raw, dict) or not all(isinstance(raw.get(k), list) for k in
+                                            ("wall_groups", "internal_faces", "cross_group_seams", "overlapping_groups")):
+        return None
+    groups = [g for g in raw["wall_groups"] if isinstance(g, dict)]
+    edges = sum(g.get("coplanar_seam_edges") or 0 for g in groups if isinstance(g.get("coplanar_seam_edges"), int))
+    return Continuity(len(groups), sum(1 for g in groups if g.get("manifold") is False), edges + len(raw["cross_group_seams"]),
+                      len(raw["internal_faces"]), len(raw["overlapping_groups"]))
+
+
 @dataclass
 class RunView:
     run_id: str
@@ -57,6 +84,8 @@ class RunView:
     report_paths: dict[str, Path] = field(default_factory=dict)
     problems: list[str] = field(default_factory=list)
     failed_checks: list[str] = field(default_factory=list)      # checks do validation_report com pass=false
+    geometry_version: str | None = None                         # schema_version do geometry_report lido
+    continuity: Continuity | None = None                        # so no C4 v2; v1 = "nao medida"
     plan_override: bool | None = None                           # execucao com plano forcado (ex.: erro de planner injetado)
 
     @property
@@ -190,6 +219,15 @@ def read_run(run_dir: Path) -> RunView:
             r.report_paths[role] = found[role]
     g = _read_json(found["geometry_report"]) if "geometry_report" in found else None
     if g is not None:
+        r.geometry_version = str(g.get("schema_version") or "")
+        major = r.geometry_version.split(".")[0]
+        if major not in GEOMETRY_MAJORS:
+            r.problems.append(f"geometry_report schema_version {r.geometry_version or '?'} não suportado (a barra lê C4 v1 e v2)")
+        elif major == "2":
+            r.continuity = continuity_of(g.get("continuity"))
+            if r.continuity is None:
+                r.problems.append("geometry_report v2 sem continuity válido (C4 v2 exige wall_groups, internal_faces, "
+                                  "cross_group_seams, overlapping_groups)")
         r.reopened = g.get("reopened") if isinstance(g.get("reopened"), bool) else None
         if r.reopened is not True:
             r.problems.append("geometry_report sem reopened=true: medicao invalida (C4)")
