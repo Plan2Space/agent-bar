@@ -203,7 +203,50 @@ class PermissionDialog(QDialog):
         self.accept()
 
 
+class IrreversibleDialog(QDialog):
+    """Confirmacao propria para comando irreversivel (R31): so libera se o Felipe digitar o codigo de uso unico."""
+
+    def __init__(self, req: PermissionRequest, danger: str, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        import secrets
+
+        from PySide6.QtWidgets import QLineEdit
+        self.setWindowTitle("Comando IRREVERSÍVEL pedido pelo agente")
+        self.setModal(True)
+        self.code = secrets.token_hex(3)
+        self.confirmed = False
+        lay = QVBoxLayout(self)
+        tc = req.tool_call or {}
+        msg = QLabel(f"<b style='color:#ff6b6d'>Irreversível: {danger}</b><br>{tc.get('title', '')}<br><br>"
+                     f"O app não executa isso sozinho. Para deixar o agente seguir, digite <b>{self.code}</b>.")
+        msg.setTextFormat(Qt.TextFormat.RichText)
+        msg.setWordWrap(True)
+        lay.addWidget(msg)
+        self.entry = QLineEdit()
+        lay.addWidget(self.entry)
+        row = QHBoxLayout()
+        self.ok = QPushButton("Confirmar")
+        self.cancel = QPushButton("Recusar")
+        self.ok.clicked.connect(self._confirm)
+        self.cancel.clicked.connect(self.reject)
+        row.addWidget(self.ok)
+        row.addWidget(self.cancel)
+        lay.addLayout(row)
+
+    def _confirm(self) -> None:
+        if self.entry.text().strip().lower() == self.code:
+            self.confirmed = True
+            self.accept()
+
+
 def ask_permission_dialog(req: PermissionRequest, parent: QWidget | None = None) -> str | None:
+    from agent_bar.cockpit.devmode import irreversible_request
+    danger = irreversible_request(req.tool_call or {})
+    if danger:
+        gate = IrreversibleDialog(req, danger, parent)
+        gate.exec()
+        if not gate.confirmed:
+            return None
     dlg = PermissionDialog(req, parent)
     dlg.exec()
     return dlg.choice
