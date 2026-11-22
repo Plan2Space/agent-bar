@@ -34,6 +34,7 @@ from PySide6.QtWidgets import (
 from agent_bar.cockpit import evidence as E
 from agent_bar.cockpit.ui.diff_panel import DiffPanel
 from agent_bar.cockpit.ui.github_tabs import BTN_CSS, COMBO_CSS, TEXT_CSS, TREE_CSS
+from agent_bar.cockpit.ui.human_panel import HumanPanel
 from agent_bar.cockpit.ui.packages_panel import PackagesPanel
 
 STATE_COLOR = {"PASS": "#3ddc84", "APPROVED": "#3ddc84", "FAIL": "#ff6b6d", "CHANGES_REQUESTED": "#ff6b6d", "BLOCKED": "#ffc233"}
@@ -177,9 +178,12 @@ class ReviewTab(QWidget):
         self.diff = DiffPanel(self.report_store)
         self.packages = PackagesPanel(self.package_writer)
         self.packages.report_fn = lambda: self.diff.report
+        self.human = HumanPanel(lambda: self.catalog.root if self.catalog else self.root_fn())
+        self.human.report_fn = lambda: self.diff.report
         for w, title in ((self.states, "Estados (separados)"), (self.reports, "Relatórios técnicos"),
                          (self.history, "Histórico do cômodo"), (self.absent, "Evidências ausentes"),
-                         (self.diff, "Relatório de diferenças"), (self.packages, "Pacotes (Claude / GPT)")):
+                         (self.diff, "Relatório de diferenças"), (self.packages, "Pacotes (Claude / GPT)"),
+                         (self.human, "Revisão humana")):
             self.details.addTab(w, title)
         vsplit.addWidget(self.details)
         vsplit.setSizes([470, 230])
@@ -273,6 +277,7 @@ class ReviewTab(QWidget):
         self._absent(a, b)
         self.diff.set_pair(a, b, pairs + engine)
         self.packages.set_pair(a, b, pairs)
+        self.human.set_pair(a, b)
         if self.cams.count():
             self.cams.setCurrentRow(0)
         else:
