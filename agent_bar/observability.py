@@ -1,11 +1,10 @@
-"""Read-only FP-061 projection of the FP-060 Event Store.
+"""Read-only projection of the agent-runtime EventStore (`EVENT_STORE_DB_PATH`).
 
 This module never constructs EventStore: its constructor creates tables and sets
 WAL mode. Missing contracts are reported as unavailable, never inferred.
 """
 from __future__ import annotations
 
-import json
 import os
 import sqlite3
 import time
@@ -67,11 +66,15 @@ class Observation:
     decisions_status: str = "Decisões humanas indisponíveis: sem contrato persistido"
     schema_version: str | None = None
     last_event_age_s: int | None = None          # idade da ultima transicao; None = banco sem transicoes (nunca um 0 inventado)
-    heartbeats_status: str = "Heartbeats individuais indisponíveis: apenas lease e heartbeat do listener"
+    heartbeats_status: str = "Heartbeats individuais indisponíveis: o EventStore só registra lease"
 
 
-def _db_path(gov: Path, explicit: Path | None) -> Path:
-    return explicit or Path(os.environ.get("EVENT_STORE_DB_PATH") or gov / "event_store.db")
+def _db_path(explicit: Path | None) -> Path | None:
+    """Only the configured store: no fallback to the legacy orchestrator folder (removed 2026-11-22)."""
+    if explicit is not None:
+        return explicit
+    env = os.environ.get("EVENT_STORE_DB_PATH")
+    return Path(env) if env else None
 
 
 def _safe_tail(raw: str | None, root: Path, max_bytes: int = 8192) -> list[str]:
@@ -94,31 +97,11 @@ def _safe_tail(raw: str | None, root: Path, max_bytes: int = 8192) -> list[str]:
         return []
 
 
-def _coordinator_line(line: str) -> str:
-    """A bounded, factual summary of one JSON line from the active coordinator."""
-    try:
-        row = json.loads(line)
-        if not isinstance(row, dict):
-            return line[:240]
-        at = str(row.get("at") or "")[:19]
-        if isinstance(row.get("review"), dict):
-            review = row["review"]
-            return f"{at} review {review.get('action', '?')} · PR #{review.get('pr', '?')} · {review.get('verdict', '')}"[:240]
-        if isinstance(row.get("prepare"), list):
-            prepared = row["prepare"]
-            human = sum(isinstance(p, dict) and p.get("code") == "HUMAN" for p in prepared)
-            blocked = sum(isinstance(p, dict) and p.get("code") == "BLOCKED_DEPENDENCY" for p in prepared)
-            enqueued = row.get("enqueue")
-            count = len(enqueued) if isinstance(enqueued, list) else "?"
-            return f"{at} preparo {len(prepared)} PRs · decisão humana {human} · dependência {blocked} · enfileirados {count}"
-        return f"{at} {str(row)[:200]}"[:240]
-    except (ValueError, TypeError):
-        return line[:240]
-
-
-def collect_observation(gov: Path, *, db_path: Path | None = None, now: float | None = None) -> Observation:
+def collect_observation(*, db_path: Path | None = None, now: float | None = None) -> Observation:
     """Open an existing SQLite DB with mode=ro; never create a DB or schema."""
-    path = _db_path(gov, db_path)
+    path = _db_path(db_path)
+    if path is None:
+        return Observation(reason="EVENT_STORE_DB_PATH não configurado")
     result = Observation(db_path=str(path))
     if not path.is_file():
         return result
@@ -130,7 +113,7 @@ def collect_observation(gov: Path, *, db_path: Path | None = None, now: float | 
             tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
             required = {"events", "transitions", "subprocess_runs", "outbox", "meta"}
             if not required <= tables:
-                result.reason = "Esquema Event Store FP-060 incompleto"
+                result.reason = "Esquema do EventStore incompleto"
                 return result
             version = db.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
             if not version or version[0] != "1":
@@ -181,14 +164,6 @@ def collect_observation(gov: Path, *, db_path: Path | None = None, now: float | 
                                    + lines + (["stderr:"] + errors if errors else []))
                 result.terminal_status = "Últimas linhas observadas; atualização por polling"
                 break
-        if not result.terminal:
-            coordinator_log = os.environ.get("AGENT_BAR_HARNESS_LOG")
-            if coordinator_log:
-                lines = _safe_tail(coordinator_log, path.parent.parent, max_bytes=65536)
-                if lines:
-                    result.terminal = ["Log do coordenador · resumo das linhas JSON observadas"]
-                    result.terminal += [_coordinator_line(line) for line in lines[-8:]]
-                    result.terminal_status = "Log do coordenador (não é stdout de subprocesso); polling"
         return result
     except (OSError, sqlite3.Error, ValueError) as exc:
         result.reason = f"Event Store indisponível: {type(exc).__name__}: {exc}"

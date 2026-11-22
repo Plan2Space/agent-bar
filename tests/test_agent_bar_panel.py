@@ -83,13 +83,11 @@ def test_titlebar_has_title_and_the_three_controls_with_explicit_tooltips(gui): 
     tb = bar.details.titlebar
     assert tb.title.text() == "Agent Control" and tb.height() == 30
     assert (tb.btn_min.text(), tb.btn_max.text(), tb.btn_close.text()) == ("—", "□", "✕")
-    assert "SOMENTE o painel" in tb.btn_close.toolTip() and "nao para o listener" in tb.btn_close.toolTip()
+    assert "SOMENTE o painel" in tb.btn_close.toolTip() and "coleta da barra continua" in tb.btn_close.toolTip()
 
 
 def test_close_x_hides_only_the_panel_and_stops_nothing(gui, monkeypatch):  # noqa: F811
     bar, app, tmp = gui
-    for name in ("stop_listener", "restart_listener_dry_run"):
-        monkeypatch.setattr(ctl, name, lambda **k: pytest.fail("fechar o painel nao pode controlar o listener"))
     monkeypatch.setattr(bar, "close_app", lambda: pytest.fail("X do painel nao encerra a barra"))
     bar.on_snapshot(snap(tmp))
     bar.toggle_details()
@@ -212,20 +210,20 @@ def test_opening_near_the_bottom_right_corner_keeps_the_panel_on_screen(gui, mon
     assert d.x() + d.width() <= area.right and d.y() + d.height() <= area.bottom and d.y() >= area.top and d.x() >= area.left
 
 
-def test_many_events_scroll_inside_and_the_titlebar_and_buttons_stay_reachable(gui, monkeypatch):  # noqa: F811
+def test_a_long_panel_scrolls_inside_and_the_titlebar_and_buttons_stay_reachable(gui, monkeypatch):  # noqa: F811
     bar, app, tmp = gui
     area = R(0, 0, 1000, 420)                                                  # monitor pequeno: o conteudo nao cabe
     monkeypatch.setattr("agent_bar.window.screen_areas", lambda: [area])
     s = snap(tmp)
-    s.events = [col.GroupedEvent(iso(i), iso(i), "FAILED", f"review:{i}:{i}:a", "motivo " * 20, 1, True) for i in range(20)]
-    s.last_error = "erro " * 80
+    from agent_bar.models import PrQueue, PrRow
+    s.pr_queue = PrQueue(rows=[PrRow(i, "motivo " * 20, f"https://github.com/Plan2Space/x/pull/{i}", "corrigir", "Plan2Space/x") for i in range(40)])
     bar.on_snapshot(s)
     bar.toggle_details()
     app.processEvents()
     d = bar.details
     assert d.height() <= area.height - 16 and d.y() >= area.top and d.y() + d.height() <= area.bottom
     assert d.scroll.verticalScrollBar().maximum() > 0                          # rola por dentro
-    assert d.titlebar.btn_close.isVisible() and d.buttons["stop"].isVisible()
+    assert d.titlebar.btn_close.isVisible() and d.buttons["refresh"].isVisible()
     assert d.titlebar.y() == 0                                                  # titulo ancorado no topo da janela
 
 

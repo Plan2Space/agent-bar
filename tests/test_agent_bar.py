@@ -1,4 +1,7 @@
-"""FP-058: coletores/controles da barra de agentes (sem Qt, sem processo real). Honestidade: ausencia de dado nunca e verde."""
+"""Coletores e acoes da barra (sem processo real). Honestidade: ausencia de dado nunca e verde.
+
+O orquestrador legado (listener, laco do Codex, passo FP-060) e seus testes sairam em 2026-11-22
+(docs/audit/legacy-cleanup-2026-11-22.md)."""
 from __future__ import annotations
 
 import datetime as dt
@@ -19,176 +22,6 @@ def iso(sec_ago: int) -> str:
     return (NOW - dt.timedelta(seconds=sec_ago)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def gov(tmp_path: Path, *, mode="dry-run", poll_ago=30, execute=False, log: str | None = None, bridge: object | None = None, queue=None) -> Path:
-    g = tmp_path / "gov"
-    g.mkdir()
-    if bridge is None:
-        bridge = {"mode": mode, "last_poll": iso(poll_ago), "queue": queue or [], "diagnostics": []}
-    (g / "event_bridge.json").write_text(bridge if isinstance(bridge, str) else json.dumps(bridge), encoding="utf-8")
-    default_log = json.dumps({"at": iso(poll_ago), "execute": execute, "action": "DRY_RUN"}) + "\n"
-    (g / "event_bridge.log").write_text(log if log is not None else default_log, encoding="utf-8")
-    return g
-
-
-def py(pid, ppid=1, cmd="python -m tools.orchestration.event_executor run --interval 120", created=None):
-    return col.Proc(pid, ppid, "python.exe", cmd, created or iso(500))
-
-
-LISTENER_OK = [col.Proc(10, 1, "powershell.exe", "powershell -File run_event_bridge.ps1"), py(20, 10), py(21, 20)]
-
-
-def listener(g, procs, ts="Running"):
-    return col.collect_listener(g, procs, ts, NOW)
-
-
-# ------------------------------------------------------------------------------------------------------------ listener
-def test_listener_dry_run_is_green_with_real_heartbeat(tmp_path):
-    st, ex = listener(gov(tmp_path), LISTENER_OK)
-    assert st.level is Level.GREEN and st.label == "DRY_RUN" and st.pid == 20
-    assert ex["heartbeat_age_s"] == 30 and ex["concurrent_instances"] == 1
-
-
-def test_listener_execute_mode_is_reported_as_execute(tmp_path):
-    st, ex = listener(gov(tmp_path, mode="execute", execute=True), LISTENER_OK)
-    assert st.level is Level.GREEN and st.label == "EXECUTE" and ex["mode"] == "EXECUTE"
-
-
-def test_listener_off_is_gray_not_green(tmp_path):
-    st, _ = listener(gov(tmp_path), [], ts="Ready")
-    assert st.level is Level.GRAY and "Desligado" in st.label
-
-
-def test_task_running_without_process_is_red(tmp_path):
-    st, _ = listener(gov(tmp_path), [], ts="Running")
-    assert st.level is Level.RED
-
-
-def test_stale_heartbeat_is_red(tmp_path):
-    st, ex = listener(gov(tmp_path, poll_ago=5000), LISTENER_OK)
-    assert st.level is Level.RED and "Heartbeat velho" in st.label and ex["heartbeat_age_s"] == 5000
-
-
-def test_two_concurrent_executors_are_red_and_both_reported(tmp_path):
-    st, ex = listener(gov(tmp_path), LISTENER_OK + [py(30, 99), py(31, 30)])
-    assert st.level is Level.RED and ex["concurrent_instances"] == 2 and "concorrentes" in st.label
-
-
-def test_kill_switch_is_yellow_and_visible(tmp_path):
-    g = gov(tmp_path)
-    (g / "EXECUTOR_DISABLED").write_text("x", encoding="utf-8")
-    st, ex = listener(g, LISTENER_OK)
-    assert st.level is Level.YELLOW and ex["kill_switch"] is True
-
-
-@pytest.mark.parametrize("bridge,log", [("{nao json", None), (None, "lixo\n\x00\x00 \xff\n")])
-def test_corrupted_state_or_log_is_never_green(tmp_path, bridge, log):
-    st, _ = listener(gov(tmp_path, bridge=bridge, log=log), LISTENER_OK)
-    assert st.level in (Level.YELLOW, Level.RED)
-
-
-def test_bridge_and_log_disagreeing_on_mode_is_ambiguous(tmp_path):
-    st, ex = listener(gov(tmp_path, mode="execute", execute=False), LISTENER_OK)
-    assert st.level is Level.YELLOW and ex["mode"] == "ambiguo"
-
-
-def test_process_table_unavailable_is_gray(tmp_path):
-    st, _ = listener(gov(tmp_path), None)
-    assert st.level is Level.GRAY and "Indisponivel" in st.label
-
-
-# -------------------------------------------------------------------------------------------------------------- claude
-def claude(procs, roots, g):
-    return col.collect_claude(procs, roots, g, NOW, installed=lambda: True)
-
-
-def test_claude_child_of_the_executor_is_blue_executing(tmp_path):
-    procs = LISTENER_OK + [col.Proc(40, 21, "claude.exe", "claude -p", iso(90))]
-    st = claude(procs, [20], tmp_path)
-    assert st.level is Level.BLUE and st.pid == 40 and "90s" in st.detail
-
-
-def test_claude_not_descended_from_the_executor_is_not_attributed(tmp_path):
-    procs = LISTENER_OK + [col.Proc(50, 999, "claude.exe", "claude (sessao do usuario)", iso(900))]
-    st = claude(procs, [20], tmp_path)
-    assert st.level is Level.YELLOW and st.pid is None and "fora do orquestrador" in st.detail
-
-
-def test_claude_installed_but_no_listener_is_gray(tmp_path):
-    assert claude([], [], tmp_path).level is Level.GRAY
-
-
-# --------------------------------------------------------------------------------------------------------------- codex
-def test_codex_installed_is_still_not_integrated(tmp_path):
-    st = col.collect_codex([], [], tmp_path, which=lambda name: "C:/x/codex.cmd", now=NOW)
-    assert st.level is Level.GRAY and st.label == "Nao integrado" and "NAO operacional" in st.detail
-    assert col.collect_codex([], [], tmp_path, which=lambda name: None, now=NOW).level is Level.GRAY
-
-
-def codex_proc(pid, ppid, cmd="codex exec --sandbox read-only review"):
-    return col.Proc(pid, ppid, "codex.exe", cmd, iso(40))
-
-
-def test_codex_manual_analysis_is_blue_but_not_attributed_to_the_orchestrator(tmp_path):
-    st = col.collect_codex(LISTENER_OK + [codex_proc(70, 999)], [20], tmp_path, which=lambda n: "x", now=NOW)
-    assert st.level is Level.BLUE and st.label == "Analise manual" and st.pid == 70 and "NAO operacional" in st.detail
-    idle_app = col.collect_codex(LISTENER_OK + [codex_proc(72, 999, "codex.exe app-server")], [20], tmp_path, which=lambda n: "x", now=NOW)
-    assert idle_app.level is not Level.BLUE                                              # o app Codex aberto (sem exec/review) nao e trabalho
-
-
-def test_codex_child_of_the_executor_reviewing_is_linked(tmp_path):
-    st = col.collect_codex(LISTENER_OK + [codex_proc(71, 21)], [20], tmp_path, which=lambda n: "x", now=NOW)
-    assert st.level is Level.BLUE and st.label == "Revisando PR (vinculado)" and st.pid == 71
-
-
-def test_codex_node_wrapper_is_recognized_and_unrelated_node_is_not(tmp_path):
-    node_codex = col.Proc(80, 999, "node.exe", "node C:/Users/x/npm/node_modules/@openai/codex/bin/codex.js exec")
-    node_other = col.Proc(81, 999, "node.exe", "node server.js")
-    assert col.collect_codex([node_codex], [], tmp_path, which=lambda n: "x", now=NOW).label == "Analise manual"
-    assert col.collect_codex([node_other], [], tmp_path, which=lambda n: "x", now=NOW).label == "Nao integrado"
-
-
-def test_codex_failed_and_done_records_are_reflected_when_the_integration_writes_them(tmp_path):
-    d = tmp_path / "codex"
-    d.mkdir()
-    rec = d / "last_review.json"
-    rec.write_text(json.dumps({"status": "failed", "pr": 7, "sha": "a" * 40, "error": "timeout"}), encoding="utf-8")
-    assert col.collect_codex([], [], tmp_path, which=lambda n: "x", now=NOW).level is Level.RED
-    rec.write_text(json.dumps({"status": "done", "pr": 7, "verdict": "REQUEST_CHANGES"}), encoding="utf-8")
-    st = col.collect_codex([], [], tmp_path, which=lambda n: "x", now=NOW)
-    assert st.level is Level.YELLOW and "REQUEST_CHANGES" in st.detail
-    rec.write_text("{lixo", encoding="utf-8")
-    assert col.collect_codex([], [], tmp_path, which=lambda n: "x", now=NOW).label == "Nao integrado"
-
-
-# ------------------------------------------------------------------------------------------------------------- github
-def pr_json(**kw):
-    return json.dumps({"url": "https://github.com/o/r/pull/7", "headRefOid": "a" * 40, "reviewDecision": "", "statusCheckRollup": [], **kw})
-
-
-def gh_with(rollup, review=""):
-    def gh(args):
-        if args[:2] == ["api", "user"]:
-            return 0, "fmodesto30"
-        return 0, pr_json(statusCheckRollup=rollup, reviewDecision=review)
-    return gh
-
-
-def test_github_unavailable_is_red_and_checks_indisponivel():
-    st, ex = col.collect_github(7, lambda a: (1, "gh: not logged in"))
-    assert st.level is Level.RED and ex["checks"] == "indisponivel"
-
-
-def test_github_green_pending_and_failing_checks():
-    ok = {"conclusion": "SUCCESS"}
-    assert col.collect_github(7, gh_with([ok] * 8))[0].level is Level.GREEN
-    assert col.collect_github(7, gh_with([ok, {"status": "IN_PROGRESS"}]))[0].level is Level.YELLOW
-    assert col.collect_github(7, gh_with([ok, {"conclusion": "FAILURE"}]))[0].level is Level.RED
-
-
-def test_github_changes_requested_is_not_green():
-    assert col.collect_github(7, gh_with([{"conclusion": "SUCCESS"}], "CHANGES_REQUESTED"))[0].level is Level.YELLOW
-
-
 def test_github_cache_avoids_repeated_queries():
     calls = []
     t = [0.0]
@@ -203,23 +36,6 @@ def test_github_cache_avoids_repeated_queries():
     t[0] = 61
     c.get("k", f)
     assert len(calls) == 2
-
-
-def test_snapshot_end_to_end_with_fakes_and_diagnostic_has_no_secrets(tmp_path):
-    g = gov(tmp_path, queue=[{"pr": 7, "state": "QUEUED", "event_id": "review:9", "head_sha": "a" * 40}])
-
-    def gh(args):
-        if args[:2] == ["api", "graphql"]:
-            return 0, gql({"Ready": 5, "In Progress": 8, "GPT Review": 10, "Blocked": 32, "Done": 26})
-        return gh_with([{"conclusion": "SUCCESS"}])(args)
-    s = col.collect_snapshot(g, procs_fn=lambda: LISTENER_OK, task_fn=lambda: "Running", gh=gh, now=NOW)
-    assert s.pr == 7 and s.listener.level is Level.GREEN and s.codex.label == "Nao integrado"
-    # colunas do Project #2 em ordem; "GPT Review" (coluna do board antigo) aparece como extra, nao some
-    assert s.backlog == {"Backlog": 0, "Ready": 5, "In Progress": 8, "Review": 0, "Blocked": 32, "Done": 26, "GPT Review": 10} and s.backlog_error is None
-    assert s.mode_banner().startswith("DRY_RUN") and "desligada" in s.mode_banner() and "monitorando" in s.work
-    d = s.diagnostic()
-    assert "PR atual: 7" in d and "review:9" in d and "aaaaaaa" in d and "heartbeat: 30s" in d and "pid 20" in d
-    assert "ghp_" not in d and "token" not in d.lower()
 
 
 # ------------------------------------------------------------------------------------------------------------- backlog
@@ -271,183 +87,16 @@ def test_snapshot_shows_the_backlog_error_and_never_the_last_good_numbers():
         if args[:2] == ["api", "graphql"]:
             return (0, gql({"Ready": 7})) if ok["state"] == "good" else (1, "GraphQL: API rate limit exceeded")
         return 1, "offline"
-    import tempfile
-    with tempfile.TemporaryDirectory() as d:
-        g = gov(Path(d))
-        s1 = col.collect_snapshot(g, procs_fn=lambda: LISTENER_OK, task_fn=lambda: "Running", gh=gh, backlog_cache=cache, now=NOW)
-        ok["state"] = "bad"
-        import shutil as _sh
-        _sh.rmtree(g)
-        g = gov(Path(d))
-        s2 = col.collect_snapshot(g, procs_fn=lambda: LISTENER_OK, task_fn=lambda: "Running", gh=gh, backlog_cache=cache, now=NOW)
+    s1 = col.collect_snapshot(procs_fn=lambda: [], gh=gh, backlog_cache=cache, now=NOW)
+    ok["state"] = "bad"
+    s2 = col.collect_snapshot(procs_fn=lambda: [], gh=gh, backlog_cache=cache, now=NOW)
     assert s1.backlog["Ready"] == 7 and s1.backlog_error is None
     assert s2.backlog["Ready"] is None and "rate limit" in s2.backlog_error and s2.backlog_synced is None
 
 
-# -------------------------------------------------------------------------------------------------------- historico
-def test_repeated_dry_run_events_are_grouped_per_item_with_count_and_span():
-    ev = [col.Event(iso(10 * i), "DRY_RUN", "review:1:597:abc", "dry-run: nao executa") for i in range(5)]
-    ev.insert(2, col.Event(iso(15), "FAILED", "review:1:597:abc", "terminou sem commit"))
-    g = col.group_events(ev)
-    assert [(x.action, x.count) for x in g] == [("DRY_RUN", 2), ("FAILED", 1), ("DRY_RUN", 3)]
-    assert g[1].error and not g[0].error and g[0].pr_label() == "PR #597"
-    assert g[0].last_at == iso(0) and g[0].first_at == iso(10)
-
-
-def test_event_grouping_keeps_distinct_reviews_apart():
-    ev = [col.Event(iso(1), "DRY_RUN", "review:1:597:a", "x"), col.Event(iso(2), "DRY_RUN", "review:2:598:b", "x")]
-    assert len(col.group_events(ev)) == 2
-
-
-# --------------------------------------------------------------------------------------- claude vivo x historico / lock
-def test_desktop_helpers_and_interactive_sessions_are_not_counted_as_orchestrator_work(tmp_path):
-    procs = LISTENER_OK + [
-        col.Proc(90, 1, "claude.exe", '"C:/AnthropicClaude/app-4/claude.exe" --type=gpu-process', iso(900)),
-        col.Proc(91, 1, "claude.exe", '"C:/AnthropicClaude/app-4/claude.exe" --type=renderer', iso(900)),
-        col.Proc(92, 1, "claude.exe", "C:/Roaming/claude-code/2.1/claude.exe --output-format stream-json", iso(900))]
-    st = claude(procs, [20], tmp_path)
-    assert st.level is Level.YELLOW and st.pid is None
-    assert "1 sessao(oes) interativa(s) viva(s)" in st.detail and "2 processo(s) auxiliar(es)" in st.detail and "pid 92" in st.detail
-
-
-def test_lock_is_correlated_with_the_real_process_chain():
-    roots = [20]
-    assert "vivo e da cadeia" in col.lock_status("21", LISTENER_OK, roots)
-    assert "FORA da cadeia" in col.lock_status("10", LISTENER_OK, roots)
-    assert "NAO existe" in col.lock_status("999", LISTENER_OK, roots)
-    assert "sem lock" in col.lock_status(None, LISTENER_OK, roots)
-    assert "nao verificavel" in col.lock_status("21", None, roots) and "invalido" in col.lock_status("abc", LISTENER_OK, roots)
-
-
-def test_executor_summary_reports_failures_attempts_and_working_state():
-    bridge = {"queue": [{"pr": 7, "state": "FAILED", "attempts": 1, "event_id": "review:9", "head_sha": "b" * 40},
-                        {"pr": 8, "state": "RUNNING", "event_id": "review:10", "head_sha": "c" * 40}],
-              "runs": [iso(60), iso(90000)]}
-    summary, work, ref = col.executor_summary(bridge, NOW)
-    assert "falhas: PR #7 tentativa 1/3" in summary and "execucoes 24h: 1/6" in summary
-    assert work.startswith("TRABALHANDO") and "review:10" in ref and "ccccccc" in ref
-    assert col.executor_summary(None, NOW)[0] == "indisponivel"
-
-
-# ------------------------------------------------------------------------------------------------------------ controles
-class Ran:
-    def __init__(self, ok=True, out=""):
-        self.calls, self.ok, self.out = [], ok, out
-
-    def __call__(self, script):
-        self.calls.append(script)
-        return (0 if self.ok else 1), self.out
-
-
-class World:
-    """Processos que somem depois do Stop-ScheduledTask (ou nao, se stuck=True)."""
-
-    def __init__(self, stuck=False, execute=False, unreadable=False, fail=None, busy=False, table=True):
-        self.stopped, self.stuck, self.execute, self.unreadable, self.fail, self.busy, self.table = False, stuck, execute, unreadable, fail, busy, table
-        self.calls = []
-
-    def procs(self):
-        if not self.table:
-            return None
-        base = [] if self.stopped and not self.stuck else list(LISTENER_OK)
-        return base + ([col.Proc(40, 21, "claude.exe", "claude -p")] if self.busy and base else [])
-
-    def run(self, script):
-        self.calls.append(script)
-        if "Get-ScheduledTask" in script:
-            if self.unreadable:
-                return 1, "acesso negado"
-            return 0, "-File x.ps1 -Execute" if self.execute else "-File x.ps1"
-        if self.fail and self.fail in script:
-            return 1, "acesso negado"
-        if "Stop-ScheduledTask" in script:
-            self.stopped = True
-        return 0, ""
-
-    def mutated(self):
-        return any("Stop-ScheduledTask" in c or "Start-ScheduledTask" in c for c in self.calls)
-
-
-def kw(w, tmp_path):
-    return {"procs_fn": w.procs, "run": w.run, "gov": tmp_path, "wait_s": 2, "sleep": lambda s: None}
-
-
-OPS = [ctl.stop_listener, ctl.restart_listener_dry_run]
-
-
-@pytest.mark.parametrize("op", OPS)
-def test_both_controls_require_confirmation_and_touch_nothing_without_it(op, tmp_path):
-    w = World()
-    assert not op(**kw(w, tmp_path)).ok and w.calls == []
-
-
-@pytest.mark.parametrize("op", OPS)
-@pytest.mark.parametrize("world,needle", [
-    (dict(execute=True), "-Execute"), (dict(unreadable=True), "nao foi possivel ler a acao da tarefa"),
-    (dict(busy=True), "execucao ativa"), (dict(table=False), "indisponivel")])
-def test_stop_and_restart_share_one_fail_closed_preflight(op, world, needle, tmp_path):
-    w = World(**world)
-    res = op(confirmed=True, **kw(w, tmp_path))
-    assert not res.ok and needle in res.message and not w.mutated()
-
-
-@pytest.mark.parametrize("op", OPS)
-def test_kill_switch_blocks_both_controls_and_nothing_is_even_queried(op, tmp_path):
-    (tmp_path / "EXECUTOR_DISABLED").write_text("x", encoding="utf-8")
-    w = World()
-    res = op(confirmed=True, **kw(w, tmp_path))
-    assert not res.ok and "kill switch" in res.message and w.calls == []
-
-
-def test_stop_uses_only_the_scheduled_task_never_taskkill_by_name_and_proves_the_executor_is_gone(tmp_path):
-    w = World()
-    assert ctl.stop_listener(confirmed=True, **kw(w, tmp_path)).ok
-    stop_calls = [c for c in w.calls if "ScheduledTask" in c and "Stop-" in c]
-    assert len(stop_calls) == 1
-    assert all("taskkill" not in c.lower() and "Stop-Process" not in c for c in w.calls)
-
-
-def test_stop_does_not_claim_success_when_the_executor_survives(tmp_path):
-    w = World(stuck=True)
-    res = ctl.stop_listener(confirmed=True, **kw(w, tmp_path))
-    assert not res.ok and "ainda esta vivo" in res.message
-
-
-def test_failed_stop_command_is_reported_with_the_real_error(tmp_path):
-    w = World(fail="Stop-ScheduledTask")
-    res = ctl.stop_listener(confirmed=True, **kw(w, tmp_path))
-    assert not res.ok and "acesso negado" in res.message
-
-
-def test_failed_start_command_is_reported_with_the_real_error(tmp_path):
-    w = World(fail="Start-ScheduledTask")
-    res = ctl.restart_listener_dry_run(confirmed=True, **kw(w, tmp_path))
-    assert not res.ok and "acesso negado" in res.message
-
-
-def test_restart_does_not_start_a_second_instance_if_the_old_one_is_still_alive(tmp_path):
-    w = World(stuck=True)
-    res = ctl.restart_listener_dry_run(confirmed=True, **kw(w, tmp_path))
-    assert not res.ok and not any("Start-ScheduledTask" in c for c in w.calls)
-
-
-def test_restart_dry_run_stops_waits_for_the_lock_release_then_starts(tmp_path):
-    w = World()
-    assert ctl.restart_listener_dry_run(confirmed=True, **kw(w, tmp_path)).ok
-    order = ["stop" if "Stop-ScheduledTask" in c else "start" for c in w.calls if "Stop-ScheduledTask" in c or "Start-ScheduledTask" in c]
-    assert order == ["stop", "start"]
-
-
-def test_restart_when_already_stopped_just_starts(tmp_path):
-    w = World()
-    w.stopped = True
-    assert ctl.restart_listener_dry_run(confirmed=True, **kw(w, tmp_path)).ok
-    assert not any("Stop-ScheduledTask" in c for c in w.calls) and any("Start-ScheduledTask" in c for c in w.calls)
-
-
 def test_open_url_only_accepts_github():
     seen = []
-    assert ctl.open_url("https://github.com/GFCDOTA/sketchup-mcp/pull/1", seen.append).ok and seen
+    assert ctl.open_url("https://github.com/Plan2Space/agent-bar/pull/1", seen.append).ok and seen
     assert not ctl.open_url("http://evil.example/x", seen.append).ok and not ctl.open_url(None, seen.append).ok
 
 
@@ -455,17 +104,6 @@ def test_no_module_of_the_bar_can_commit_push_merge_or_kill_by_image_name():
     src = "".join(p.read_text(encoding="utf-8") for p in Path(ctl.__file__).parent.glob("*.py"))
     for forbidden in ("git push", "git commit", "taskkill /IM", "taskkill.exe /IM", "Stop-Process", "gh pr merge", "--execute"):
         assert forbidden not in src, forbidden
-
-
-def test_the_only_claude_launch_is_the_confirmed_progress_step_and_it_is_stopped_by_pid_only():
-    """FP-061 (a pedido do dono): o painel pode iniciar UM passo do Claude, depois de confirmacao, e encerrar so a arvore desse PID. Nada mais lanca o Claude nem mata por nome."""
-    folder = Path(ctl.__file__).parent
-    controls, window = (folder / "controls.py").read_text(encoding="utf-8"), (folder / "window.py").read_text(encoding="utf-8")
-    assert controls.count('["-p"') == 1 and "def progress_command" in controls                      # o unico lugar que monta a linha de comando do claude
-    assert controls.count('"taskkill"') == 1 and '"/PID"' in controls and "/IM" not in controls       # encerra por PID, nunca por nome de imagem
-    assert window.count("self.start_step(") == 1                                                      # um unico ponto de partida...
-    body = window[window.index("def action_progress"):window.index("def start_step")]
-    assert body.index("self.confirm(") < body.index("self.start_step(")                               # ...e sempre depois da confirmacao
 
 
 # ------------------------------------------------------------------------------------------------------------ settings
@@ -478,13 +116,7 @@ def test_settings_roundtrip_clamp_and_corrupt_file(tmp_path):
     assert cfg.load(p) == cfg.Settings()
 
 
-def test_process_helpers_find_roots_and_descendants_only():
-    procs = LISTENER_OK + [col.Proc(60, 999, "python.exe", "python outro.py")]
-    assert [p.pid for p in col.executor_roots(procs)] == [20]
-    assert {p.pid for p in col.descendants(procs, {20})} == {21}
-
-
-def test_gui_is_frameless_topmost_with_five_status_icons_and_a_play_button(tmp_path):
+def test_gui_is_frameless_topmost_with_claude_and_github_and_a_cockpit_button(tmp_path):
     pytest.importorskip("PySide6.QtWidgets")
     import os
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -493,12 +125,13 @@ def test_gui_is_frameless_topmost_with_five_status_icons_and_a_play_button(tmp_p
 
     from agent_bar import window as w
     app = QApplication.instance() or QApplication([])
-    bar = w.Bar(cfg.Settings(), gov=tmp_path)
+    bar = w.Bar(cfg.Settings())
     try:
         f = bar.windowFlags()
         assert f & Qt.WindowType.FramelessWindowHint and f & Qt.WindowType.WindowStaysOnTopHint
         assert (bar.width(), bar.height()) == (w.BAR_W, 65)
-        assert set(bar.labels) == {"Claude", "Codex", "GPT", "Listener", "GitHub"}
+        assert set(bar.labels) == {"Claude", "GitHub"} and set(w.LOGO_PAINTERS) == {"Claude", "GitHub"}
+        assert bar.cockpit_btn.text() == "Cockpit" and not hasattr(bar, "play") and not hasattr(bar, "step_process")
     finally:
         bar.worker.stop()
         app.processEvents()
@@ -523,8 +156,7 @@ def gui(tmp_path):
 
     from agent_bar import window as w
     app = QApplication.instance() or QApplication([])
-    (tmp_path / "event_bridge.log").write_text("{}\n", encoding="utf-8")
-    bar = w.Bar(cfg.Settings(), gov=tmp_path)
+    bar = w.Bar(cfg.Settings())
     bar.worker.snapshot.disconnect(bar.on_snapshot)                    # sem coleta de fundo: o teste injeta o Snapshot
     bar.worker.stop()
     yield bar, app, tmp_path
@@ -536,12 +168,8 @@ def status(bar):
     return bar.details.status.text()
 
 
-def snap(tmp_path, pr_url="https://github.com/GFCDOTA/sketchup-mcp/pull/7"):
-    (tmp_path / "x").mkdir(exist_ok=True)
-    s = col.collect_snapshot(gov(tmp_path / "x", queue=[{"pr": 7, "state": "QUEUED"}]), procs_fn=lambda: LISTENER_OK, task_fn=lambda: "Running",
-                             gh=lambda a: (1, "offline"), now=NOW)
-    s.pr_url = pr_url
-    return s
+def snap(tmp_path):
+    return col.collect_snapshot(procs_fn=lambda: [], gh=lambda a: (1, "offline"), now=NOW)
 
 
 def wait_for(app, cond, secs=5):
@@ -561,34 +189,6 @@ def test_button_repo_and_project_open_the_right_urls_and_report(gui, monkeypatch
     bar.details.buttons["project"].click()
     app.processEvents()
     assert opened == [ctl.REPO_URL, ctl.PROJECT_URL] and "\u2713" in status(bar) or "&#10003;" in status(bar)
-
-
-def test_button_pr_without_a_known_pr_reports_failure_not_success(gui, monkeypatch):
-    bar, app, _ = gui
-    monkeypatch.setattr(ctl.webbrowser, "open", lambda u: pytest.fail("nao deve abrir sem URL"))
-    bar.details.buttons["pr"].click()
-    app.processEvents()
-    assert "&#10007;" in status(bar) and "indisponivel" in status(bar)
-
-
-def test_button_pr_opens_the_current_pr_when_known(gui, monkeypatch):
-    bar, app, tmp = gui
-    opened = []
-    monkeypatch.setattr(ctl.webbrowser, "open", lambda u: opened.append(u))
-    bar.on_snapshot(snap(tmp))
-    bar.details.buttons["pr"].click()
-    assert opened == ["https://github.com/GFCDOTA/sketchup-mcp/pull/7"] and "&#10003;" in status(bar)
-
-
-def test_button_logs_opens_the_latest_log_or_reports_absence(gui, monkeypatch):
-    bar, app, tmp = gui
-    opened = []
-    monkeypatch.setattr(ctl, "open_path", lambda p: (opened.append(p), ctl.Result(True, str(p)))[1])
-    bar.details.buttons["logs"].click()
-    assert opened and opened[0].name == "event_bridge.log" and "&#10003;" in status(bar)
-    (tmp / "event_bridge.log").unlink()
-    bar.details.buttons["logs"].click()
-    assert "&#10007;" in status(bar) and "nenhum log" in status(bar)
 
 
 def test_button_copy_diagnostic_really_copies_and_verifies(gui):
@@ -612,81 +212,12 @@ def test_button_refresh_confirms_only_when_a_new_snapshot_arrives(gui):
     assert "&#10007;" in status(bar) and "sem resposta" in status(bar)
 
 
-def test_buttons_stop_and_restart_do_nothing_without_confirmation(gui, monkeypatch):
-    bar, app, _ = gui
-    monkeypatch.setattr(bar, "confirm", lambda text: False)
-    monkeypatch.setattr(ctl, "stop_listener", lambda **k: pytest.fail("nao pode parar sem confirmacao"))
-    monkeypatch.setattr(ctl, "restart_listener_dry_run", lambda **k: pytest.fail("nao pode reiniciar sem confirmacao"))
-    bar.details.buttons["stop"].click()
-    bar.details.buttons["restart"].click()
-
-
-def test_button_stop_and_restart_show_the_real_result_including_refusals(gui, monkeypatch):
-    bar, app, _ = gui
-    monkeypatch.setattr(bar, "confirm", lambda text: True)
-    monkeypatch.setattr(ctl, "stop_listener", lambda **k: ctl.Result(False, "parada recusada: execucao ativa"))
-    bar.details.buttons["stop"].click()
-    assert wait_for(app, lambda: "parada recusada" in status(bar)) and "&#10007;" in status(bar)
-    monkeypatch.setattr(ctl, "restart_listener_dry_run", lambda **k: ctl.Result(True, "tarefa reiniciada em DRY_RUN"))
-    bar.details.buttons["restart"].click()
-    assert wait_for(app, lambda: "reiniciada em DRY_RUN" in status(bar)) and "&#10003;" in status(bar)
-
-
-def test_a_control_that_raises_is_reported_as_failure(gui, monkeypatch):
-    bar, app, _ = gui
-    monkeypatch.setattr(bar, "confirm", lambda text: True)
-
-    def boom(**k):
-        raise RuntimeError("falhou feio")
-    monkeypatch.setattr(ctl, "stop_listener", boom)
-    bar.details.buttons["stop"].click()
-    assert wait_for(app, lambda: "falhou feio" in status(bar)) and "&#10007;" in status(bar)
-
-
-def test_panel_is_compact_and_events_scroll_instead_of_growing(gui):
-    bar, app, tmp = gui
-    s = snap(tmp)
-    s.events = [col.GroupedEvent(iso(i), iso(i), "DRY_RUN", f"review:{i}:{i}:a", "x", 1, False) for i in range(20)]
-    bar.on_snapshot(s)
-    bar.details.show()
-    app.processEvents()
-    assert bar.details.height() < 600 and bar.details.events.count() == 20
-    assert bar.details.events.height() <= 6 * 40
-
-
-# -- a bolinha do Claude nao e cinza quando ha Claude Code vivo: o botao FP-060 e sessoes interativas aparecem, sem fingir que sao do orquestrador ------------------
-STEP_CMD = 'C:/npm/claude.exe --permission-mode auto -n "FP-060 passo" "Leia E:/Claude/ops/launchers/fp060-passo.md e execute exatamente essa missao"'
-
-
-def test_the_claude_dot_shows_the_button_step_session_and_interactive_sessions_without_an_orchestrator(tmp_path):
-    step = col.Proc(95, 1, "claude.exe", STEP_CMD, iso(120))
-    inter = col.Proc(92, 1, "claude.exe", "C:/npm/claude.exe --permission-mode auto", iso(900))
-    helper = col.Proc(90, 1, "claude.exe", '"C:/AnthropicClaude/app-4/claude.exe" --type=gpu-process', iso(900))
-    s = claude([step], [], tmp_path)
-    assert s.level is Level.BLUE and "Passo FP-060" in s.label and s.pid == 95 and "botao" in s.detail
-    s = claude([inter], [], tmp_path)
-    assert s.level is Level.YELLOW and s.label == "Sessao interativa" and "fora do orquestrador" in s.detail and "pid 92" in s.detail and s.pid is None
-    assert claude([step, inter], [], tmp_path).level is Level.BLUE                        # o passo do botao tem prioridade sobre a sessao interativa
-    for none in ([], [helper]):                                                            # nada vivo, ou so auxiliares do app Desktop: cinza, como antes
-        s = claude(none, [], tmp_path)
-        assert s.level is Level.GRAY and s.label == "Sem orquestrador"
-
-
-def test_a_real_orchestrator_child_wins_over_the_button_step_and_the_step_shows_without_one(tmp_path):
-    step = col.Proc(95, 1, "claude.exe", STEP_CMD, iso(120))
-    child = col.Proc(22, 21, "claude.exe", "claude.exe -p reviewer", iso(60))
-    s = claude(LISTENER_OK + [step, child], [20], tmp_path)
-    assert s.level is Level.BLUE and s.label == "Executando" and s.pid == 22              # filho do executor tem prioridade
-    s = claude(LISTENER_OK + [step], [20], tmp_path)
-    assert s.level is Level.BLUE and "Passo FP-060" in s.label and "sem orquestrador" not in s.detail      # sem filho: o passo do botao e o trabalho visivel
-
-
 # -- semantica unica das bolinhas: COR = conexao (verde conectado, cinza desconectado/sem integracao, ambar atencao, vermelho erro); TRABALHANDO = logo animado -----------------
 def _claude(procs, tmp_path, login=None, installed=True):
-    return col.collect_claude(procs, [], tmp_path, now=NOW, installed=lambda: installed, login=login)
+    return col.collect_claude(procs, installed=lambda: installed, login=login)
 
 
-def test_claude_logged_in_is_green_connected_even_without_an_orchestrator_or_sessions(tmp_path):
+def test_claude_logged_in_is_green_connected_even_without_sessions(tmp_path):
     s = _claude([], tmp_path, login=True)
     assert s.level is Level.GREEN and s.label == "Conectado" and "logado" in s.detail
 
@@ -703,40 +234,63 @@ def test_claude_without_login_is_red_and_not_installed_is_gray(tmp_path):
     assert _claude([], tmp_path, login=False, installed=False).level is Level.GRAY       # sem CLI nao ha o que logar
 
 
-def test_claude_working_beats_the_connected_state(tmp_path):
-    step = col.Proc(95, 1, "claude.exe", 'claude.exe -p "Leia E:/Claude/ops/launchers/fp060-passo.md e execute"', iso(120))
-    s = _claude([step], tmp_path, login=True)
-    assert s.level is Level.BLUE and "Passo FP-060" in s.label
-
-
-def test_an_unknown_login_keeps_the_previous_conservative_states(tmp_path):
+def test_an_unknown_login_is_never_green(tmp_path):
     assert _claude([], tmp_path, login=None).level is Level.GRAY
+    inter = col.Proc(92, 1, "claude.exe", "C:/npm/claude.exe", iso(60))
+    s = _claude([inter], tmp_path, login=None)
+    assert s.level is Level.YELLOW and "login nao confirmado" in s.detail
 
 
-def test_codex_app_open_is_not_working_it_is_connected_when_logged_in(tmp_path):
-    app_server = col.Proc(28, 1, "codex.exe", 'codex.exe -c features.code_mode_host=true app-server --listen stdio://', iso(900))
-    s = col.collect_codex([app_server], [], tmp_path, which=lambda n: "x", now=NOW, login=True)
-    assert s.level is Level.GREEN and s.label == "Conectado" and "app" in s.detail.lower() and "NAO operacional" in s.detail
-    working = col.collect_codex([col.Proc(29, 1, "codex.exe", "codex.exe exec --sandbox read-only review", iso(40))], [], tmp_path, which=lambda n: "x", now=NOW, login=True)
-    assert working.level is Level.BLUE                                                    # so exec/review conta como trabalho
+def test_process_table_unavailable_is_gray_for_claude(tmp_path):
+    s = _claude(None, tmp_path, login=True)
+    assert s.level is Level.GRAY and s.label == "Indisponivel"
 
 
-def test_codex_without_login_is_red_and_logged_in_without_processes_is_green(tmp_path):
-    assert col.collect_codex([], [], tmp_path, which=lambda n: "x", now=NOW, login=False).level is Level.RED
-    s = col.collect_codex([], [], tmp_path, which=lambda n: "x", now=NOW, login=True)
-    assert s.level is Level.GREEN and s.label == "Conectado"
-    assert col.collect_codex([], [], tmp_path, which=lambda n: None, now=NOW, login=True).level is Level.GRAY       # sem CLI
+def test_desktop_helpers_and_interactive_sessions_are_named_but_never_working(tmp_path):
+    procs = [col.Proc(90, 1, "claude.exe", '"C:/AnthropicClaude/app-4/claude.exe" --type=gpu-process', iso(900)),
+             col.Proc(91, 1, "claude.exe", '"C:/AnthropicClaude/app-4/claude.exe" --type=renderer', iso(900)),
+             col.Proc(92, 1, "claude.exe", "C:/Roaming/claude-code/2.1/claude.exe --output-format stream-json", iso(900))]
+    st = _claude(procs, tmp_path, login=True)
+    assert st.level is Level.GREEN and st.pid is None                                    # nenhuma sessao vira "trabalhando" por suposicao
+    assert "1 sessao(oes) interativa(s) viva(s)" in st.detail and "2 processo(s) auxiliar(es)" in st.detail and "pid 92" in st.detail
 
 
-def test_the_review_loop_process_is_found_and_marks_the_automation_green(tmp_path):
-    loop = col.Proc(300, 1, "python.exe", "python.exe -m tools.orchestration.pr_lifecycle run --interval 30 --workers 2 --execute", iso(600))
-    other = col.Proc(301, 1, "python.exe", "python.exe -m tools.orchestration.pr_lifecycle cycle", iso(600))
-    assert col.review_loop([loop, other]).pid == 300 and col.review_loop([other]) is None and col.review_loop(None) is None
-    child = col.Proc(310, 300, "codex.exe", "codex.exe exec --sandbox read-only review", iso(30))
-    (tmp_path / "loop").mkdir()
-    s = col.collect_snapshot(gov(tmp_path / "loop"), procs_fn=lambda: [loop, child], task_fn=lambda: "Ready", gh=lambda a: (1, "offline"), now=NOW)
-    assert s.listener.level is Level.GREEN and "revisao" in s.listener.label.lower() and "pid 300" in s.listener.detail
-    assert s.codex.level is Level.BLUE and "Revisando PR" in s.codex.label                # filho do laco de revisao = trabalho vinculado
+# ---------------------------------------------------------------------------------------------------------------- github
+def _queue(n=2, error=None):
+    from agent_bar.models import PrQueue, PrRow
+    return PrQueue(rows=[PrRow(i, f"pr {i}", f"https://github.com/Plan2Space/x/pull/{i}", "aguarda", "Plan2Space/x") for i in range(n)],
+                   error=error)
+
+
+def test_github_is_connected_only_when_a_real_read_of_this_collection_worked():
+    asked = []
+    st = col.collect_github_status(lambda a: asked.append(a) or (1, "nao deveria ser chamado"), _queue(3))
+    assert st.level is Level.GREEN and "3 PR(s) abertos" in st.detail and asked == []   # leitura real prova o acesso
+
+
+def test_github_without_any_read_explains_with_gh_auth_status():
+    from agent_bar.models import PrQueue
+    out = "github.com\n  X Failed to log in to github.com account fmodesto30 (keyring)\n  - The token in keyring is invalid."
+    st = col.collect_github_status(lambda a: (1, out), PrQueue(error="rate limit"))
+    assert st.level is Level.RED and st.label == "Sem acesso" and "Failed to log in" in st.detail
+    assert col.collect_github_status(lambda a: (127, "nao encontrado"), PrQueue(error="x")).level is Level.GRAY
+    st = col.collect_github_status(lambda a: (0, "Logged in"), PrQueue(error="GraphQL: boom"))
+    assert st.level is Level.YELLOW and "GraphQL: boom" in st.detail
+
+
+def test_snapshot_end_to_end_has_only_live_sources_and_no_secrets():
+    def gh(args):
+        if args[:2] == ["api", "graphql"]:
+            return 0, gql({"Ready": 5, "In Progress": 8, "Blocked": 3, "Done": 26})
+        return 1, "offline"
+    s = col.collect_snapshot(procs_fn=lambda: [col.Proc(92, 1, "claude.exe", "C:/npm/claude.exe ghp_" + "a" * 30, iso(60))], gh=gh,
+                             now=NOW, claude_login=lambda: True)
+    assert [a.name for a in s.agents()] == ["Claude", "GitHub"] and s.claude.level is Level.GREEN
+    assert s.backlog["Ready"] == 5 and s.backlog_error is None
+    d = s.diagnostic()
+    for legacy in ("heartbeat", "kill switch", "PR atual", "executor", "DRY_RUN", "Codex", "Listener"):
+        assert legacy not in d, legacy
+    assert "ghp_" not in d and "token" not in d.lower()
 
 
 def test_cli_login_state_is_read_from_the_cli_and_cached():
@@ -755,18 +309,5 @@ def test_cli_login_state_is_read_from_the_cli_and_cached():
     assert col.claude_login_state(run=lambda c: (1, "boom"), clock=lambda: now[0] + 1000, which=lambda n: "x") is None      # falha = desconhecido, nunca "logado"
     assert col.claude_login_state(run=run, clock=lambda: 0, which=lambda n: None) is None                                      # sem CLI
     col._LOGIN_CACHE.clear()
-    assert col.codex_login_state(run=lambda c: (0, "Logged in using ChatGPT"), clock=lambda: 0, which=lambda n: "x") is True
-    col._LOGIN_CACHE.clear()
-    assert col.codex_login_state(run=lambda c: (1, "Not logged in"), clock=lambda: 0, which=lambda n: "x") is False
-    col._LOGIN_CACHE.clear()
 
 
-def test_codex_usage_limit_is_amber_attention_and_a_real_failure_stays_red(tmp_path):
-    d = tmp_path / "codex"
-    d.mkdir()
-    rec = d / "last_review.json"
-    rec.write_text(json.dumps({"status": "failed", "pr": 641, "sha": "a" * 40, "error": "RATE_LIMITED: limite de uso da conta do revisor"}), encoding="utf-8")
-    s = col.collect_codex([], [], tmp_path, which=lambda n: "x", now=NOW, login=True)
-    assert s.level is Level.YELLOW and s.label == "Limite de uso" and "suspenso" in s.detail and "#641" in s.detail
-    rec.write_text(json.dumps({"status": "failed", "pr": 641, "sha": "a" * 40, "error": "timeout"}), encoding="utf-8")
-    assert col.collect_codex([], [], tmp_path, which=lambda n: "x", now=NOW, login=True).level is Level.RED

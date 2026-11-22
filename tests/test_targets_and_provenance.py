@@ -97,7 +97,7 @@ def test_snapshot_reads_backlog_and_queue_from_the_configured_targets(tmp_path):
         seen.append(" ".join(args))
         return 1, "offline"
     t = tg.Targets(org="Acme", project=9)
-    col.collect_snapshot(tmp_path, procs_fn=lambda: [], task_fn=lambda: None, gh=gh, targets=t)
+    col.collect_snapshot(procs_fn=lambda: [], gh=gh, targets=t)
     joined = "\n".join(seen)
     assert "projectV2(number:9)" in joined and 'login:"Acme"' in joined and "org:Acme is:pr is:open" in joined
 
@@ -125,7 +125,7 @@ def _runtime_db(path, last_at=1_000.0):
 def test_a_readable_store_is_labelled_lido_with_schema_and_age_never_real(tmp_path):
     db = tmp_path / "store.db"
     _runtime_db(db, last_at=1_000.0)
-    obs = collect_observation(tmp_path, db_path=db, now=1_090.0)
+    obs = collect_observation(db_path=db, now=1_090.0)
     assert obs.source == "lido" and obs.schema_version == "1" and obs.last_event_age_s == 90
     assert "real" not in obs.reason.lower()
 
@@ -138,23 +138,13 @@ def test_an_empty_store_has_no_age_instead_of_a_fake_zero(tmp_path):
     con.execute("DELETE FROM events")
     con.commit()
     con.close()
-    obs = collect_observation(tmp_path, db_path=db, now=2_000.0)
+    obs = collect_observation(db_path=db, now=2_000.0)
     assert obs.source == "lido" and obs.last_event_age_s is None
-
-
-def test_codex_rate_limit_shows_its_age_so_an_old_state_is_not_read_as_current(tmp_path):
-    import datetime as dt
-    (tmp_path / "codex").mkdir()
-    (tmp_path / "codex" / "last_review.json").write_text(json.dumps(
-        {"status": "failed", "pr": 641, "sha": "abc1234", "error": "RATE_LIMITED: usage limit", "at": "2026-11-18T10:00:00Z"}), encoding="utf-8")
-    now = dt.datetime(2026, 11, 20, 10, 0, tzinfo=dt.timezone.utc)
-    st = col.collect_codex([], [], tmp_path, which=lambda n: "codex", now=now)
-    assert st.label == "Limite de uso" and "registrado ha 2d" in st.detail
 
 
 def test_diagnostic_lists_the_org_pr_queue_or_its_error(tmp_path):
     from agent_bar.models import PrQueue, PrRow
-    s = col.collect_snapshot(tmp_path, procs_fn=lambda: [], task_fn=lambda: None, gh=lambda a: (1, "offline"), targets=tg.Targets())
+    s = col.collect_snapshot(procs_fn=lambda: [], gh=lambda a: (1, "offline"), targets=tg.Targets())
     assert "PRs abertos: indisponivel (erro: gh api graphql rc=1" in s.diagnostic()
     s.pr_queue = PrQueue(rows=[PrRow(11, "t", "https://github.com/Plan2Space/agent-bar/pull/11", "aguarda", "Plan2Space/agent-bar")], synced="X")
     assert "PRs abertos: Plan2Space/agent-bar#11=aguarda (sync X)" in s.diagnostic()

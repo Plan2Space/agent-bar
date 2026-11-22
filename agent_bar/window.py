@@ -17,8 +17,6 @@ from PySide6.QtCore import (
     QObject,
     QPoint,
     QPointF,
-    QProcess,
-    QProcessEnvironment,
     QPropertyAnimation,
     QRectF,
     Qt,
@@ -41,11 +39,8 @@ from PySide6.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
     QLabel,
-    QListWidget,
-    QListWidgetItem,
     QMenu,
     QMessageBox,
-    QPlainTextEdit,
     QPushButton,
     QScrollArea,
     QSystemTrayIcon,
@@ -58,7 +53,7 @@ from agent_bar import controls as ctl
 from agent_bar import geometry as geo
 from agent_bar import settings as cfg
 from agent_bar.inbox import Inbox, InboxNotifier, human_inbox, waited
-from agent_bar.models import GroupedEvent, Level, Snapshot
+from agent_bar.models import Level, Snapshot
 from agent_bar.operations_view import OperationsView
 
 COLORS = {Level.GREEN: "#3ddc84", Level.BLUE: "#4aa8ff", Level.YELLOW: "#ffc233", Level.RED: "#ff4d4f", Level.GRAY: "#8a8f98"}
@@ -67,7 +62,7 @@ BTN_CSS = ("QPushButton{background:#2a2a30;color:#ddd;border:0;border-radius:6px
            "QPushButton:hover{background:#3a3a44}QPushButton:disabled{color:#666}")
 
 
-AGENT_COLOR = {"Claude": "#d97757", "Codex": "#7aa2ff", "GPT": "#10a37f", "Listener": "#4aa8ff", "GitHub": "#e6e6e6"}
+AGENT_COLOR = {"Claude": "#d97757", "GitHub": "#e6e6e6"}
 BAR_W = 640
 _CUSTOM: dict[str, QPixmap | None] = {}
 
@@ -77,7 +72,7 @@ def icons_dir() -> Path:
 
 
 def custom_logo(name: str) -> QPixmap | None:
-    """Logo oficial que o dono colocar em `%APPDATA%\\agent_bar\\icons\\<agente>.png` (claude.png, codex.png, gpt.png...) substitui o desenho padrao."""
+    """Logo oficial que o dono colocar em `%APPDATA%\\agent_bar\\icons\\<agente>.png` (claude.png, github.png) substitui o desenho padrao."""
     if name not in _CUSTOM:
         f = icons_dir() / f"{name.lower()}.png"
         pm = QPixmap(str(f)) if f.is_file() else None
@@ -102,40 +97,6 @@ def _logo_claude(p: QPainter, size: float, phase: int, color: str) -> None:
         p.restore()
 
 
-def _logo_codex(p: QPainter, size: float, phase: int, color: str) -> None:
-    """Balao do Codex com o prompt `>_` e o cursor piscando."""
-    p.setPen(Qt.PenStyle.NoPen)
-    p.setBrush(QColor(color))
-    p.drawRoundedRect(QRectF(size * 0.05, size * 0.18, size * 0.9, size * 0.64), size * 0.28, size * 0.28)
-    p.setPen(_pen("#0b1020", size * 0.09))
-    p.drawPolyline([QPointF(size * 0.27, size * 0.36), QPointF(size * 0.42, size * 0.5), QPointF(size * 0.27, size * 0.64)])
-    if (phase // 5) % 2 == 0:
-        p.drawLine(QPointF(size * 0.5, size * 0.66), QPointF(size * 0.72, size * 0.66))
-
-
-def _logo_gpt(p: QPainter, size: float, phase: int, color: str) -> None:
-    """Roseta de 6 petalas girando devagar."""
-    p.translate(size / 2, size / 2)
-    p.rotate(phase * 3 % 360)
-    p.setPen(_pen(color, size * 0.09))
-    p.setBrush(Qt.BrushStyle.NoBrush)
-    for i in range(6):
-        p.save()
-        p.rotate(i * 60)
-        p.drawRoundedRect(QRectF(-size * 0.11, -size * 0.44, size * 0.22, size * 0.5), size * 0.11, size * 0.11)
-        p.restore()
-
-
-def _logo_loop(p: QPainter, size: float, phase: int, color: str) -> None:
-    """Dois arcos girando: o laco de revisao em andamento."""
-    p.setPen(_pen(color, size * 0.13))
-    p.setBrush(Qt.BrushStyle.NoBrush)
-    box = QRectF(size * 0.14, size * 0.14, size * 0.72, size * 0.72)
-    start = phase * 18 % 360
-    p.drawArc(box, int(start * 16), 110 * 16)
-    p.drawArc(box, int((start + 180) % 360 * 16), 110 * 16)
-
-
 def _logo_orbit(p: QPainter, size: float, phase: int, color: str) -> None:
     """Anel com um ponto em orbita: consultando o GitHub."""
     p.setPen(_pen("#4a4f57", size * 0.08))
@@ -147,7 +108,7 @@ def _logo_orbit(p: QPainter, size: float, phase: int, color: str) -> None:
     p.drawEllipse(QPointF(size / 2 + math.cos(a) * size * 0.38, size / 2 + math.sin(a) * size * 0.38), size * 0.11, size * 0.11)
 
 
-LOGO_PAINTERS = {"Claude": _logo_claude, "Codex": _logo_codex, "GPT": _logo_gpt, "Listener": _logo_loop, "GitHub": _logo_orbit}
+LOGO_PAINTERS = {"Claude": _logo_claude, "GitHub": _logo_orbit}
 
 
 class StatusIcon(QWidget):
@@ -184,12 +145,12 @@ class StatusIcon(QWidget):
 
 
 class Worker(QObject):
-    """Coleta periodica fora da thread de UI. Local a cada `local_interval_s`; GitHub e Project #1 com cache/TTL proprios."""
+    """Coleta periodica fora da thread de UI. Local a cada `local_interval_s`; GitHub e Project #2 com cache/TTL proprios."""
     snapshot = Signal(object)
 
-    def __init__(self, settings: cfg.Settings, gov: Path | None = None):
+    def __init__(self, settings: cfg.Settings):
         super().__init__()
-        self.settings, self.gov = settings, gov
+        self.settings = settings
         self._stop, self._now = threading.Event(), threading.Event()
         self._cache = col.GithubCache(ttl_s=settings.github_interval_s)
         self._backlog = col.GithubCache(ttl_s=settings.backlog_interval_s)
@@ -220,8 +181,8 @@ class Worker(QObject):
     def _loop(self) -> None:
         while not self._stop.is_set():
             try:
-                self.snapshot.emit(col.collect_snapshot(self.gov, cache=self._cache, backlog_cache=self._backlog, queue_cache=self._queue,
-                                                   approval_cache=self._approvals, claude_login=col.claude_login_state, codex_login=col.codex_login_state))
+                self.snapshot.emit(col.collect_snapshot(cache=self._cache, backlog_cache=self._backlog, queue_cache=self._queue,
+                                                   approval_cache=self._approvals, claude_login=col.claude_login_state))
             except Exception:                                                  # noqa: BLE001 — coleta nunca derruba a UI
                 traceback.print_exc()
             self._now.wait(self.settings.local_interval_s)
@@ -263,10 +224,9 @@ def age_text(s: int) -> str:
 
 def board_html(b) -> str:
     """Project selecionado (nome, link, id), contagens e itens lidos AGORA. Erro = INDISPONIVEL com o motivo, sem numero nenhum."""
-    tag = " <span style='color:#ffc233'><b>LEGADO</b></span>" if b.board == "legacy" else ""
     url = b.url or f"https://github.com/orgs/{b.org}/projects/{b.number}"
     name = esc(b.title or f"{b.org} Project #{b.number}")
-    head = (f"<b>Board</b>{tag} <a href=\"{esc(url)}\" style='color:#8fb4ff'>{name}</a> "
+    head = (f"<b>Board</b> <a href=\"{esc(url)}\" style='color:#8fb4ff'>{name}</a> "
             f"<span style='color:#6d6d75'>#{b.number} · {esc(b.node_id or 'id ?')}</span>")
     if b.error:
         return head + f"<br><b style='color:#ff6b6d'>INDISPONÍVEL</b> <span style='color:#ff9a9b'>{esc(b.error)}</span>"
@@ -316,7 +276,7 @@ def queue_html(q) -> str:
     stale = f" <span style='color:#ffc233'>(desatualizado desde {hhmm(q.synced)}; erro: {esc(q.error)})</span>" if q.error else ""
     head = f"<b>PRs</b> {len(q.rows)} abertos · " + " · ".join(parts) + stale
     acts = [r for r in q.rows if r.state in ("pronto", "corrigir", "conflito", "ci")][:6]
-    def link(r) -> str:                                                           # so abre links https://github.com/ (mesma lista de permissao do botao "PR atual")
+    def link(r) -> str:                                                           # so abre links https://github.com/
         name = f"{r.repo.split('/')[-1]}#{r.number}" if r.repo else f"#{r.number}"
         return f"<a href=\"{esc(r.url)}\" style='color:#8fb4ff'>{esc(name)}</a>" if r.url.startswith("https://github.com/") else esc(name)
     lines = [f"&bull; {link(r)} <span style='color:{QUEUE_LABEL[r.state][0]}'>{QUEUE_LABEL[r.state][1].format(s='')}</span> "
@@ -365,7 +325,7 @@ class TitleBar(QWidget):
         lay.addStretch(1)
         self.btn_min = self._btn("\u2014", "Recolher o painel (so a barra de titulo); a barra flutuante continua", panel.toggle_collapsed)
         self.btn_max = self._btn("\u25a1", "Restaurar / ajustar o tamanho ao conteudo", panel.restore_fit)
-        self.btn_close = self._btn("\u2715", "Fechar SOMENTE o painel (nao para o listener, Claude nem Codex)", panel.close_panel, TB_CLOSE_CSS)
+        self.btn_close = self._btn("\u2715", "Fechar SOMENTE o painel (a coleta da barra continua)", panel.close_panel, TB_CLOSE_CSS)
         for b in (self.btn_min, self.btn_max, self.btn_close):
             lay.addWidget(b)
 
@@ -396,9 +356,8 @@ class Details(QWidget):
 
     def __init__(self, bar: "Bar"):
         super().__init__(None, Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.Tool)
-        self.setWindowTitle("Harness Control Center FP-061")
+        self.setWindowTitle("Agent Bar")
         self.bar = bar
-        self._seen_top: str | None = None
         self.user_moved = False                                  # depois que o usuario move o painel, ele NAO segue mais a barra
         self.collapsed = False
         self.full_mode = False
@@ -427,8 +386,8 @@ class Details(QWidget):
         self.human.setOpenExternalLinks(True)
         self.human.setStyleSheet("color:#e6e6e6;font-size:11px;background:#2a2516;border:1px solid #5a4a1f;border-radius:8px;padding:6px")
         lay.addWidget(self.human)
-        self.banner, self.agents, self.health, self.backlog = QLabel(), QLabel(), QLabel(), QLabel()
-        for w in (self.banner, self.agents, self.health, self.backlog):
+        self.agents, self.backlog = QLabel(), QLabel()
+        for w in (self.agents, self.backlog):
             w.setTextFormat(Qt.TextFormat.RichText)
             w.setWordWrap(True)
             w.setMargin(0)
@@ -448,25 +407,6 @@ class Details(QWidget):
         self.backlog.setTextFormat(Qt.TextFormat.RichText)
         self.queue.setStyleSheet("color:#e6e6e6;font-size:11px;padding:4px 0")
         lay.addWidget(self.queue)
-        self.terminal_title = QLabel("<b>Terminal do passo</b> <span style='color:#6d6d75'>(somente leitura; &quot;Parar passo&quot; interrompe)</span>")
-        self.terminal_title.setTextFormat(Qt.TextFormat.RichText)
-        self.terminal_title.setStyleSheet("color:#e6e6e6;font-size:11px;padding-top:4px")
-        self.terminal = QPlainTextEdit()
-        self.terminal.setReadOnly(True)
-        self.terminal.setMaximumBlockCount(500)
-        self.terminal.setFixedHeight(200)
-        self.terminal.setStyleSheet("QPlainTextEdit{background:#0e0e11;color:#cfcfd4;border:1px solid #2a2a30;border-radius:6px;"
-                                    "font-family:Consolas,'Cascadia Mono',monospace;font-size:11px}")
-        for w in (self.terminal_title, self.terminal):
-            w.setVisible(False)
-            lay.addWidget(w)
-        self.events = QListWidget()
-        self.events.setStyleSheet("QListWidget{background:#17171a;color:#cfcfd4;border:0;font-size:11px}QListWidget::item{padding:1px 4px}")
-        self.events.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        self.events.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.events.setToolTip("Duplo clique: abre o log original")
-        self.events.itemDoubleClicked.connect(lambda _i: bar.action_logs())
-        lay.addWidget(self.events)
         self.overview = QLabel("Event Store: indisponível · mensagens: indisponíveis")
         self.overview.setWordWrap(True)
         self.overview.setStyleSheet("color:#9facba;font-size:11px;padding:6px 2px")
@@ -493,20 +433,15 @@ class Details(QWidget):
         grid = QGridLayout()
         grid.setSpacing(4)
         self.buttons: dict[str, QPushButton] = {}
-        specs = [("repo", "Org GitHub", bar.action_repo), ("project", f"Project #{ctl._TARGETS.project}", bar.action_project), ("pr", "PR atual", bar.action_pr),
-                 ("logs", "Logs", bar.action_logs), ("diag", "Copiar diagn\u00f3stico", bar.action_copy_diag),
-                 ("refresh", "Atualizar", bar.action_refresh), ("restart", "Reiniciar DRY_RUN", bar.action_restart), ("stop", "Parar", bar.action_stop),
-                 ("progress", "Dar andamento (Claude)", bar.action_progress), ("cockpit", "Cockpit ACP", bar.action_cockpit)]
+        specs = [("repo", "Org GitHub", bar.action_repo), ("project", f"Project #{ctl._TARGETS.project}", bar.action_project),
+                 ("diag", "Copiar diagnóstico", bar.action_copy_diag), ("refresh", "Atualizar", bar.action_refresh),
+                 ("cockpit", "Cockpit ACP", bar.action_cockpit)]
         for i, (key, text, fn) in enumerate(specs):
             b = QPushButton(text)
             b.setStyleSheet(BTN_CSS)
             b.clicked.connect(lambda _=False, f=fn: f())
             self.buttons[key] = b
             grid.addWidget(b, i // 4, i % 4)
-        if os.environ.get("AGENT_BAR_OBSERVE_ONLY") == "1":
-            for key in ("restart", "stop", "progress"):
-                self.buttons[key].setEnabled(False)
-                self.buttons[key].setToolTip("Instância FP-061 somente leitura: controle desativado")
         flay.addLayout(grid)
         self.mode_button = QPushButton("Central completa  ↗")
         self.mode_button.setStyleSheet(BTN_CSS)
@@ -584,7 +519,7 @@ class Details(QWidget):
             self.clamp()
 
     def close_panel(self) -> None:
-        """Fecha SOMENTE o painel. Nao toca no listener, no Claude nem no Codex (nem na coleta da barra)."""
+        """Fecha SOMENTE o painel. Nao toca na coleta da barra."""
         self.hide()
 
     def toggle_full_mode(self) -> None:
@@ -592,10 +527,9 @@ class Details(QWidget):
         self.full_mode = not self.full_mode
         self.setFixedWidth(self.FULL_WIDTH if self.full_mode else self.WIDTH)
         self.operations.setVisible(self.full_mode)
-        for widget in (self.health, self.backlog, self.events):
-            widget.setVisible(not self.full_mode)
+        self.backlog.setVisible(not self.full_mode)
         self.mode_button.setText("Painel expandido  ↙" if self.full_mode else "Central completa  ↗")
-        title = "Harness Control Center" if self.full_mode else "Agent Control"
+        title = "Central completa" if self.full_mode else "Agent Control"
         if self.bar.snap and self.bar.snap.observation.source == "demonstração":
             title += " · DEMONSTRAÇÃO"
         self.titlebar.title.setText(title)
@@ -628,57 +562,20 @@ class Details(QWidget):
         self.status.setText(f'<span style="color:{color}">{"&#10003;" if ok else "&#10007;"}</span> {esc(text)}  <span style="color:#6d6d75">{dt.datetime.now():%H:%M:%S}</span>')
         self.status.setTextFormat(Qt.TextFormat.RichText)
 
-    def _event_text(self, e: GroupedEvent) -> str:
-        span = f"  ×{e.count} ({hhmm(e.first_at)}–{hhmm(e.last_at)})" if e.count > 1 else ""
-        reason = f"  {e.reason}" if e.reason and e.count == 1 else ""
-        return f"{hhmm(e.last_at)}  {e.action}  {e.pr_label()}{span}{reason}"[:150]
-
-    def term_append(self, text: str) -> None:
-        """Uma linha no terminal do painel; mostra a area na primeira linha."""
-        if self.terminal.isHidden():
-            self.terminal_title.setVisible(True)
-            self.terminal.setVisible(True)
-            self.fit()
-        self.terminal.appendPlainText(text)
-        self.terminal.verticalScrollBar().setValue(self.terminal.verticalScrollBar().maximum())
-
     def update_snapshot(self, s: Snapshot) -> None:
         self.human.setText(inbox_html(getattr(self.bar, "inbox", None) or human_inbox(s.approvals)))
-        self.banner.setText(f'<b style="color:{"#ffc233" if s.mode == "DRY_RUN" else "#ff6b6d" if s.mode == "EXECUTE" else "#8a8f98"}">'
-                            f'{esc(s.mode_banner())}</b> &middot; {esc(s.work)}')
         rows = []
         for a in s.agents():
             pid = f" <span style='color:#8a8f98'>pid {a.pid}</span>" if a.pid else ""
             rows.append(f"{dot(a.level, a.name)} <b>{a.name}</b> {esc(a.label)}{pid}<br><span style='color:#8f8f98'>&nbsp;&nbsp;&nbsp;{esc(a.detail)}</span>")
         self.agents.setText("<br>".join(rows))
-        hb = "indisponível" if s.heartbeat_age_s is None else f"{s.heartbeat_age_s}s"
-        ks = "indisponível" if s.kill_switch is None else ("ATIVO" if s.kill_switch else "inativo")
-        err = f"<br><span style='color:#ff9a9b'>último erro: {esc(s.last_error)}</span>" if s.last_error else ""
-        self.health.setText(f"<b>Saúde</b> heartbeat {hb} &middot; kill switch {ks} &middot; instâncias "
-                            f"{'?' if s.concurrent_instances is None else s.concurrent_instances}<br>lock: {esc(s.lock_status)}<br>"
-                            f"executor: {esc(s.executor_summary)}{err}")
         self.queue.setText(queue_html(s.pr_queue))
         self.backlog.setText(board_html(s.board))
-        top = s.events[0].last_at if s.events else None
-        self.events.clear()
-        for e in s.events[:20]:
-            it = QListWidgetItem(self._event_text(e))
-            new = self._seen_top is not None and e.last_at > self._seen_top
-            if e.error:
-                it.setForeground(QColor("#ff6b6d"))
-            elif new:
-                it.setForeground(QColor("#4aa8ff"))
-            if new or e.error:
-                f = it.font()
-                f.setBold(True)
-                it.setFont(f)
-            self.events.addItem(it)
-        self._seen_top = top or self._seen_top
         obs = s.observation
         if obs.source == "demonstração":
-            self.titlebar.title.setText(("Harness Control Center" if self.full_mode else "Agent Control") + " · DEMONSTRAÇÃO")
+            self.titlebar.title.setText(("Central completa" if self.full_mode else "Agent Control") + " · DEMONSTRAÇÃO")
         else:
-            self.titlebar.title.setText("Harness Control Center" if self.full_mode else "Agent Control")
+            self.titlebar.title.setText("Central completa" if self.full_mode else "Agent Control")
         if obs.source in ("lido", "demonstração"):
             counts = " · ".join(f"{k} {obs.counts.get(k, 0)}" for k in ("PENDING", "RUNNING", "DLQ"))
             age = "sem eventos" if obs.last_event_age_s is None else f"último evento há {age_text(obs.last_event_age_s)}"
@@ -693,18 +590,16 @@ class Details(QWidget):
         self.operations.update_runs(s.runs)
         self.operations.update_benchmark(s.benchmark)
         self.operations.update_approvals(s.approvals, observe_only=os.environ.get("AGENT_BAR_OBSERVE_ONLY") == "1")
-        rows_h = self.events.sizeHintForRow(0) if self.events.count() else 0
-        self.events.setFixedHeight(min(max(self.events.count(), 1), 6) * max(rows_h, 20) + 6)       # sem espaco vazio; rola acima de 6
         self.fit()
 
 
 class Bar(QWidget):
     result = Signal(bool, str)
 
-    def __init__(self, settings: cfg.Settings, gov: Path | None = None):
+    def __init__(self, settings: cfg.Settings):
         super().__init__(None, Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.Tool)
-        self.setWindowTitle("Agent Bar FP-061")
-        self.settings, self.gov = settings, gov or col.default_gov_dir()
+        self.setWindowTitle("Agent Bar")
+        self.settings = settings
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setWindowOpacity(settings.opacity)
         self.resize(BAR_W, 65)
@@ -713,7 +608,7 @@ class Bar(QWidget):
         lay = QHBoxLayout(self)
         lay.setContentsMargins(16, 6, 12, 6)
         lay.setSpacing(14)
-        for name in ("Claude", "Codex", "GPT", "Listener", "GitHub"):
+        for name in ("Claude", "GitHub"):
             icon = StatusIcon(name)
             lb = QLabel(name)
             lb.setStyleSheet("color:#f0f0f0;font-size:13px;font-weight:600")
@@ -723,7 +618,7 @@ class Bar(QWidget):
             chip.addWidget(icon)
             chip.addWidget(lb)
             lay.addLayout(chip)
-        self.pr = QLabel("PR -")
+        self.pr = QLabel("PRs -")
         self.pr.setStyleSheet("color:#bdbdc4;font-size:12px")
         lay.addWidget(self.pr)
         self.human_badge = QLabel()                                              # contador "para voce" (decisao humana pendente)
@@ -731,14 +626,14 @@ class Bar(QWidget):
         lay.addWidget(self.human_badge)
         self.inbox: Inbox | None = None
         lay.addStretch(1)
-        self.play = QPushButton("▶")                                             # o mesmo "Dar andamento" do painel, a um clique da barra
-        self.play.setFixedSize(28, 28)
-        self.play.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.play.setStyleSheet("QPushButton{background:#2a2a30;color:#3ddc84;border:0;border-radius:14px;font-size:13px}"
-                                "QPushButton:hover{background:#3a3a44}QPushButton:disabled{color:#555}")
-        self.play.setToolTip("Dar andamento nos PRs da FP-060 (Claude)")
-        self.play.clicked.connect(lambda _=False: self.action_progress())
-        lay.addWidget(self.play)
+        self.cockpit_btn = QPushButton("Cockpit")                                 # abre o cockpit ACP (chat, fluxos, revisao visual)
+        self.cockpit_btn.setFixedHeight(28)
+        self.cockpit_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.cockpit_btn.setStyleSheet("QPushButton{background:#2a2a30;color:#e6e6e6;border:0;border-radius:14px;font-size:12px;padding:0 12px}"
+                                       "QPushButton:hover{background:#3a3a44}")
+        self.cockpit_btn.setToolTip("Abrir o cockpit ACP")
+        self.cockpit_btn.clicked.connect(lambda _=False: self.action_cockpit())
+        lay.addWidget(self.cockpit_btn)
         self.gear = QLabel("&#9881;")
         self.gear.setTextFormat(Qt.TextFormat.RichText)
         self.gear.setStyleSheet("color:#bdbdc4;font-size:17px")
@@ -750,12 +645,6 @@ class Bar(QWidget):
         self.anim_timer = QTimer(self)                                               # anima os logos so enquanto alguem trabalha
         self.anim_timer.setInterval(90)
         self.anim_timer.timeout.connect(self._tick_animation)
-        if os.environ.get("AGENT_BAR_OBSERVE_ONLY") == "1":
-            self.play.setEnabled(False)
-            self.play.setToolTip("Instância FP-061 somente leitura: controle desativado")
-        self.step_process: QProcess | None = None                                    # o passo FP-060 em curso (processo FILHO deste painel)
-        self._step_buf = b""
-        self._step_stopped = False
         self._refresh_pending: float | None = None
         self.tray = QSystemTrayIcon(self) if QSystemTrayIcon.isSystemTrayAvailable() else None
         self._notice_url: str | None = None
@@ -767,7 +656,7 @@ class Bar(QWidget):
             self.tray.messageClicked.connect(self._open_notice)
             self.tray.show()
         self.notifier = InboxNotifier(show=self._notify_human, enabled=lambda: self.settings.notify_human)
-        self.worker = Worker(settings, self.gov)
+        self.worker = Worker(settings)
         self.details = Details(self)
         from agent_bar import runtime_pin
         self.set_runtime_pin(runtime_pin.check())
@@ -872,7 +761,7 @@ class Bar(QWidget):
         self.settings.minimized = not self.settings.minimized
         cfg.save(self.settings)
         mini = self.settings.minimized
-        for w in (*self.labels.values(), *self.icons.values(), self.pr, self.play, self.gear):
+        for w in (*self.labels.values(), *self.icons.values(), self.pr, self.cockpit_btn, self.gear):
             w.setVisible(not mini)
         self._sync_badge()
         self.resize(44 if mini else BAR_W, 44 if mini else 65)
@@ -930,13 +819,6 @@ class Bar(QWidget):
     def action_project(self) -> None:
         self.report(ctl.open_url(ctl.PROJECT_URL))
 
-    def action_pr(self) -> None:
-        self.report(ctl.open_url(self.snap.pr_url if self.snap else None))
-
-    def action_logs(self) -> None:
-        p = ctl.latest_log(self.gov)
-        self.report(ctl.open_path(p) if p else ctl.Result(False, "nenhum log encontrado"))
-
     def action_copy_diag(self) -> None:
         if not self.snap:
             self.report(ctl.Result(False, "sem coleta ainda: nada para copiar"))
@@ -987,14 +869,6 @@ class Bar(QWidget):
             return ctl.Result(ok, msg)
         self._run_async(go)
 
-    def action_restart(self) -> None:
-        if os.environ.get("AGENT_BAR_OBSERVE_ONLY") == "1":
-            self.report(ctl.Result(False, "instância FP-061 somente leitura: controle desativado"))
-            return
-        if self.confirm("Reiniciar o listener em DRY_RUN? Nao executa nada; recusa com kill switch, execucao ativa ou -Execute."):
-            self.details.set_status(True, "reiniciando em DRY_RUN...")
-            self._run_async(lambda: ctl.restart_listener_dry_run(confirmed=True, gov=self.gov))
-
     def _sync_animation(self) -> None:
         working = any(i.working for i in self.icons.values())
         if working and not self.anim_timer.isActive():
@@ -1007,104 +881,6 @@ class Bar(QWidget):
             if icon.working:
                 icon.phase += 1
                 icon.update()
-
-    def _set_step_ui(self, running: bool) -> None:
-        """Os dois botoes (barra e painel) mostram o mesmo estado do passo."""
-        self.details.buttons["progress"].setText("Parar passo" if running else "Dar andamento (Claude)")
-        self.play.setText("■" if running else "▶")
-        self.play.setToolTip("Parar o passo em andamento" if running else "Dar andamento nos PRs da FP-060 (Claude)")
-
-    def action_progress(self) -> None:
-        if os.environ.get("AGENT_BAR_OBSERVE_ONLY") == "1":
-            self.report(ctl.Result(False, "instância FP-061 somente leitura: controle desativado"))
-            return
-        if self.step_process is not None:                                           # o botao vira "Parar passo" enquanto roda
-            if self.confirm("Interromper o passo em andamento? O que ele já publicou nos PRs continua lá."):
-                self.stop_step()
-            return
-        if ctl.step_running():
-            self.report(ctl.Result(False, "já existe um passo da FP-060 rodando em outra janela: feche-o antes de iniciar outro"))
-            return
-        if not self.confirm("Dar um passo nos PRs da FP-060 aqui no painel? Uma sessão do Claude (modo sem tela) corrige achados do revisor e mostra o "
-                            "progresso no terminal do painel; NUNCA faz merge."):
-            return
-        cmd = ctl.progress_command()
-        if cmd is None:
-            self.report(ctl.Result(False, "claude CLI ou arquivo da missão não encontrado (veja AGENT_BAR_MISSION)"))
-            return
-        self.start_step(*cmd)
-
-    def start_step(self, program: str, args: list[str], cwd) -> None:
-        p = QProcess(self)
-        p.setProgram(program)
-        p.setArguments(args)
-        p.setWorkingDirectory(str(cwd))
-        p.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
-        env = QProcessEnvironment.systemEnvironment()
-        for name in ("GH_TOKEN", "CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT"):             # o filho nao herda token do GitHub nem o contexto de outra sessao Claude
-            env.remove(name)
-        env.insert("PYTHONUTF8", "1")
-        p.setProcessEnvironment(env)
-        if os.name == "nt" and hasattr(p, "setCreateProcessArgumentsModifier"):
-            p.setCreateProcessArgumentsModifier(lambda a: setattr(a, "flags", a.flags | 0x08000000))     # CREATE_NO_WINDOW: sem console extra
-        p.readyReadStandardOutput.connect(self._step_read)
-        p.finished.connect(lambda code, _status: self._step_done(code))
-        p.errorOccurred.connect(self._step_error)
-        self.step_process, self._step_buf, self._step_stopped = p, b"", False
-        self._set_step_ui(True)
-        self.details.term_append("== iniciando o passo da FP-060 ==")
-        self.details.set_status(True, "passo em andamento (terminal abaixo)")
-        p.start()
-        p.closeWriteChannel()                                                        # sem entrada: o claude nao espera 3 s por dados no stdin
-
-    def _step_read(self) -> None:
-        p = self.step_process
-        if p is None:
-            return
-        self._step_buf += bytes(p.readAllStandardOutput())
-        *lines, self._step_buf = self._step_buf.split(b"\n")
-        for raw in lines:
-            for out in ctl.format_stream_line(raw.decode("utf-8", errors="replace")):
-                self.details.term_append(out)
-
-    def _step_done(self, code: int) -> None:
-        if self.step_process is None:
-            return
-        self._step_read()
-        for out in ctl.format_stream_line(self._step_buf.decode("utf-8", errors="replace")):
-            self.details.term_append(out)
-        self.details.term_append("== passo interrompido ==" if self._step_stopped else f"== passo encerrado (código {code}) ==")
-        self._step_finalize()
-
-    def _step_error(self, error) -> None:
-        if error == QProcess.ProcessError.FailedToStart and self.step_process is not None:     # `finished` nao e emitido quando nem iniciou
-            self.details.term_append(f"== erro ao iniciar o passo: {self.step_process.errorString()} ==")
-            self._step_finalize()
-
-    def _step_finalize(self) -> None:
-        proc, self.step_process, self._step_buf, self._step_stopped = self.step_process, None, b"", False
-        if proc is not None:
-            proc.deleteLater()
-        self._set_step_ui(False)
-        self.details.set_status(True, "passo terminado")
-        self.worker.refresh(force=True)
-
-    def stop_step(self) -> None:
-        p = self.step_process
-        if p is None:
-            return
-        self._step_stopped = True
-        pid = int(p.processId())
-        if not pid or not ctl.kill_tree(pid):                                       # por PID, so a arvore do passo que este painel iniciou
-            p.kill()
-
-    def action_stop(self) -> None:
-        if os.environ.get("AGENT_BAR_OBSERVE_ONLY") == "1":
-            self.report(ctl.Result(False, "instância FP-061 somente leitura: controle desativado"))
-            return
-        if self.confirm("Parar o listener (Tarefa Agendada)? Recusa se houver execucao ativa."):
-            self.details.set_status(True, "parando o listener...")
-            self._run_async(lambda: ctl.stop_listener(confirmed=True, gov=self.gov))
 
     def confirm(self, text: str) -> bool:
         return QMessageBox.question(self, "Confirmar", text) == QMessageBox.StandardButton.Yes
@@ -1122,7 +898,6 @@ class Bar(QWidget):
         win.chat.ensure_client()
 
     def close_app(self) -> None:
-        self.stop_step()                                                           # nao deixa um passo orfao quando a barra fecha
         if getattr(self, "cockpit", None) is not None:                             # encerra so os agentes ACP que o cockpit iniciou
             self.cockpit.shutdown()
         self.worker.stop()
@@ -1145,10 +920,11 @@ class Bar(QWidget):
         self.inbox = human_inbox(s.approvals)
         self._sync_badge()
         self.notifier.update(self.inbox)
-        self.pr.setText(f"PR #{s.pr}" if s.pr else "PR -")
-        self.pr.setToolTip(f"checks: {s.github_checks}")
-        self.gear.setToolTip(f"{s.mode_banner()}\n{s.work}\n" + (s.last_error or "sem erro observado")
-                             + (f"\nruntime: {self.runtime_pin.message}" if getattr(self, "runtime_pin", None) else ""))
+        q = s.pr_queue
+        self.pr.setText(f"PRs {len(q.rows)}" if not (q.error and not q.rows) else "PRs ?")
+        self.pr.setToolTip("fila de PRs da org: " + (", ".join(f"{k} {v}" for k, v in q.counts().items()) or "nenhum aberto")
+                           + (f" (erro: {q.error})" if q.error else ""))
+        self.gear.setToolTip(f"runtime: {self.runtime_pin.message}" if getattr(self, "runtime_pin", None) else "Agent Bar")
         self.details.update_snapshot(s)
         if self._refresh_pending:
             self._refresh_pending = None
