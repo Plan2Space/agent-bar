@@ -1,6 +1,7 @@
 """profiles.py — agentes ACP disponiveis e workspaces do Plan2Space (R17, D4).
 
-O agente real e o adaptador ACP do Claude Code (`claude-code-acp`, pacote npm `@zed-industries/claude-code-acp`).
+O agente real e o adaptador ACP do Claude Code (`claude-agent-acp`, pacote npm oficial `@agentclientprotocol/claude-agent-acp`;
+os nomes `@zed-industries/*` estao depreciados e o `claude-agent-acp` sem escopo e um fork de terceiro).
 Enquanto ele nao estiver instalado, o perfil aparece como indisponivel com o motivo, e o agente de demonstracao (sem
 LLM, rotulado) permite exercitar o cockpit.
 """
@@ -31,7 +32,7 @@ class AgentProfile:
 
 def profiles() -> list[AgentProfile]:
     custom = os.environ.get("AGENT_BAR_COCKPIT_AGENT", "").strip()
-    real = tuple(custom.split()) if custom else ("claude-code-acp",)
+    real = tuple(custom.split()) if custom else ("claude-agent-acp",)
     return [
         AgentProfile("claude", "Claude Code (ACP)", real),
         AgentProfile("demo", "Demonstração (sem LLM)", (sys.executable, "-m", "agent_bar.cockpit.demo_agent"), demo=True),
