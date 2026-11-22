@@ -278,7 +278,9 @@ def test_github_without_any_read_explains_with_gh_auth_status():
     assert st.level is Level.YELLOW and "GraphQL: boom" in st.detail
 
 
-def test_snapshot_end_to_end_has_only_live_sources_and_no_secrets():
+def test_snapshot_end_to_end_has_only_live_sources_and_no_secrets(monkeypatch):
+    monkeypatch.setattr(col.shutil, "which", lambda name: f"C:/npm/{name}.cmd")        # CLI "instalada" sem depender do PATH da maquina (o CI nao tem claude)
+
     def gh(args):
         if args[:2] == ["api", "graphql"]:
             return 0, gql({"Ready": 5, "In Progress": 8, "Blocked": 3, "Done": 26})
