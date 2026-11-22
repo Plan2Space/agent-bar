@@ -256,3 +256,52 @@ def test_tool_content_is_truncated():
     big = [{"type": "content", "content": {"type": "text", "text": "x" * 9000}}]
     text = W.content_text(big)
     assert text.startswith("x" * 8000) and "truncado: 1000" in text
+
+
+class InstantClient:
+    """Cliente que responde antes do add_done_callback: os chunks vem de OUTRA thread (como o loop do ACP) e o future
+    ja esta pronto quando a UI anexa o callback. Reproduz, sem sorte, a corrida em que o "done" passava na frente."""
+
+    def __init__(self, argv, cwd, *, on_update=None, **kw):
+        import concurrent.futures as cf
+        self._cf = cf
+        self.on_update = on_update
+        self.config_options = []
+
+    def connect(self, resume_session=None):
+        f = self._cf.Future()
+        f.set_result({"agent": {}, "session_id": "s-i", "modes": {}, "loaded": False})
+        return f
+
+    def prompt(self, text):
+        import threading
+        t = threading.Thread(target=lambda: [self.on_update(Update("agent_message_chunk", "s-i",
+                                                                    {"content": {"type": "text", "text": f"p{i} "}}))
+                                             for i in range(5)])
+        t.start()
+        t.join()
+        f = self._cf.Future()
+        f.set_result("end_turn")
+        return f
+
+    def cancel(self):
+        return self._cf.Future()
+
+    def close(self, grace_s=0):
+        f = self._cf.Future()
+        f.set_result(None)
+        return f
+
+
+def test_an_agent_that_answers_before_the_callback_is_attached_still_delivers_the_whole_turn(app, tmp_path):
+    os.environ["AGENT_BAR_COCKPIT_DATA"] = str(tmp_path / "data")
+    (tmp_path / "ws1").mkdir()
+    prof = AgentProfile("stub", "Stub", (sys.executable, "-c", "pass"))
+    view = ChatView(ChatStore(tmp_path / "data"), client_factory=InstantClient, profiles_fn=lambda: [prof],
+                    workspaces_fn=lambda: [tmp_path / "ws1"])
+    try:
+        turn(app, view, "oi")
+        assert [m["role"] for m in view.chat.messages] == ["user", "agent"]
+        assert view.chat.messages[1]["text"] == "p0 p1 p2 p3 p4 "
+    finally:
+        dispose(view)
