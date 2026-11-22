@@ -9,7 +9,7 @@ import logging
 from collections.abc import Callable
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QTimer, Signal
+from PySide6.QtCore import QObject, Qt, QTimer, Signal
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QComboBox,
@@ -108,10 +108,14 @@ class ChatView(QWidget):
         self._turn_text: list[str] = []
         self._turn_thought: list[str] = []
         self.bridge = _Bridge()
-        self.bridge.update.connect(self._on_update)
-        self.bridge.permission.connect(self._on_permission)
-        self.bridge.done.connect(self._on_done)
-        self.bridge.exited.connect(self._on_exit)
+        # SEMPRE pela fila de eventos, na ordem em que foram emitidos: se o agente responde rapido, o future ja esta pronto
+        # quando o add_done_callback e anexado e o callback roda na propria thread da UI; com AutoConnection o "done"
+        # virava chamada direta e passava na frente dos chunks ainda na fila (turno terminava sem o texto).
+        queued = Qt.ConnectionType.QueuedConnection
+        self.bridge.update.connect(self._on_update, queued)
+        self.bridge.permission.connect(self._on_permission, queued)
+        self.bridge.done.connect(self._on_done, queued)
+        self.bridge.exited.connect(self._on_exit, queued)
         self.flush_timer = QTimer(self)
         self.flush_timer.setSingleShot(True)
         self.flush_timer.setInterval(FLUSH_MS)
