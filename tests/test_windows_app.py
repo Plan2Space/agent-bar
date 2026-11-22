@@ -102,7 +102,7 @@ def test_launch_scripts_are_ascii_and_never_bypass_the_execution_policy(name):
 
 def test_install_shortcut_points_at_the_venv_pythonw_with_working_dir_and_icon():
     text = (ROOT / "launchers" / "install_shortcut.ps1").read_text(encoding="ascii")
-    for needle in ("Plan2Space Agent Bar.lnk", r".venv\Scripts\pythonw.exe", "WorkingDirectory", "IconLocation", "agent_bar.ico",
+    for needle in ("P2S Studio.lnk", r".venv\Scripts\pythonw.exe", "WorkingDirectory", "IconLocation", "agent_bar.ico",
                    "-m agent_bar.app"):
         assert needle in text
 
@@ -127,3 +127,115 @@ def test_local_env_fills_only_agent_bar_sources_and_never_overrides_the_environm
 def test_a_missing_local_env_changes_nothing(tmp_path):
     env: dict[str, str] = {}
     assert startup.load_local_env(tmp_path / "nope.env", env) == [] and env == {}
+
+
+def test_install_shortcut_removes_the_old_name_and_uninstall_covers_both():
+    install = (ROOT / "launchers" / "install_shortcut.ps1").read_text(encoding="ascii")
+    assert "Plan2Space Agent Bar.lnk" in install and "Remove-Item -LiteralPath $oldLnk" in install
+    assert install.index('"P2S Studio.lnk"') < install.index("$lnk.Save()")
+    uninstall = (ROOT / "launchers" / "uninstall_shortcut.ps1").read_text(encoding="ascii")
+    assert '"P2S Studio.lnk"' in uninstall and '"Plan2Space Agent Bar.lnk"' in uninstall
+
+
+def test_the_single_instance_key_did_not_change_with_the_rename():
+    """Versao antiga (chave plan2space-agent-bar) e nova precisam se excluir: renomear a chave deixaria as duas rodarem juntas."""
+    pytest.importorskip("PySide6.QtNetwork")
+    from agent_bar.single_instance import DEFAULT_KEY
+    assert DEFAULT_KEY == "plan2space-agent-bar"
+
+
+def test_running_instance_records_its_version_and_a_newer_checkout_is_detected(qapp, tmp_path):
+    from agent_bar.single_instance import SingleInstance
+    key = f"agent-bar-test-{uuid.uuid4().hex[:8]}"
+    old = SingleInstance(key, tmp_path, version="a" * 40)
+    assert old.acquire(on_activate=lambda: None) is True
+    assert old.running_info()["version"] == "a" * 40
+    same = SingleInstance(key, tmp_path, version="a" * 40)
+    newer = SingleInstance(key, tmp_path, version="b" * 40)
+    unknown = SingleInstance(key, tmp_path, version="")
+    assert same.acquire(on_activate=lambda: None, notify=False) is False and not same.newer_available()
+    assert newer.acquire(on_activate=lambda: None, notify=False) is False and newer.newer_available()
+    assert not unknown.newer_available()                                     # sem versao propria: nao sabe, nao pergunta
+    old.release()
+    assert not (tmp_path / f"{key}.json").exists()                           # quem sai apaga o proprio registro
+
+
+def test_quit_request_reaches_only_the_quit_handler_and_the_new_version_takes_over(qapp, tmp_path):
+    from agent_bar.single_instance import SingleInstance
+    key = f"agent-bar-test-{uuid.uuid4().hex[:8]}"
+    events = []
+    old = SingleInstance(key, tmp_path, version="a" * 40)
+
+    def old_quits():
+        events.append("quit")
+        old.release()                                                         # o que o close_app faz ao fechar o app
+    assert old.acquire(on_activate=lambda: events.append("activate"), on_quit=old_quits) is True
+    new = SingleInstance(key, tmp_path, version="b" * 40)
+    assert new.acquire(on_activate=lambda: None, notify=False) is False
+    assert new.send("quit") is True
+    assert _pump(qapp, lambda: events == ["quit"])
+    assert new.acquire(on_activate=lambda: None, notify=False) is True
+    assert new.running_info()["version"] == "b" * 40
+    new.release()
+
+
+def test_activate_is_still_the_default_message(qapp, tmp_path):
+    from agent_bar.single_instance import SingleInstance
+    key = f"agent-bar-test-{uuid.uuid4().hex[:8]}"
+    events = []
+    first = SingleInstance(key, tmp_path)
+    assert first.acquire(on_activate=lambda: events.append("activate"), on_quit=lambda: events.append("quit")) is True
+    second = SingleInstance(key, tmp_path)                                   # vivo ate a entrega (como o processo da 2a abertura)
+    assert second.acquire(on_activate=lambda: None) is False
+    assert _pump(qapp, lambda: events == ["activate"])                      # a sondagem ("ping") nao conta; o pedido conta uma vez
+    first.release()
+
+
+def test_checkout_version_is_the_commit_or_empty(tmp_path):
+    from agent_bar import startup
+    v = startup.checkout_version(ROOT)
+    assert v == "" or (len(v) == 40 and all(c in "0123456789abcdef" for c in v))
+    assert startup.checkout_version(tmp_path) == ""                          # pasta sem git: nao sabe
+    assert startup.checkout_version(ROOT, run=lambda *a, **k: (_ for _ in ()).throw(OSError("sem git"))) == ""
+
+
+OLD_INSTANCE = '''
+import os, sys
+os.environ["QT_QPA_PLATFORM"] = "offscreen"
+from pathlib import Path
+from PySide6.QtCore import QTimer
+from PySide6.QtWidgets import QApplication
+from agent_bar.single_instance import SingleInstance
+app = QApplication([])
+inst = SingleInstance(sys.argv[1], Path(sys.argv[2]), version="a" * 40)
+assert inst.acquire(on_activate=lambda: None, on_quit=lambda: (Path(sys.argv[2], "quit.marker").write_text("ok"), inst.release(), app.quit()))
+Path(sys.argv[2], "ready.marker").write_text("ok")
+QTimer.singleShot(30000, app.quit)
+app.exec()
+'''
+
+
+def test_a_newer_version_asks_a_real_older_process_to_quit_and_takes_over(qapp, tmp_path):
+    import subprocess
+    import sys
+    import time
+
+    from agent_bar.single_instance import SingleInstance
+    key = f"agent-bar-test-{uuid.uuid4().hex[:8]}"
+    script = tmp_path / "old_instance.py"
+    script.write_text(OLD_INSTANCE, encoding="utf-8")
+    old = subprocess.Popen([sys.executable, str(script), key, str(tmp_path)], cwd=ROOT)
+    try:
+        end = time.time() + 20
+        while time.time() < end and not (tmp_path / "ready.marker").exists():
+            time.sleep(0.05)
+        new = SingleInstance(key, tmp_path, version="b" * 40)
+        assert new.acquire(on_activate=lambda: None, notify=False) is False and new.newer_available()
+        assert new.send("quit")
+        got = _pump(qapp, lambda: new.acquire(on_activate=lambda: None, notify=False), secs=20)
+        assert got and (tmp_path / "quit.marker").exists()
+        assert old.wait(timeout=20) == 0
+        new.release()
+    finally:
+        if old.poll() is None:
+            old.kill()

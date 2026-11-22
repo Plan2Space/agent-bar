@@ -198,7 +198,7 @@ def test_button_copy_diagnostic_really_copies_and_verifies(gui):
     bar.on_snapshot(snap(tmp))
     bar.details.buttons["diag"].click()
     from PySide6.QtWidgets import QApplication
-    assert "&#10003;" in status(bar) and "Agent bar snapshot" in QApplication.clipboard().text()
+    assert "&#10003;" in status(bar) and "P2S Studio snapshot" in QApplication.clipboard().text()
 
 
 def test_button_refresh_confirms_only_when_a_new_snapshot_arrives(gui):

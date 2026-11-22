@@ -81,7 +81,7 @@ def mouse(kind, x, y, buttons=None):
 def test_titlebar_has_title_and_the_three_controls_with_explicit_tooltips(gui):  # noqa: F811
     bar, app, _ = gui
     tb = bar.details.titlebar
-    assert tb.title.text() == "Agent Control" and tb.height() == 30
+    assert tb.title.text() == "P2S Studio" and tb.height() == 30
     assert (tb.btn_min.text(), tb.btn_max.text(), tb.btn_close.text()) == ("—", "□", "✕")
     assert "SOMENTE o painel" in tb.btn_close.toolTip() and "coleta da barra continua" in tb.btn_close.toolTip()
 

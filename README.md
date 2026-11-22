@@ -1,4 +1,6 @@
-# agent-bar
+# P2S Studio
+
+> Nome do produto desde 2026-11-22 (escolha do Felipe). O repositório continua `Plan2Space/agent-bar` e o pacote Python, `agent_bar`.
 
 > **Conhecimento compartilhado:** skills reutilizáveis e contratos entre repositórios ficam em
 > `Plan2Space/claude-engineering-skills`; SPECs e testes da interface permanecem aqui.
@@ -68,12 +70,12 @@ Feche e reabra a barra. Ao iniciar, ela confere o SHA instalado (`direct_url.jso
 ### Atalho na Área de Trabalho
 
 ```powershell
-powershell -NoProfile -File launchers\install_shortcut.ps1     # cria/recria "Plan2Space Agent Bar" apontando para ESTE checkout
+powershell -NoProfile -File launchers\install_shortcut.ps1     # cria/recria "P2S Studio" apontando para ESTE checkout (e remove o antigo "Plan2Space Agent Bar")
 powershell -NoProfile -File launchers\uninstall_shortcut.ps1   # remove só esse atalho
 ```
 
 - O atalho roda o `pythonw.exe` do `.venv` deste checkout, sem console. A pasta de trabalho é o checkout e o ícone é `launchers\agent_bar.ico` (gerado por `launchers\make_icon.py`). Sem `.venv`, o script recusa e explica como criar.
-- **Uma barra por usuário:** abrir de novo traz a barra existente para a frente e abre o painel.
+- **Um P2S Studio por usuário:** abrir de novo traz o existente para a frente e abre o painel. Se o aberto for de um commit mais velho que o do checkout, aparece "versão nova disponível — fechar a antiga e abrir a nova?"; sim fecha a antiga normalmente (inclusive os agentes do cockpit) e abre a nova. A chave de instância única não mudou com o nome novo, então versão antiga e nova nunca rodam juntas.
 - **Log:** `%LOCALAPPDATA%\agent_bar\logs\agent_bar.log`. Se a barra falhar antes de aparecer, surge uma caixa de erro com o caminho do log.
 - **Fontes de dados da máquina** (EventStore, execuções do motor, board): `launchers\local.env`, fora do git. O modelo é `launchers\local.example.env`. Só valem chaves `AGENT_BAR_*` e `EVENT_STORE_DB_PATH`, e elas nunca sobrescrevem o ambiente.
 - Pelo Explorer também funciona `launchers\AGENT-BAR.cmd` (deste repositório).
