@@ -33,6 +33,7 @@ from PySide6.QtWidgets import (
 
 from agent_bar.cockpit import evidence as E
 from agent_bar.cockpit import gallery as G
+from agent_bar.cockpit.ui.design_view import DesignView
 from agent_bar.cockpit.ui.diff_panel import DiffPanel
 from agent_bar.cockpit.ui.github_tabs import BTN_CSS, COMBO_CSS, TEXT_CSS, TREE_CSS
 from agent_bar.cockpit.ui.human_panel import HumanPanel
@@ -98,31 +99,6 @@ class ImagePane(QWidget):
         self._fit()
 
 
-class CardView(QWidget):
-    """Um cartão da faixa (referência / último render / melhor conhecido): título, imagem e legenda ou motivo."""
-
-    def __init__(self, role: str) -> None:
-        super().__init__()
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(0, 0, 0, 0)
-        self.title = QLabel(role)
-        self.title.setStyleSheet("color:#9a9aa3;font-size:12px;font-weight:600")
-        self.pane = ImagePane()
-        self.pane.setMinimumSize(220, 120)
-        self.pane.image.setMinimumSize(220, 110)
-        lay.addWidget(self.title)
-        lay.addWidget(self.pane, 1)
-        self.card: G.Card | None = None
-
-    def show_card(self, card: G.Card) -> None:
-        self.card = card
-        img = card.image
-        if img is None:
-            self.pane.show_image(card.text, None, card.text if card.item is None else "nenhuma imagem com sha256 conferido")
-        else:
-            self.pane.show_image(f"{card.text}\n{img.key} @ {img.sha256[:12]}…", img.path)
-
-
 class ReviewTab(QWidget):
     run_selected = Signal()                                                     # (a, b) mudou: relatório/pacotes ouvem
 
@@ -159,26 +135,33 @@ class ReviewTab(QWidget):
             w.setStyleSheet(COMBO_CSS)
         self.reload_btn = QPushButton("Recarregar")
         self.reload_btn.setStyleSheet(BTN_CSS)
-        for cap, w, s in (("Cômodo", self.room_box, 2), ("Run A", self.a_box, 3), ("Run B", self.b_box, 3)):
-            lb = QLabel(cap)
-            lb.setStyleSheet("color:#8f8f98;font-size:11px")
-            head.addWidget(lb)
-            head.addWidget(w, s)
+        lb = QLabel("Cômodo")
+        lb.setStyleSheet("color:#8f8f98;font-size:12px")
+        head.addWidget(lb)
+        head.addWidget(self.room_box, 3)
+        head.addStretch(4)
         head.addWidget(self.reload_btn)
         lay.addLayout(head)
+        # S01C-F1-04: a tela principal é a Galeria de design; o resto fica em Detalhes técnicos
+        self.pages = QTabWidget()
+        self.design = DesignView()
+        self.pages.addTab(self.design, "Galeria de design")
+        tech = QWidget()
+        lay_tech = QVBoxLayout(tech)
+        lay_tech.setContentsMargins(0, 4, 0, 0)
+        self.pages.addTab(tech, "Detalhes técnicos")
+        lay.addWidget(self.pages, 1)
+        pair = QHBoxLayout()
+        for cap, w in (("Run A", self.a_box), ("Run B", self.b_box)):
+            lbl = QLabel(cap)
+            lbl.setStyleSheet("color:#8f8f98;font-size:11px")
+            pair.addWidget(lbl)
+            pair.addWidget(w, 1)
+        lay_tech.addLayout(pair)
         self.source = QLabel("")
         self.source.setWordWrap(True)
         self.source.setStyleSheet("color:#8f8f98;font-size:11px")
-        lay.addWidget(self.source)
-        strip = QHBoxLayout()                                                   # S01C-F1-04: faixa de 3 cartões
-        self.card_views = {role: CardView(role) for role in ("referência", "último render", "melhor conhecido")}
-        for cv in self.card_views.values():
-            strip.addWidget(cv, 1)
-        strip_box = QWidget()
-        strip_box.setLayout(strip)
-        strip_box.setMaximumHeight(210)
-        strip.setContentsMargins(0, 0, 0, 0)
-        lay.addWidget(strip_box)
+        lay_tech.addWidget(self.source)
         split = QSplitter(Qt.Orientation.Horizontal)
         left = QWidget()
         ll = QVBoxLayout(left)
@@ -236,7 +219,8 @@ class ReviewTab(QWidget):
             self.details.addTab(w, title)
         vsplit.addWidget(self.details)
         vsplit.setSizes([470, 230])
-        lay.addWidget(vsplit, 1)
+        lay_tech.addWidget(vsplit, 1)
+        self.design.open_technical.connect(self.show_technical)
         self.reload_btn.clicked.connect(self.reload)
         self.room_box.activated.connect(lambda _i: self._fill_runs())
         self.a_box.activated.connect(lambda _i: self._compare())
@@ -459,8 +443,18 @@ class ReviewTab(QWidget):
         self.reports.setHtml(self._verdict_html(a) + "<hr>" + self._verdict_html(b))
 
     def _cards(self) -> None:
-        for card in G.cards(self.gallery_items(), self.evaluations_for):
-            self.card_views[card.role].show_card(card)
+        self.design.set_items(self.gallery_items(), self.evaluations_for)
+
+    def show_technical(self, item_id: str) -> None:
+        """Do item da galeria de design para os Detalhes técnicos dele (relatórios, manifest, hashes)."""
+        self.pages.setCurrentIndex(1)
+        self.details.setCurrentWidget(self.gallery_view)
+        t = self.gallery_tree
+        row = next((t.topLevelItem(i) for i in range(t.topLevelItemCount())
+                    if t.topLevelItem(i).data(0, Qt.ItemDataRole.UserRole) == item_id), None)
+        if row is not None:
+            t.setCurrentItem(row)
+            t.scrollToItem(row)
 
     def _history(self) -> None:
         """Histórico do cômodo, mais recente primeiro: runs da galeria (todas as fontes) e, depois, as etapas do evidence
@@ -581,5 +575,6 @@ class ReviewTab(QWidget):
         self.gallery_pane.show_image(li.text(), Path(li.data(Qt.ItemDataRole.UserRole)))
 
     def shutdown(self) -> None:
+        self.design.shutdown()
         if self._own_pool:
             self.pool.shutdown(wait=True, cancel_futures=True)
