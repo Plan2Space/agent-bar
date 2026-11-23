@@ -74,9 +74,11 @@ def _run_gui(ns: argparse.Namespace, log: logging.Logger) -> int:
             if not _replace_older_instance(app, instance, activate, quit_for_update, log):
                 return 0
         app.aboutToQuit.connect(instance.release)
-    bar = Bar(cfg.load())
+    core = build_core(cfg.load())
+    bar = Bar(core.settings, core=core)
     if instance is not None:
         holder["bar"] = bar
+    core.start()
     bar.show()
     log.info("barra visivel em %s,%s (%sx%s)", bar.x(), bar.y(), bar.width(), bar.height())
     if ns.open_panel:
@@ -101,6 +103,15 @@ def _run_gui(ns: argparse.Namespace, log: logging.Logger) -> int:
         delay = os.environ.get("AGENT_BAR_SCREENSHOT_DELAY_S", "7")                # coletas em fundo (aprovacoes) podem pedir mais tempo
         QTimer.singleShot(int(float(delay) * 1000) if delay.replace(".", "", 1).isdigit() else 7000, shot)
     return app.exec()
+
+
+def build_core(settings):
+    """UX-01: o núcleo sem janela. O aviso "PR precisa de você" vira item em Notificações no mesmo SQLite que a aba
+    Notificações do Cockpit lê (`<dados do cockpit>/permissions.sqlite`)."""
+    from agent_bar.cockpit.notifications import NotificationCenter
+    from agent_bar.cockpit.store import data_dir
+    from agent_bar.core import AppCore
+    return AppCore(settings, center=NotificationCenter(data_dir() / "permissions.sqlite"))
 
 
 def _replace_older_instance(app, instance, activate, quit_for_update, log: logging.Logger) -> bool:
