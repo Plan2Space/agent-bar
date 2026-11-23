@@ -37,7 +37,7 @@ class Step:
     elapsed_s: float | None
 
 
-GEOMETRY_MAJORS = ("1", "2")             # C4 v1 (evidencias antigas) e v2 (P2S-CONTRACTS 2.0 §10: walls.footprint + continuity)
+GEOMETRY_MAJORS = ("1", "2")             # C4 v1 (evidencias antigas) e v2 (walls.footprint + continuity); versao da SPEC no contracts.lock
 
 
 @dataclass(frozen=True)

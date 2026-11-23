@@ -1,0 +1,47 @@
+{
+ "schema": "p2s.contracts-lock.v1",
+ "specs_repo": "Plan2Space/engineering-specs",
+ "note": "SPECs que o agent-bar consome, por commit imutavel + sha256 do arquivo naquele commit. O CI confere os MAJOR que o codigo aceita contra este arquivo (o repo de SPECs e privado); `python -m agent_bar.contracts_lock --specs <checkout>` confere hash e drift contra um checkout local.",
+ "consumes": [
+  {
+   "spec": "plan2space/P2S-CONTRACTS-v1.md",
+   "version": "2.3.0",
+   "ref": "main",
+   "commit": "7ae2341eb85dc1ef4220aa31752f48fd6d837354",
+   "sha256": "495527540eab9788da2e41efdabb22446ec14a195995ef440a872f88de5c8b30",
+   "contracts": {"C3": "1", "C4": "2"},
+   "reader": "agent_bar/runs.py",
+   "compat": "MAJOR igual e aceito pelo codigo; MINOR/PATCH novo e aditivo (campo desconhecido e ignorado)"
+  },
+  {
+   "spec": "agent-bar/AGENT-BAR-COCKPIT-ACP.md",
+   "version": "F7",
+   "ref": "main",
+   "commit": "d186122b81db3691f4ac429b3cd0d0e973eda43d",
+   "sha256": "2cdb0da6f9baccf74a901afa6d9e2a18d67c947c24a8de64240ab2e8d755e193",
+   "contracts": {},
+   "reader": "agent_bar/cockpit",
+   "compat": "SPEC de produto: mudanca aqui pede PR no agent-bar"
+  },
+  {
+   "spec": "agent-bar/P2S-STUDIO-MULTI-AGENT-PLATFORM.md",
+   "version": "PROPOSED 2026-11-22",
+   "ref": "main",
+   "commit": "a127d008cd877588eae43d97f35d1caf4e3e4e4c",
+   "sha256": "93303f44a17c669ce019890ac580eb8637c2a455be7b96e557de6d804904b82b",
+   "contracts": {"provider": "1", "model": "1", "session": "1"},
+   "reader": "agent_bar/platform",
+   "compat": "schemas v1 publicados em agent_bar/platform/schemas; mudanca incompativel = v2 + migracao"
+  },
+  {
+   "spec": "agent-bar/P2S-STUDIO-WORKSPACE-UX.md",
+   "version": "PROPOSED 2026-11-22",
+   "ref": "develop",
+   "commit": "58c4ffe7bad7ee9790140cc49e0a7ddca6c1597f",
+   "sha256": "ae0e00568b821510bafb8638a8021c0f44241e58cd12f4b59dc4ce27cdbb519f",
+   "contracts": {},
+   "reader": "agent_bar/cockpit",
+   "compat": "SPEC de produto (es#58, ainda so na develop)"
+  }
+ ]
+}
