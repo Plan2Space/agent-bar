@@ -33,6 +33,7 @@ from PySide6.QtWidgets import (
 
 from agent_bar.cockpit import evidence as E
 from agent_bar.cockpit import gallery as G
+from agent_bar.cockpit import review_comments as RC
 from agent_bar.cockpit.ui.design_view import DesignView
 from agent_bar.cockpit.ui.diff_panel import DiffPanel
 from agent_bar.cockpit.ui.github_tabs import BTN_CSS, COMBO_CSS, TEXT_CSS, TREE_CSS
@@ -101,12 +102,17 @@ class ImagePane(QWidget):
 
 class ReviewTab(QWidget):
     run_selected = Signal()                                                     # (a, b) mudou: relatório/pacotes ouvem
+    request_chat = Signal(str, str)                                             # workspace, pedido (o envio é manual)
 
     def __init__(self, root_fn: Callable[[], Path] = E.evidence_dir,
                  load_fn: Callable[[Path], E.Catalog] = E.load_catalog,
                  executor: ThreadPoolExecutor | None = None, report_store=None, package_writer=None,
-                 gallery_fn: Callable[[E.Catalog | None], G.Gallery] | None = G.build_gallery) -> None:
+                 gallery_fn: Callable[[E.Catalog | None], G.Gallery] | None = G.build_gallery,
+                 comment_store: RC.CommentStore | None = None) -> None:
         super().__init__()
+        self.comment_store = comment_store or RC.CommentStore(
+            protected=(E.evidence_dir(), G.engine_dir(), G.library_dir()))
+        self.last_comment: RC.ReviewComment | None = None
         self.gallery_fn = gallery_fn
         self.evaluations_for: Callable[[G.GalleryItem], list] = lambda _item: []   # S01C-F1-05 preenche
         self.gallery: G.Gallery | None = None
@@ -221,6 +227,7 @@ class ReviewTab(QWidget):
         vsplit.setSizes([470, 230])
         lay_tech.addWidget(vsplit, 1)
         self.design.open_technical.connect(self.show_technical)
+        self.design.comment_requested.connect(self.comment_to_chat)
         self.reload_btn.clicked.connect(self.reload)
         self.room_box.activated.connect(lambda _i: self._fill_runs())
         self.a_box.activated.connect(lambda _i: self._compare())
@@ -444,6 +451,30 @@ class ReviewTab(QWidget):
 
     def _cards(self) -> None:
         self.design.set_items(self.gallery_items(), self.evaluations_for)
+
+    def comment_to_chat(self, text: str) -> None:
+        """S01C-F1-11: o comentário vira item R41 (sem triagem) com o run, a câmera e a comparação visíveis, e o Chat
+        abre preenchido com esse contexto estruturado. Nada é enviado sozinho."""
+        d = self.design
+        vis = d.visible()
+        if vis is None:
+            d.comment_status.setText("escolha um render no histórico antes de comentar")
+            return
+        item, image, compared = vis
+        try:
+            c = RC.new_comment(text, item, image, reference=d.reference, compared=compared)
+            request = RC.chat_request(c)
+            self.comment_store.save(c)
+        except (RC.CommentRejected, E.EvidenceError, OSError) as exc:
+            d.comment_status.setText(f"comentário não registrado: {exc}")
+            return
+        self.last_comment = c
+        engine = G.engine_dir()
+        ws = str(engine) if (engine / ".git").exists() else ""
+        d.comment.clear()
+        d.comment_status.setText(f"comentário {c.id} registrado (R41, sem triagem) sobre {item.item_id} · câmera "
+                                 f"{image.key}. O Chat abriu com o pedido; envie quando quiser.")
+        self.request_chat.emit(ws, request)
 
     def show_technical(self, item_id: str) -> None:
         """Do item da galeria de design para os Detalhes técnicos dele (relatórios, manifest, hashes)."""

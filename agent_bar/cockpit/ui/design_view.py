@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QListView,
     QListWidget,
     QListWidgetItem,
@@ -166,6 +167,7 @@ class BigCard(QFrame):
 
 class DesignView(QWidget):
     open_technical = Signal(str)                                                # item_id: abrir em Detalhes técnicos
+    comment_requested = Signal(str)                                             # texto: comentar o que está na tela
 
     def __init__(self) -> None:
         super().__init__()
@@ -175,6 +177,7 @@ class DesignView(QWidget):
         self.evaluations_for: Callable[[G.GalleryItem], Sequence] = lambda _i: []
         self.enlarged: QDialog | None = None
         self.compared: tuple[G.GalleryItem, G.GalleryItem] | None = None
+        self.compared_images: tuple[G.GalleryImage, G.GalleryImage] | None = None
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         cards = QHBoxLayout()
@@ -235,6 +238,23 @@ class DesignView(QWidget):
         cl.addLayout(panes, 1)
         self.compare.hide()
         bl.addWidget(self.compare, 1)
+        row = QHBoxLayout()                                                       # S01C-F1-11: comentário → Chat
+        self.comment = QLineEdit()
+        self.comment.setPlaceholderText("Comente o que está na tela (ex.: gostei mais da iluminação anterior, mas quero "
+                                        "o edredom mais natural)")
+        self.comment.setStyleSheet("QLineEdit{background:#17171a;color:#e6e6ea;border:1px solid #2a2a30;padding:6px;"
+                                   "font-size:12px}")
+        self.comment_btn = QPushButton("Levar ao Chat (sem enviar)")
+        self.comment_btn.setStyleSheet(BTN_CSS)
+        row.addWidget(self.comment, 1)
+        row.addWidget(self.comment_btn)
+        bl.addLayout(row)
+        self.comment_status = QLabel("")
+        self.comment_status.setWordWrap(True)
+        self.comment_status.setStyleSheet(MUTED_CSS)
+        bl.addWidget(self.comment_status)
+        self.comment_btn.clicked.connect(lambda: self.comment_requested.emit(self.comment.text()))
+        self.comment.returnPressed.connect(lambda: self.comment_requested.emit(self.comment.text()))
         split.addWidget(bottom)
         split.setSizes([330, 520])
         lay.addWidget(split, 1)
@@ -256,6 +276,7 @@ class DesignView(QWidget):
         self._fill_history()
         self.compare.hide()
         self.compared = None
+        self.compared_images = None
 
     def _fill_cards(self) -> None:
         ref = self.reference
@@ -348,6 +369,7 @@ class DesignView(QWidget):
         if img_a is None or img_b is None:
             return
         self.compared = (a, b)
+        self.compared_images = (img_a, img_b)
         self.left_cap.setText(f"{a.when()} · {a.item_id}\ncâmera {img_a.key} · {source_text(a)}")
         self.right_cap.setText(f"{b.when()} · {b.item_id}\n{'referência' if b.source == G.REFERENCE else 'câmera'} "
                                f"{img_b.key} · {source_text(b)}")
@@ -355,6 +377,17 @@ class DesignView(QWidget):
         self.right.set_image(img_b.path)
         self.compare_label.setText(compare_label(a, b, img_a, img_b))
         self.compare.show()
+
+    def visible(self) -> tuple[G.GalleryItem, G.GalleryImage, tuple[G.GalleryItem, G.GalleryImage] | None] | None:
+        """O que está na tela: o run selecionado, o quadro mostrado e, se a comparação dele estiver aberta, o outro lado."""
+        it = self.selected()
+        if it is None:
+            return None
+        if self.compared and self.compared_images and self.compare.isVisibleTo(self) \
+                and self.compared[0].item_id == it.item_id:
+            return it, self.compared_images[0], (self.compared[1], self.compared_images[1])
+        img = G.primary_image(it)
+        return (it, img, None) if img is not None else None
 
     def _enlarge_item(self, item: G.GalleryItem | None) -> None:
         img = G.primary_image(item) if item is not None else None
