@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+    types: [opened, synchronize, reopened, edited]                  # edited: colar o bloco do gate re-roda o check
 
 permissions:
   contents: read
@@ -22,6 +23,8 @@ jobs:
       PYTHONUTF8: "1"
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0                                            # o review-gate compara base...head
       - uses: astral-sh/setup-uv@v5
         with:
           python-version: ${{ matrix.python-version }}
@@ -35,3 +38,7 @@ jobs:
       - name: Test
         run: uv run pytest -q
         timeout-minutes: 15
+      # H-013: PR que toca a Revisao visual traz o resultado dos testes com o evidence REAL (privado), travado no HEAD
+      - name: Review gate (evidence real, local)
+        if: github.event_name == 'pull_request'
+        run: uv run python -m agent_bar.review_gate check-pr
