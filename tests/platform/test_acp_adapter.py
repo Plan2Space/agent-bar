@@ -163,3 +163,18 @@ def test_image_blocks_reach_an_agent_that_announces_prompt_image(tmp_path):
 
 def test_contract_passes_with_an_agent_that_takes_images(tmp_path):
     assert run_contract(lambda env: make(tmp_path, {**env, "AGENT_BAR_FAKE_IMAGES": "1"}), CTX, only=("images",)) == {}
+
+
+def test_usage_update_from_the_agent_becomes_a_usage_event(tmp_path):
+    from agent_bar.platform.usage import UsageSnapshot
+    a = make(tmp_path)
+    a.connect()
+    try:
+        sid = a.create_session(SessionRequest())["session_id"]
+        ev: list[AgentEvent] = []
+        a.send_prompt(sid, "usage", ev.append).result(20)
+        snaps = [UsageSnapshot.from_dict(e.data) for e in ev if e.kind == "usage"]
+        assert [s.context_used.value for s in snaps] == [41200, 41950]
+        assert snaps[-1].cost_api_equivalent_usd.state == "ESTIMATED" and snaps[0].cost_api_equivalent_usd.state == "UNAVAILABLE"
+    finally:
+        a.disconnect()

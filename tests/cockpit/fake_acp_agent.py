@@ -159,6 +159,11 @@ def handle_prompt(rid: int, params: dict) -> None:
         chunk(sid, "slept")
     elif word == "unknown":
         update(sid, {"sessionUpdate": "something_new", "x": 1})
+    elif word == "usage":                                    # F6: como o claude-agent-acp informa uso
+        update(sid, {"sessionUpdate": "usage_update", "used": 41200, "size": 200000})
+        chunk(sid, "ok")
+        update(sid, {"sessionUpdate": "usage_update", "used": 41950, "size": 200000,
+                     "cost": {"amount": 0.0312, "currency": "USD"}})
     elif word == "askfs":
         res = ask("fs/read_text_file", {"sessionId": sid, "path": "C:/x.txt"})
         chunk(sid, json.dumps(res.get("error", {}).get("code")))

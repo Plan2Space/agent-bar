@@ -228,7 +228,7 @@ class AsyncRuntime:
 
 UPDATE_KINDS = frozenset({"agent_message_chunk", "agent_thought_chunk", "user_message_chunk", "tool_call",
                           "tool_call_update", "plan", "current_mode_update", "available_commands_update",
-                          "config_option_update"})
+                          "config_option_update", "usage_update"})
 
 
 @dataclass(frozen=True)

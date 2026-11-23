@@ -484,3 +484,14 @@ def test_the_card_shows_agent_text_literally_and_never_as_html(app, tmp_path):
         card.deleteLater()
     finally:
         dispose(view)
+
+
+def test_usage_line_shows_acp_context_and_cost_as_api_equivalent(app, tmp_path):
+    view, _ = make_view(app, tmp_path)
+    try:
+        turn(app, view, "usage")
+        assert wait(app, lambda: "custo" in view.usage_label.text())
+        assert view.usage_label.text() == ("contexto 42k/200k (medido) · custo equivalente de API US$ 0.03 "
+                                           "(estimado, não é fatura)")
+    finally:
+        dispose(view)

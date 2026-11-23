@@ -91,8 +91,12 @@ class FakeOllama:
                     else:
                         for part in ("o", "k"):
                             line({"model": model, "message": {"role": "assistant", "content": part}, "done": False})
-                    line({"model": model, "message": {"role": "assistant", "content": ""}, "done": True,
-                          "done_reason": "stop"})
+                    final = {"model": model, "message": {"role": "assistant", "content": ""}, "done": True,
+                             "done_reason": "stop", "prompt_eval_count": 13, "prompt_eval_cached_count": 0,
+                             "eval_count": 2}
+                    if "semcontagem" in last:                         # servidor que nao manda os contadores
+                        final = {k: v for k, v in final.items() if not k.endswith("_count")}
+                    line(final)
                 except (ConnectionError, OSError):
                     outer.aborted += 1                                       # o cliente fechou: geracao interrompida
 
