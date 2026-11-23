@@ -6,11 +6,17 @@ WAL mode. Missing contracts are reported as unavailable, never inferred.
 from __future__ import annotations
 
 import os
+import re
 import sqlite3
 import time
 from contextlib import closing
 from dataclasses import dataclass, field
 from pathlib import Path
+
+from agent_bar.store_reader import redact_secrets
+
+# A janela de 8 KiB pode comecar no meio de uma chave PEM: o BEGIN fica de fora e o corpo apareceria cru.
+_PEM_TAIL = re.compile(r"\A[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----")
 
 
 @dataclass(frozen=True)
@@ -91,7 +97,9 @@ def _safe_tail(raw: str | None, root: Path, max_bytes: int = 8192) -> list[str]:
             size = stream.tell()
             stream.seek(max(0, size - max_bytes))
             data = stream.read(max_bytes)
-        lines = data.decode("utf-8", errors="replace").splitlines()
+        # redige o bloco inteiro ANTES de quebrar em linhas: uma chave PEM ocupa varias linhas
+        text = redact_secrets(_PEM_TAIL.sub("<segredo>", data.decode("utf-8", errors="replace")))
+        lines = text.splitlines()
         return (lines[1:] if size > max_bytes else lines)[-30:]
     except (OSError, ValueError):
         return []
@@ -127,11 +135,11 @@ def collect_observation(*, db_path: Path | None = None, now: float | None = None
                 "SELECT status, COUNT(*) n FROM events GROUP BY status")}
             result.outbox_pending = db.execute(
                 "SELECT COUNT(*) FROM outbox WHERE status='PENDING'").fetchone()[0]
-            result.timeline = [TimelineEntry(*row) for row in db.execute(
+            result.timeline = [TimelineEntry(*row[:4], redact_secrets(row[4])) for row in db.execute(
                 """SELECT t.at, e.event_type, e.job_id, t.to_status, COALESCE(t.detail, '')
                    FROM transitions t JOIN events e ON e.id=t.event_id
                    ORDER BY t.id DESC LIMIT 60""").fetchall()]
-            result.tasks = [TaskEntry(*row) for row in db.execute(
+            result.tasks = [TaskEntry(*row[:8], redact_secrets(row[8])) for row in db.execute(
                 """SELECT id, event_type, job_id, status, attempt, max_attempts,
                           parent_event_id, lease_until, COALESCE(error, '')
                    FROM events WHERE status IN ('PENDING','RUNNING','DLQ')
@@ -139,7 +147,7 @@ def collect_observation(*, db_path: Path | None = None, now: float | None = None
             result.runs = [RunEntry(*row) for row in db.execute(
                 """SELECT agent,pid,started_at,ended_at,outcome,stdout_path,stderr_path
                    FROM subprocess_runs ORDER BY id DESC LIMIT 12""").fetchall()]
-            result.pipeline = [TimelineEntry(*row) for row in db.execute(
+            result.pipeline = [TimelineEntry(*row[:4], redact_secrets(row[4])) for row in db.execute(
                 """SELECT created_at,event_type,job_id,status,COALESCE(error, '')
                    FROM events WHERE event_type IN
                    ('PR_OPENED','PR_HEAD_UPDATED','CI_PASSED','CI_FAILED',
