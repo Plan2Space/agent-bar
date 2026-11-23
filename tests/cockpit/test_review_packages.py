@@ -172,7 +172,7 @@ def test_window_puts_the_request_in_the_chat_and_does_not_send(env, tmp_path):
                         workspaces_fn=lambda: [tmp_path / "x"])
     try:
         win.open_correction(str(ws), "# Pedido de correção — teste")
-        assert win.tabs.currentWidget() is win.chat and win.chat.workspace() == str(ws)
+        assert win.tabs.currentWidget() is win.sessions and win.chat.workspace() == str(ws)
         assert win.chat.input.toPlainText() == "# Pedido de correção — teste" and win.chat.chat.messages == []
     finally:
         win.shutdown()
