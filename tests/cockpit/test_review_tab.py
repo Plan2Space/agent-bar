@@ -303,3 +303,59 @@ def test_cards_follow_the_evaluation_hook(tmp_path):
         assert row[7] == "1 avaliação(ões)"
     finally:
         dispose(tab)
+
+
+# --------------------------------------------------------------------------- S01C-F1-05: avaliações por rubrica v1
+def test_evaluations_tab_shows_scores_per_criterion_and_low_confidence_for_qwen(tmp_path):
+    from agent_bar.cockpit import evaluations as V
+    from agent_bar.cockpit import gallery as G
+    from tests.cockpit.gallery_fixture import OK_RENDER, build_all
+    from tests.cockpit.test_evaluations import QWEN, SCORES
+    ev_root, engine, dl = build_all(tmp_path)
+    g = G.build_gallery(E.load_catalog(ev_root, expected={}), engine, dl, rooms=[("planta_x", "quarto")])
+    item, ref = g.get(OK_RENDER), next(r for r in g.of("planta_x", "quarto", sources=[G.REFERENCE]) if r.images)
+    store = V.EvaluationStore(tmp_path / "data", protected=(ev_root, engine, dl))
+    store.save(V.new_evaluation(item, QWEN, reference=ref, camera="dia_cama_3q", scores=SCORES,
+                                image_shas=[item.images[0].sha256]), item)
+    tab = ReviewTab(root_fn=lambda: ev_root, load_fn=lambda r: E.load_catalog(r, expected={}),
+                    gallery_fn=lambda cat: G.build_gallery(cat, engine, dl, rooms=[("planta_x", "quarto")]),
+                    evaluation_store=store)
+    tab.resize(1200, 800)
+    tab.reload()
+    try:
+        assert wait(lambda: tab.gallery_tree.topLevelItemCount() > 0)
+        t = tab.gallery_tree
+        t.setCurrentItem(next(t.topLevelItem(i) for i in range(t.topLevelItemCount())
+                              if t.topLevelItem(i).text(3) == OK_RENDER))
+        text = tab.evaluations_view.toPlainText()
+        assert "1 avaliação(ões) válida(s)" in text and "qwen2.5vl:7b" in text and "confiança baixa" in text
+        assert "Iluminação: 4/5 — luz quente de entardecer no lado esquerdo; sanca acesa" in text
+        assert item.images[0].ident in text and "/100" not in text
+        row = next(r for r in history_rows(tab) if r[2] == OK_RENDER)
+        assert row[7] == "1 avaliação(ões)"
+        assert tab.card_views["melhor conhecido"].card.text.startswith("inconclusivo")
+    finally:
+        dispose(tab)
+
+
+def test_window_wires_an_evaluation_store_in_app_data_protecting_the_sources(tmp_path, monkeypatch):
+    import sys
+
+    from PySide6.QtCore import QCoreApplication, QEvent
+
+    from agent_bar.cockpit.profiles import AgentProfile
+    from agent_bar.cockpit.ui.window import CockpitWindow
+    for var, name in (("AGENT_BAR_EVIDENCE_DIR", "ev"), ("AGENT_BAR_ENGINE_DIR", "motor"),
+                      ("AGENT_BAR_DESIGN_LIBRARY_DIR", "dl")):
+        monkeypatch.setenv(var, str(tmp_path / name))
+    stub = Path(__file__).with_name("fake_acp_agent.py")
+    win = CockpitWindow(repos=["o/r"], profiles_fn=lambda: [AgentProfile("stub", "Stub", (sys.executable, str(stub)))],
+                        workspaces_fn=lambda: [tmp_path / "x"], review_kwargs={"gallery_fn": None})
+    try:
+        store = win.review.evaluation_store
+        assert store.root == tmp_path / "cockpit-data" / "evaluations"
+        assert set(store.protected) == {tmp_path / "ev", tmp_path / "motor", tmp_path / "dl"}
+    finally:
+        win.shutdown()
+        win.deleteLater()
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)

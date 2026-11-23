@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from agent_bar.cockpit import evaluations as V
 from agent_bar.cockpit import evidence as E
 from agent_bar.cockpit import gallery as G
 from agent_bar.cockpit.ui.diff_panel import DiffPanel
@@ -129,10 +130,13 @@ class ReviewTab(QWidget):
     def __init__(self, root_fn: Callable[[], Path] = E.evidence_dir,
                  load_fn: Callable[[Path], E.Catalog] = E.load_catalog,
                  executor: ThreadPoolExecutor | None = None, report_store=None, package_writer=None,
-                 gallery_fn: Callable[[E.Catalog | None], G.Gallery] | None = G.build_gallery) -> None:
+                 gallery_fn: Callable[[E.Catalog | None], G.Gallery] | None = G.build_gallery,
+                 evaluation_store: V.EvaluationStore | None = None) -> None:
         super().__init__()
         self.gallery_fn = gallery_fn
-        self.evaluations_for: Callable[[G.GalleryItem], list] = lambda _item: []   # S01C-F1-05 preenche
+        self.evaluation_store = evaluation_store
+        self.evaluations_for: Callable[[G.GalleryItem], list] = (
+            (lambda item: evaluation_store.for_item(item)[0]) if evaluation_store is not None else (lambda _item: []))
         self.gallery: G.Gallery | None = None
         self.gallery_error = ""
         self.report_store = report_store
@@ -228,7 +232,10 @@ class ReviewTab(QWidget):
         self.human = HumanPanel(lambda: self.catalog.root if self.catalog else self.root_fn())
         self.human.report_fn = lambda: self.diff.report
         self.gallery_view = self._build_gallery()
-        for w, title in ((self.gallery_view, "Galeria (todas as fontes)"), (self.states, "Estados (separados)"),
+        self.evaluations_view = QTextBrowser()
+        self.evaluations_view.setStyleSheet(TEXT_CSS)
+        for w, title in ((self.gallery_view, "Galeria (todas as fontes)"), (self.evaluations_view, "Avaliações"),
+                         (self.states, "Estados (separados)"),
                          (self.reports, "Relatórios técnicos"),
                          (self.history, "Histórico do cômodo"), (self.absent, "Evidências ausentes"),
                          (self.diff, "Relatório de diferenças"), (self.packages, "Pacotes (Claude / GPT)"),
@@ -555,6 +562,7 @@ class ReviewTab(QWidget):
     def _show_gallery_item(self, row: QTreeWidgetItem | None) -> None:
         self.gallery_images.clear()
         it = self._gallery_item(row)
+        self._show_evaluations(it)
         if it is None:
             self.gallery_detail.setText("")
             self.gallery_pane.show_image("", None, "selecione um item da galeria")
@@ -572,6 +580,42 @@ class ReviewTab(QWidget):
             self.gallery_images.setCurrentRow(0)
         else:
             self.gallery_pane.show_image(it.item_id, None, "nenhuma imagem com sha256 conferido")
+
+    def _show_evaluations(self, item: G.GalleryItem | None) -> None:
+        """Avaliações do item selecionado na galeria (S01C-F1-05): por avaliador e por critério, com justificativa e
+        imagens por sha256. Sem 0–100 e sem soma: a nota ponderada depende da calibração aprovada (S01C-F1-06/15)."""
+        e = html.escape
+        if item is None:
+            self.evaluations_view.setHtml("<p>selecione um run na galeria</p>")
+            return
+        if self.evaluation_store is None:
+            self.evaluations_view.setHtml(f"<p>{e(item.item_id)}: registro de avaliações indisponível</p>")
+            return
+        ok, bad = self.evaluation_store.for_item(item)
+        rubric = V.CURRENT_RUBRIC
+        parts = [f"<h4>{e(item.item_id)} · rubrica {e(rubric.version)} · {len(ok)} avaliação(ões) válida(s)</h4>",
+                 f"<p style='color:#8f8f98'>{e(V.LABEL)}. Notas de 1 a 5 por critério; sem nota 0–100 até a "
+                 "calibração aprovada (S01C-F1-06).</p>"]
+        if not ok:
+            parts.append(f"<p>{e(G.NO_EVALUATION)}</p>")
+        labels = {c.key: c.label for c in rubric.criteria}
+        for ev in ok:
+            who = ev["evaluator"]
+            conf = " · <b>confiança baixa</b>" if ev.get("confidence") == "baixa" else ""
+            parts.append(f"<h4>{e(who['model'])} ({e(who['provider'])}, digest {e(str(who['digest'])[:16])}…, "
+                         f"versão {e(str(who['version']))}){conf}</h4>"
+                         f"<p>{e(ev['created_at'])} · câmera {e(ev['camera'])} · referência {e(ev['reference']['id'])} "
+                         f"@ {e(ev['reference']['sha256'][:12])}…</p><ul>")
+            for key in rubric.keys():
+                s = ev["scores"][key]
+                parts.append(f"<li><b>{e(labels[key])}</b>: {s['score']}/5 — {e(s['justification'])}</li>")
+            parts.append("</ul><p>imagens: " + "<br>".join(e(i.get("ident") or i["sha256"]) for i in ev["images"]) + "</p>")
+            if ev.get("limitations"):
+                parts.append("<p>limitações: " + "; ".join(e(x) for x in ev["limitations"]) + "</p>")
+        if bad:
+            parts.append("<p style='color:#ff9a9b'>recusadas (não entram na galeria): "
+                         + "<br>".join(e(b) for b in bad) + "</p>")
+        self.evaluations_view.setHtml("".join(parts))
 
     def _show_gallery_image(self, li: QListWidgetItem | None) -> None:
         if li is None:
