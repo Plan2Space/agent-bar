@@ -178,3 +178,24 @@ def test_empty_comment_does_not_open_the_chat(studio):
     d.comment_btn.click()
     _APP.processEvents()
     assert win.tabs.currentWidget() is win.review and "comentário vazio" in d.comment_status.text()
+
+
+def test_chat_context_never_states_an_unverified_pass_and_carries_the_vs_r1a_text(tmp_path):
+    from tests.cockpit.gallery_fixture import REPORT_FAIL, build_negatives
+    ev, engine, dl = build_negatives(tmp_path / "neg")
+    g = G.build_gallery(E.load_catalog(ev, expected={}), engine, dl, rooms=[(PLANT, ROOM)])
+    n1 = g.get(REPORT_FAIL)                                                       # manifest PASS, render_report FAIL
+    text = RC.chat_request(RC.new_comment(FELIPE, n1, n1.images[0], author="human"))
+    assert "render PASS" not in text and "geometria PASS" not in text
+    assert "não verificado" in text and "render_report diz FAIL" in text
+    assert G.UNPUBLISHED_NOTE in text
+    assert not RC.mentions_files(text)
+
+
+def test_missing_report_reason_reaches_the_chat_without_a_file_name(tmp_path):
+    from tests.cockpit.gallery_fixture import NO_REPORT, build_negatives
+    ev, engine, dl = build_negatives(tmp_path / "neg")
+    g = G.build_gallery(E.load_catalog(ev, expected={}), engine, dl, rooms=[(PLANT, ROOM)])
+    it = g.get(NO_REPORT)
+    text = RC.chat_request(RC.new_comment(FELIPE, it, it.images[0], author="human"))
+    assert "não verificado" in text and "render_report ausente" in text and not RC.mentions_files(text)

@@ -65,8 +65,25 @@ class ReviewComment:
         return asdict(self)
 
 
+_EXT = re.compile(r"\.(png|webp|jpe?g|json|skp|vrscene|md|log)\b", re.I)
+
+
+def technical(item: G.GalleryItem) -> str:
+    """Estado técnico que pode ir para o Chat: o veredito só se o run estiver VERIFICADO; senão o motivo (sem extensão
+    de arquivo, para o contexto continuar estruturado)."""
+    gaps = item.verification_gaps()
+    if gaps:
+        return "não verificado: " + _EXT.sub("", gaps[0])
+    return f"render {item.render_verdict or '—'}; geometria {item.build.get('geometria', '—')}"
+
+
+def _source(item: G.GalleryItem) -> str:
+    return f"motor: {G.UNPUBLISHED_NOTE}" if item.source == G.ENGINE else G.SOURCE_LABEL.get(item.source, item.source)
+
+
 def _run_ref(item: G.GalleryItem) -> dict:
-    return {"run_id": item.item_id, "source": item.source, "when": item.when(), "kind": item.kind,
+    return {"run_id": item.item_id, "source": item.source, "source_text": _source(item), "when": item.when(),
+            "kind": item.kind, "verified": item.verified, "technical": technical(item),
             "render": item.render_verdict or "", "geometry": item.build.get("geometria", "")}
 
 
@@ -106,8 +123,7 @@ def chat_request(c: ReviewComment) -> str:
         "",
         "Contexto (o que estava na tela):",
         f"- cômodo: {c.plant} / {c.room}",
-        f"- run visível: {r['run_id']} ({r['when']}; {G.SOURCE_LABEL.get(r['source'], r['source'])}; "
-        f"render {r['render'] or '—'}; geometria {r['geometry'] or '—'})",
+        f"- run visível: {r['run_id']} ({r['when']}; {r['source_text']}; {r['technical']})",
         f"- câmera: {c.camera} (quadro sha256 {c.image_sha256[:12]})",
     ]
     if c.compared_with:
