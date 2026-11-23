@@ -311,3 +311,80 @@ def test_a_single_rejected_frame_makes_the_run_unverified(tmp_path):
     assert len(it.images) == 1 and len(it.rejected) == 1
     assert not it.verified
     assert any("1 quadro(s) recusado(s)" in g for g in it.verification_gaps())
+
+
+# ------------------------------------------------------------- câmera da miniatura e da comparação (ordem fixa)
+def _img(k: str) -> G.GalleryImage:
+    return G.GalleryImage(k, Path(f"{k}.png"), "0" * 64, "r", f"views/{k}.png")
+
+
+def _run(run_id: str, *keys: str, source: str = G.PUBLISHED) -> G.GalleryItem:
+    return G.GalleryItem(source, PLANT, ROOM, run_id, "render", images=[_img(k) for k in keys])
+
+
+def test_thumbnail_shows_the_perspective_not_the_bench_close_up():
+    item = _run("x", "render_entardecer_close_banco", "render_entardecer_perspectiva")
+    assert G.primary_image(item).key == "render_entardecer_perspectiva"
+
+
+def test_thumbnail_order_is_fixed_and_does_not_depend_on_the_manifest_order():
+    import itertools
+    keys = ("render_entardecer_close_banco", "render_entardecer_frente", "render_entardecer_perspectiva",
+            "render_entardecer_r2_canto", "render_entardecer_close_cama", "perspectiva", "r2_canto")
+    picks = {G.primary_image(_run("x", *p)).key for p in itertools.permutations(keys)}
+    assert picks == {"render_entardecer_r2_canto"}                                # r2_canto primeiro, sempre
+    assert G.CAMERA_PREFERENCE == ("r2_canto", "perspectiva", "frente", "cama_3q")
+    rest = [G.primary_image(_run("x", *p)).key for p in itertools.permutations(
+        ("render_dia_close_painel", "render_dia_close_banco", "render_noite_close_banco"))]
+    assert set(rest) == {"render_dia_close_banco"}                                # o resto: alfabético, luz fixa
+
+
+@pytest.mark.parametrize("keys,want", [
+    (("render_entardecer_close_banco", "render_entardecer_frente", "render_entardecer_perspectiva"),
+     "render_entardecer_perspectiva"),
+    (("render_entardecer_close_banco", "render_entardecer_frente"), "render_entardecer_frente"),
+    (("render_noite_cama_3q", "render_dia_cama_3q", "render_dia_quarto_janela"), "render_dia_cama_3q"),
+    (("perspectiva", "render_entardecer_close_banco"), "render_entardecer_close_banco"),   # render antes de vista crua
+    (("dia_cama_3q", "noite_cama_3q"), "dia_cama_3q"),                               # quadro do motor sem render_
+    (("r2",), "r2")])
+def test_thumbnail_follows_the_declared_order_and_never_invents_a_camera(keys, want):
+    item = _run("x", *keys)
+    img = G.primary_image(item)
+    assert img.key == want and img in item.images
+    assert G.primary_image(_run("vazio")) is None
+
+
+def test_camera_text_names_camera_and_light():
+    assert G.camera_text(_img("render_entardecer_r2_canto")) == "câmera r2_canto · luz entardecer"
+    assert G.camera_text(_img("dia_cama_3q")) == "câmera cama_3q · luz dia"
+    assert G.camera_text(_img("perspectiva")) == "vista perspectiva (sem render)"
+    assert G.camera_text(None) == "câmera —"
+
+
+def test_comparison_uses_the_same_camera_on_both_sides_when_both_runs_have_it():
+    rc5 = _run("rc5", "render_entardecer_close_banco", "render_entardecer_perspectiva", "render_entardecer_r2_canto")
+    rc4 = _run("rc4", "render_entardecer_perspectiva", "render_entardecer_close_banco")
+    a, b, note = G.comparison_pair(rc5, rc4)
+    assert (a.key, b.key) == ("render_entardecer_perspectiva",) * 2
+    assert "rc4 não tem a câmera r2_canto" in note and "perspectiva" in note
+    a, b, note = G.comparison_pair(rc4, _run("rc3", "render_entardecer_perspectiva"))
+    assert a.key == b.key == "render_entardecer_perspectiva" and note == ""
+
+
+def test_comparison_keeps_the_camera_across_different_lights():
+    a, b, _ = G.comparison_pair(_run("rc1", "render_entardecer_perspectiva", "render_entardecer_close_banco"),
+                                _run("vb", "render_dia_close_banco", "render_noite_perspectiva", "render_dia_perspectiva"))
+    assert (a.key, b.key) == ("render_entardecer_perspectiva", "render_dia_perspectiva")
+
+
+def test_comparison_without_a_common_camera_says_so():
+    a, b, note = G.comparison_pair(_run("n", "render_entardecer_perspectiva", "cama_3q"),
+                                 _run("o", "render_dia_cama_3q", "perspectiva", "cama_3q"))   # só vistas cruas em comum
+    assert (a.key, b.key) == ("render_entardecer_perspectiva", "render_dia_cama_3q")   # render nunca com vista crua
+    assert note.startswith("sem câmera em comum") and "o não tem perspectiva" in note
+
+
+def test_comparison_with_the_reference_never_claims_a_camera_pair():
+    ref = _run("ref@v1", "r2", source=G.REFERENCE)
+    a, b, note = G.comparison_pair(_run("rc5", "render_entardecer_close_banco", "render_entardecer_r2_canto"), ref)
+    assert (a.key, b.key, note) == ("render_entardecer_r2_canto", "r2", "")

@@ -294,7 +294,7 @@ class DesignView(QWidget):
             state = (f"Geometria: {last.build.get('geometria', '—')} · Render: {last.render_verdict or '—'}"
                      if last.verified else f"Estado técnico: {tech_text(last)}")
             self.cards["último"].fill(last, [
-                f"{last.when()} · {last.item_id}", f"câmera {img.key if img else '—'}", source_text(last), state,
+                f"{last.when()} · {last.item_id}", G.camera_text(img), source_text(last), state,
                 f"Nota visual: {G.visual_text(self.evaluations_for(last))}"])
         best = G.cards(self.items, self.evaluations_for)[2]
         if best.item is not None and not best.item.eligible(self.evaluations_for(best.item)):
@@ -313,7 +313,7 @@ class DesignView(QWidget):
                     else " · não verificado, não elegível" if not it.verified else "")
             text = "\n".join([
                 f"{it.when()} · {it.item_id.split('-', 1)[-1]}",
-                f"câmera {img.key if img else '—'} · especialista —",
+                f"{G.camera_text(img)} · especialista —",
                 f"técnico: {tech_text(it)}",
                 f"visual: {G.visual_text(self.evaluations_for(it))}",
                 f"{source_text(it)}{mark}",
@@ -363,19 +363,17 @@ class DesignView(QWidget):
             self._compare(it, prev)
 
     def _compare(self, a: G.GalleryItem, b: G.GalleryItem) -> None:
-        img_a = G.primary_image(a)
-        same = next((i for i in b.images if img_a and i.key == img_a.key), None)
-        img_b = same or G.primary_image(b)
+        img_a, img_b, note = G.comparison_pair(a, b)                           # mesma câmera dos dois lados, se houver
         if img_a is None or img_b is None:
             return
         self.compared = (a, b)
         self.compared_images = (img_a, img_b)
-        self.left_cap.setText(f"{a.when()} · {a.item_id}\ncâmera {img_a.key} · {source_text(a)}")
-        self.right_cap.setText(f"{b.when()} · {b.item_id}\n{'referência' if b.source == G.REFERENCE else 'câmera'} "
-                               f"{img_b.key} · {source_text(b)}")
+        self.left_cap.setText(f"{a.when()} · {a.item_id}\n{G.camera_text(img_a)} · {source_text(a)}")
+        right = f"referência {img_b.key}" if b.source == G.REFERENCE else G.camera_text(img_b)
+        self.right_cap.setText(f"{b.when()} · {b.item_id}\n{right} · {source_text(b)}")
         self.left.set_image(img_a.path)
         self.right.set_image(img_b.path)
-        self.compare_label.setText(compare_label(a, b, img_a, img_b))
+        self.compare_label.setText("; ".join(t for t in (note, compare_label(a, b, img_a, img_b)) if t))
         self.compare.show()
 
     def visible(self) -> tuple[G.GalleryItem, G.GalleryImage, tuple[G.GalleryItem, G.GalleryImage] | None] | None:

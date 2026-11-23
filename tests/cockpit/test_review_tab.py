@@ -311,7 +311,7 @@ def test_history_gallery_is_newest_first_with_real_thumbnails_and_states(tmp_pat
         assert ids == renders and ids[0] == UNPUB_FAIL and R4B not in ids        # só renders, mais recente primeiro
         assert all(not h.item(i).icon().isNull() for i in range(h.count()) if tab.gallery.get(ids[i]).images)
         first = h.item(0).text()
-        assert first.startswith("23/11 06:16 UTC") and "câmera dia_cama_3q" in first and "visual: sem avaliação" in first
+        assert first.startswith("23/11 06:16 UTC") and "câmera cama_3q · luz dia" in first and "visual: sem avaliação" in first
         r4 = h.item(ids.index(R4)).text()
         assert "render FAIL" in r4 and "FAIL, não elegível" in r4                # FAIL visível e identificado
         import re
@@ -464,3 +464,41 @@ def test_best_card_refuses_an_item_that_is_not_eligible(tmp_path, monkeypatch):
         assert best.item is None and best.thumb.path is None                       # o cartão não aceita inelegível
     finally:
         dispose(tab)
+
+
+def test_design_view_card_tile_and_previous_comparison_use_the_preferred_camera(tmp_path):
+    """Pedido do coordenador: a miniatura não é o close do banco; a comparação usa a mesma câmera, e diz quando não dá."""
+    from agent_bar.cockpit import gallery as G
+    from agent_bar.cockpit.ui.design_view import DesignView
+    from tests.cockpit.evidence_fixture import png
+
+    def run(run_id, started, *keys):
+        imgs = []
+        for k in keys:
+            p = tmp_path / run_id / f"{k}.png"
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_bytes(png(f"{run_id}/{k}"))
+            imgs.append(G.GalleryImage(k, p, G.file_sha256(p), "r", f"views/{k}.png"))
+        return G.GalleryItem(G.PUBLISHED, "planta_74", "suite_01", run_id, "render", started_at=started,
+                             render_verdict="PASS", build={"geometria": "PASS"}, images=imgs)
+    rc5 = run("rc5", "2026-11-23T09:11:00Z", "render_entardecer_close_banco", "render_entardecer_perspectiva",
+              "render_entardecer_r2_canto")
+    rc4 = run("rc4", "2026-11-23T08:06:00Z", "render_entardecer_close_banco", "render_entardecer_perspectiva")
+    rc0 = run("rc0", "2026-11-22T08:00:00Z", "render_dia_cama_3q")
+    d = DesignView()
+    try:
+        d.set_items([rc5, rc4, rc0])
+        assert d.cards["último"].thumb.path.name == "render_entardecer_r2_canto.png"
+        assert "câmera r2_canto · luz entardecer" in d.cards["último"].info.text()
+        assert "câmera perspectiva · luz entardecer" in d.history.item(1).text()     # rc4: perspectiva, não o banco
+        d.history.setCurrentRow(0)
+        d.compare_with_previous()
+        assert d.left.path.name == d.right.path.name == "render_entardecer_perspectiva.png"
+        assert "rc4 não tem a câmera r2_canto" in d.compare_label.text()
+        d.history.setCurrentRow(1)
+        d.compare_with_previous()                                                 # rc4 × rc0: sem câmera em comum
+        assert (d.left.path.name, d.right.path.name) == ("render_entardecer_perspectiva.png", "render_dia_cama_3q.png")
+        assert "sem câmera em comum" in d.compare_label.text()
+    finally:
+        d.shutdown()
+        d.deleteLater()
