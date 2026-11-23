@@ -192,6 +192,52 @@ def test_chat_context_never_states_an_unverified_pass_and_carries_the_vs_r1a_tex
     assert not RC.mentions_files(text)
 
 
+def test_a_missing_frame_still_lets_felipe_comment_and_the_chat_gets_the_reason_without_the_path(tmp_path):
+    """Revisão do #92 (SHOULD): o motivo "arquivo ausente (renders/<quadro>.png)" não pode recusar o comentário."""
+    ev, engine, dl = build_all(tmp_path)
+    g0 = G.build_gallery(E.load_catalog(ev, expected={}), engine, dl, rooms=[(PLANT, ROOM)])
+    lost = g0.get(UNPUB_FAIL).images[-1]
+    lost.path.unlink()                                                           # um quadro sumiu do disco
+    g = G.build_gallery(E.load_catalog(ev, expected={}), engine, dl, rooms=[(PLANT, ROOM)])
+    item = g.get(UNPUB_FAIL)
+    assert not item.verified and "arquivo ausente" in item.verification_gaps()[0]
+    c = RC.new_comment(FELIPE, item, item.images[0], author="human")
+    text = RC.chat_request(c)                                                    # não recusa
+    assert "não verificado" in text and "arquivo ausente" in text and lost.key in text
+    assert not RC.mentions_files(text) and "renders/" not in text and ".png" not in text
+    assert RC.CommentStore(tmp_path / "data").save(c).is_file()                  # o R41 é gravado
+
+
+@pytest.mark.parametrize("reason,keep", [
+    ("1 quadro(s) recusado(s): noite_cama_3q: arquivo ausente (renders/noite_cama_3q.png)", "arquivo ausente"),
+    (r"verify.py: falhou em E:\ev\runs\x\trace.json", "verify"),
+    ("render_report.json ausente ou ilegível", "render_report ausente"),
+    ("2 quadro(s) recusado(s): sha divergente", "2 quadro(s) recusado(s): sha divergente")])
+def test_chat_safe_keeps_the_reason_and_drops_paths(reason, keep):
+    out = RC.chat_safe(reason)
+    assert keep in out and not RC.mentions_files(out)
+
+
+def test_r41_record_names_raw_manifest_values_and_states_verdicts_only_when_verified(tmp_path):
+    from tests.cockpit.gallery_fixture import REPORT_FAIL, build_negatives
+    ev, engine, dl = build_negatives(tmp_path / "neg")
+    g = G.build_gallery(E.load_catalog(ev, expected={}), engine, dl, rooms=[(PLANT, ROOM)])
+    n1 = g.get(REPORT_FAIL)                                                       # manifest PASS, não verificado
+    run = RC.new_comment(FELIPE, n1, n1.images[0], author="human").to_dict()["run"]
+    assert (run["verified"], run["render"], run["geometry"]) == (False, "", "")
+    assert run["manifest_render"] == "PASS"
+
+
+def test_comparison_line_carries_the_other_side_source_and_state_and_reference_frame_is_pinned(g):
+    item, prev, ref = g.get(UNPUB_FAIL), g.get(BAD_SHA), _ref(g)
+    c = RC.new_comment(FELIPE, item, item.images[0], reference=ref, compared=(prev, prev.images[0]), author="human")
+    line = next(x for x in RC.chat_request(c).splitlines() if x.startswith("- comparado com"))
+    assert RC._source(prev) in line and RC.technical(prev) in line
+    assert c.reference["image_sha256"] == G.primary_image(ref).sha256
+    c2 = RC.new_comment(FELIPE, item, item.images[0], reference=ref, compared=(ref, ref.images[0]), author="human")
+    assert c2.reference["image_sha256"] == ref.images[0].sha256
+
+
 def test_missing_report_reason_reaches_the_chat_without_a_file_name(tmp_path):
     from tests.cockpit.gallery_fixture import NO_REPORT, build_negatives
     ev, engine, dl = build_negatives(tmp_path / "neg")
