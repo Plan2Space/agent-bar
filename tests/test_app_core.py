@@ -146,3 +146,64 @@ def test_build_core_publishes_into_the_cockpit_notifications_database(tmp_path, 
         c.center.close()
         if c.tray is not None:
             c.tray.hide()
+
+
+# ------------------------------------------------- revisão do #98: aviso velho não fica pedindo ação para sempre
+def _open(center):
+    return [n for n in center.list(categories=["HUMAN_APPROVAL"]) if n.state == "ACTION_REQUIRED"]
+
+
+def test_a_new_head_replaces_the_old_item_which_expires(core):
+    c, inboxes, _s, center, _q, _n = core
+    inboxes["next"] = _inbox(_item(7))
+    c.on_snapshot(SimpleNamespace(approvals=None))
+    inboxes["next"] = _inbox(_item(7, head="b" * 40))
+    c.on_snapshot(SimpleNamespace(approvals=None))
+    states = {n.dedupe_key: n.state for n in center.list(categories=["HUMAN_APPROVAL"])}
+    assert [n.dedupe_key for n in _open(center)] == [C.human_key(_item(7).pr_ref, "b" * 40)]
+    assert states[C.human_key(_item(7).pr_ref, _item(7).head_sha)] == "EXPIRED"
+
+
+def test_a_pr_that_no_longer_needs_felipe_is_resolved_and_leaves_the_badge(core):
+    c, inboxes, _s, center, _q, _n = core
+    inboxes["next"] = _inbox(_item(7), _item(8))
+    c.on_snapshot(SimpleNamespace(approvals=None))
+    assert len(_open(center)) == 2 and center.badge() == 2
+    inboxes["next"] = _inbox(_item(8))                                            # o #7 foi mergeado/fechado/aprovado
+    c.on_snapshot(SimpleNamespace(approvals=None))
+    states = {n.title.rsplit("#", 1)[1]: n.state for n in center.list(categories=["HUMAN_APPROVAL"])}
+    assert states == {"7": "RESOLVED", "8": "ACTION_REQUIRED"} and center.badge() == 1
+    inboxes["next"] = _inbox()                                                    # nada mais pendente
+    c.on_snapshot(SimpleNamespace(approvals=None))
+    assert _open(center) == [] and center.badge() == 0
+
+
+def test_an_unreadable_inbox_closes_nothing(core):
+    from agent_bar import inbox as ib
+    c, inboxes, _s, center, _q, _n = core
+    inboxes["next"] = _inbox(_item(7))
+    c.on_snapshot(SimpleNamespace(approvals=None))
+    inboxes["next"] = ib.Inbox("indisponivel", "gh fora do ar")
+    c.on_snapshot(SimpleNamespace(approvals=None))
+    assert len(_open(center)) == 1                                                # não dá para saber: fica
+
+
+def test_reconciling_never_touches_other_notifications(core):
+    c, inboxes, _s, center, _q, _n = core
+    center.publish("HUMAN_APPROVAL", "pedido de outra origem", state="ACTION_REQUIRED", source="outra",
+                   dedupe_key="outra:1")
+    center.publish("ERROR", "runtime", state="ACTION_REQUIRED", source="agent-bar:runtime", dedupe_key="rt:1")
+    inboxes["next"] = _inbox()
+    c.on_snapshot(SimpleNamespace(approvals=None))
+    assert {n.dedupe_key: n.state for n in center.list()} == {"outra:1": "ACTION_REQUIRED", "rt:1": "ACTION_REQUIRED"}
+
+
+def test_the_single_instance_requests_work_without_a_bar(core):
+    import logging
+
+    from agent_bar import app as A
+    c, _i, _s, _center, quits, _n = core
+    A._bring_forward(None, logging.getLogger("t"), c)                            # noqa: SLF001 - segunda abertura
+    assert c.cockpit is not None and c.cockpit.shown == 1
+    A._quit_for_update(None, logging.getLogger("t"), c)                          # noqa: SLF001 - versão nova pede para sair
+    assert quits == [1] and c.cockpit.shut == 1 and not c.worker.alive()

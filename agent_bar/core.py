@@ -30,6 +30,10 @@ ICON = Path(__file__).resolve().parents[1] / "launchers" / "agent_bar.ico"
 HUMAN_SOURCE = "agent-bar:precisa-de-voce"
 
 
+def human_key(pr_ref: str, head_sha: str) -> str:
+    return f"human:{pr_ref}@{head_sha}"
+
+
 class Worker(QObject):
     """Coleta periodica fora da thread de UI. Local a cada `local_interval_s`; GitHub e Project #2 com cache/TTL proprios."""
     snapshot = Signal(object)
@@ -122,7 +126,25 @@ class AppCore(QObject):
         self.inbox = human_inbox(s.approvals)
         for item in self.notifier.update(self.inbox):                          # novo PR@HEAD que precisa do Felipe
             self.publish_human(item)
+        self.reconcile_human()
         self.snapshot.emit(s)
+
+    def reconcile_human(self) -> None:
+        """Fecha sozinho o que deixou de valer (revisão do #98): item de um HEAD antigo de PR que ainda precisa do Felipe
+        vira EXPIRED (o do HEAD novo o substitui); PR que deixou de precisar dele (mergeado, fechado, aprovado, sem
+        pendência) vira RESOLVED. Com o "Precisa de você" ilegível nada muda: não dá para saber."""
+        if self.center is None or self.inbox is None or self.inbox.state != "lido":
+            return
+        current = {human_key(i.pr_ref, i.head_sha) for i in self.inbox.items}
+        prs = {i.pr_ref for i in self.inbox.items}
+        try:
+            for n in self.center.list(categories=["HUMAN_APPROVAL"], states=["NEW", "READ", "ACTION_REQUIRED"]):
+                if n.source != HUMAN_SOURCE or n.dedupe_key in current:
+                    continue
+                pr = n.dedupe_key.removeprefix("human:").rsplit("@", 1)[0]
+                self.center.resolve(n.id, "EXPIRED" if pr in prs else "RESOLVED")
+        except Exception:                                                     # noqa: BLE001 - aviso nunca derruba a coleta
+            traceback.print_exc()
 
     def publish_human(self, item) -> None:
         if self.center is None:
@@ -131,7 +153,7 @@ class AppCore(QObject):
             self.center.publish("HUMAN_APPROVAL", f"PR precisa de você: {item.pr_ref}",
                                 body=f"{item.risk} · {item.title} · {item.reason} · HEAD {item.head_sha[:7]}",
                                 state="ACTION_REQUIRED", source=HUMAN_SOURCE, link=item.url,
-                                dedupe_key=f"human:{item.pr_ref}@{item.head_sha}")
+                                dedupe_key=human_key(item.pr_ref, item.head_sha))
         except Exception:                                                     # noqa: BLE001 - aviso nunca derruba a coleta
             traceback.print_exc()
 
@@ -178,4 +200,4 @@ class AppCore(QObject):
         self.quit_fn()
 
 
-__all__ = ["HUMAN_SOURCE", "AppCore", "Worker"]
+__all__ = ["HUMAN_SOURCE", "AppCore", "Worker", "human_key"]
