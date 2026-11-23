@@ -68,12 +68,26 @@ class ReviewComment:
 _EXT = re.compile(r"\.(png|webp|jpe?g|json|skp|vrscene|md|log)\b", re.I)
 
 
+_PAREN = re.compile(r"\s*\([^()]*\)")
+CHAT_GAP_FALLBACK = "motivo com caminho de arquivo (ver Detalhes técnicos)"
+
+
+def chat_safe(reason: str) -> str:
+    """O motivo de "não verificado" sem nome nem caminho de arquivo: tira o parêntese que cita arquivo, a extensão e
+    qualquer token que ainda pareça caminho. O motivo continua ("arquivo ausente"); o caminho fica nos Detalhes técnicos.
+    Se mesmo assim sobrar caminho, vai um texto fixo: o comentário nunca é recusado por causa do motivo."""
+    s = _PAREN.sub(lambda m: "" if mentions_files(m.group()) else m.group(), reason)
+    s = _EXT.sub("", s)
+    s = " ".join("[caminho omitido]" if mentions_files(t) else t for t in s.split(" "))
+    return CHAT_GAP_FALLBACK if mentions_files(s) else s
+
+
 def technical(item: G.GalleryItem) -> str:
-    """Estado técnico que pode ir para o Chat: o veredito só se o run estiver VERIFICADO; senão o motivo (sem extensão
-    de arquivo, para o contexto continuar estruturado)."""
+    """Estado técnico que pode ir para o Chat: o veredito só se o run estiver VERIFICADO; senão o motivo, sem nome ou
+    caminho de arquivo (para o contexto continuar estruturado e o comentário nunca ser recusado por isso)."""
     gaps = item.verification_gaps()
     if gaps:
-        return "não verificado: " + _EXT.sub("", gaps[0])
+        return "não verificado: " + chat_safe(gaps[0])
     return f"render {item.render_verdict or '—'}; geometria {item.build.get('geometria', '—')}"
 
 
@@ -84,7 +98,10 @@ def _source(item: G.GalleryItem) -> str:
 def _run_ref(item: G.GalleryItem) -> dict:
     return {"run_id": item.item_id, "source": item.source, "source_text": _source(item), "when": item.when(),
             "kind": item.kind, "verified": item.verified, "technical": technical(item),
-            "render": item.render_verdict or "", "geometry": item.build.get("geometria", "")}
+            # veredito só se VERIFICADO; o valor cru do manifest fica com o nome do que é (revisão do #92)
+            "render": (item.render_verdict or "") if item.verified else "",
+            "geometry": item.build.get("geometria", "") if item.verified else "",
+            "manifest_render": item.render_verdict or "", "manifest_geometry": item.build.get("geometria", "")}
 
 
 def new_comment(text: str, item: G.GalleryItem, image: G.GalleryImage, *, reference: G.GalleryItem | None = None,
@@ -100,8 +117,11 @@ def new_comment(text: str, item: G.GalleryItem, image: G.GalleryImage, *, refere
         raise CommentRejected("comentário da galeria é humano: autor precisa ser human[:nome]")
     ref = None
     if reference is not None:
+        same = compared is not None and compared[0].item_id == reference.item_id
+        shown = compared[1] if same else G.primary_image(reference)            # o quadro da referência na tela
         ref = {"id": reference.item_id, "provenance": reference.provenance_text(),
-               "usage": reference.usage or "", "note": "referência estética, não geometria"}
+               "usage": reference.usage or "", "note": "referência estética, não geometria",
+               "image": shown.key if shown else "", "image_sha256": shown.sha256 if shown else ""}
     cmp = None
     if compared is not None:
         other, other_img = compared
@@ -129,7 +149,8 @@ def chat_request(c: ReviewComment) -> str:
     if c.compared_with:
         o = c.compared_with
         what = "a referência" if o["is_reference"] else "a versão anterior"
-        lines.append(f"- comparado com {what}: {o['run_id']} ({o['when']}), câmera {o['camera']}")
+        lines.append(f"- comparado com {what}: {o['run_id']} ({o['when']}; {o['source_text']}; {o['technical']}), "
+                     f"câmera {o['camera']}")
     if c.reference:
         lines.append(f"- referência do cômodo: {c.reference['id']} ({c.reference['provenance']}; "
                      f"{c.reference['note']})")
@@ -176,5 +197,5 @@ class CommentStore:
         return out
 
 
-__all__ = ["SCHEMA", "TRIAGE_PENDING", "CommentRejected", "CommentStore", "ReviewComment", "chat_request",
+__all__ = ["CHAT_GAP_FALLBACK", "SCHEMA", "TRIAGE_PENDING", "CommentRejected", "CommentStore", "ReviewComment", "chat_request", "chat_safe",
            "mentions_files", "new_comment", "operator"]
