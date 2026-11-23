@@ -135,9 +135,10 @@ class CockpitWindow(QMainWindow):
         self.prs.shutdown()
         self.library.shutdown()
         self.actions.shutdown()
-        self.sessions.shutdown()
+        self.sessions.shutdown(close_store=False)                           # #75: conversas fechadas, banco ainda aberto
+        self.runtime.stop()                                                  # nenhum callback do agente chega depois daqui
+        self.sessions.close_store()                                          # so agora os bancos
         self.center.close()
-        self.runtime.stop()
 
     def closeEvent(self, e) -> None:                                            # noqa: N802
         self.shutdown()

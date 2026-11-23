@@ -129,6 +129,7 @@ class PermissionInbox:
         self.clock = clock
         self.ttl_s = ttl_s
         self._lock = threading.RLock()
+        self.closed = False
         self._db = sqlite3.connect(self.path, check_same_thread=False, isolation_level=None)
         self._db.row_factory = sqlite3.Row
         self._db.execute("PRAGMA journal_mode=WAL") if self.path != ":memory:" else None
@@ -316,4 +317,27 @@ class PermissionInbox:
 
     def close(self) -> None:
         with self._lock:
-            self._db.close()
+            if not self.closed:
+                self.closed = True
+                self._db.close()
+
+
+# ------------------------------------------------------------------------------------- uso depois do close (#75)
+class InboxClosed(RuntimeError):
+    """O Inbox ja foi fechado (Studio encerrando). Quem recebe responde ao agente como recusado, nunca o deixa pendurado."""
+
+
+def _guard(fn):
+    import functools
+
+    @functools.wraps(fn)
+    def wrapper(self, *a, **kw):
+        if self.closed:
+            raise InboxClosed(f"Permission Inbox fechado: {fn.__name__} ignorado")
+        return fn(self, *a, **kw)
+    return wrapper
+
+
+for _name in ("record", "decide", "finish", "finish_tool_call", "cancel_open", "cancel_one", "expire_due", "add_rule",
+              "rules", "disable_rule", "get", "pending", "history"):
+    setattr(PermissionInbox, _name, _guard(getattr(PermissionInbox, _name)))

@@ -97,3 +97,52 @@ def test_closing_a_tab_ends_its_agent_and_cancels_only_its_permission_requests(s
 def test_there_is_always_one_conversation(sessions):
     sessions.close_session(0)
     assert sessions.tabs.count() == 1 and len(sessions.views) == 1
+
+
+# ---------------------------------------------------------------- #75: sinais enfileirados depois do shutdown
+def _make(tmp_path):
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    os.environ["AGENT_BAR_COCKPIT_DATA"] = str(tmp_path / "data")
+    (tmp_path / "ws").mkdir(exist_ok=True)
+    return ChatSessions(store=ChatStore(tmp_path / "data"), limits={"stub": 2},
+                        profiles_fn=lambda: [AgentProfile("stub", "Stub", (sys.executable, STUB))],
+                        workspaces_fn=lambda: [tmp_path / "ws"])                # dono do inbox
+
+
+def test_agent_signals_queued_before_shutdown_never_touch_the_closed_inbox(tmp_path, no_exception_in_qt_slots):
+    from agent_bar.cockpit.acp import PermissionRequest, Update
+    s = _make(tmp_path)
+    v, answered = s.current(), []
+    v.bridge.update.emit(v.gen, Update("tool_call_update", "s", {"toolCallId": "t1", "status": "completed"}))
+    v.bridge.permission.emit(v.gen, PermissionRequest("s", {"toolCallId": "t2", "title": "Run rm", "kind": "execute"},
+                             ({"optionId": "allow", "name": "Allow", "kind": "allow_once"},)), answered.append)
+    s.shutdown()
+    wait(lambda: False, timeout=0.3)                                         # drena a fila
+    assert no_exception_in_qt_slots == []                                    # antes: 2x closed database
+    assert answered == [None]                                                # o agente recebe "cancelled", nunca fica pendurado
+    s.deleteLater()
+
+
+def test_a_connect_completed_before_shutdown_does_not_try_to_prompt_afterwards(tmp_path, no_exception_in_qt_slots):
+    s = _make(tmp_path)
+    v = s.current()
+    v.pending_prompt = "texto que estava esperando a conexao"
+    v.bridge.done.emit(v.gen, "connect", {"session_id": "s-1", "modes": {}, "config_options": []}, None)
+    s.shutdown()
+    wait(lambda: False, timeout=0.3)
+    assert no_exception_in_qt_slots == []                                    # antes: AssertionError em _prompt
+    s.deleteLater()
+
+
+def test_closing_the_studio_with_turns_in_flight_leaves_no_exception(tmp_path, no_exception_in_qt_slots):
+    """Cenario B do #75: abas com tools/perm em voo e o Studio fechando no meio."""
+    for round_ in range(4):
+        s = _make(tmp_path / f"r{round_}")
+        views = [s.current(), s.add_session()]
+        for k, v in enumerate(views):
+            v.send("perm" if (round_ + k) % 2 else "tools")
+        wait(lambda: False, timeout=0.02 * round_)
+        s.shutdown()
+        wait(lambda: False, timeout=0.3)
+        s.deleteLater()
+    assert no_exception_in_qt_slots == []

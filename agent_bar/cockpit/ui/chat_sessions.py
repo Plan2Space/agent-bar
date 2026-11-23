@@ -140,11 +140,18 @@ class ChatSessions(QWidget):
         owner = next((v for v in self.views if entry_id in v._perm_cards), self.current())
         return owner.answer_permission(entry_id, choice)
 
-    def shutdown(self) -> None:
+    def shutdown(self, close_store: bool = True) -> None:
+        """Encerra as conversas e responde (cancelled) o que estava aberto. `close_store=False`: quem chama ainda vai
+        parar o runtime compartilhado e so depois fechar o banco (`close_store()`), para nenhum callback tardio do
+        agente encontrar o banco fechado (#75)."""
         self.timer.stop()
         for v in list(self.views):
             v.shutdown()
         self.broker.cancel_all("o Studio foi fechado")
-        if self._own_inbox:
+        if close_store:
+            self.close_store()
+
+    def close_store(self) -> None:
+        if self._own_inbox and not self.inbox.closed:
             self.inbox.cancel_open("o Studio foi fechado")
             self.inbox.close()

@@ -94,3 +94,17 @@ def test_filters_by_category_state_text_session_and_date(env):
     assert [n.title for n in nc.list(session_id="s2")] == ["Ollama não respondeu"]
     assert [n.title for n in nc.list(since=clock.t)] == ["Ollama não respondeu"]
     assert nc.mark_all_read() == 2 and nc.badge() == 0
+
+
+def test_after_close_the_stores_never_crash_late_callers(tmp_path):
+    """#75: sinal/timer atrasado depois do close. Inbox: erro tipado (quem chama responde ao agente). Notificacoes: no-op."""
+    from agent_bar.cockpit.permission_inbox import InboxClosed
+    path = tmp_path / "permissions.sqlite"
+    inbox, nc = PermissionInbox(path), NotificationCenter(path)
+    inbox.close()
+    inbox.close()                                                            # idempotente
+    with pytest.raises(InboxClosed):
+        inbox.record(tc(), provider="p", session_id="s")
+    assert nc.sync_permissions(inbox) == 0
+    nc.close()
+    assert nc.publish("AGENT", "x") is None and nc.list() == [] and nc.badge() == 0 and nc.mark_all_read() == 0
