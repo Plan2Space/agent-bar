@@ -62,6 +62,7 @@ class WorkflowsTab(QWidget):
                  confirm_modes: Callable[[list[tuple[str, str]], QWidget], bool] | None = None) -> None:
         super().__init__()
         self.confirm_modes = confirm_modes or confirm_risky_stage_modes
+        self.notify_fn: Callable[..., None] | None = None
         self.rt = runtime
         self.workspace_fn = workspace_fn
         self.context_fn = context_fn
@@ -308,6 +309,11 @@ class WorkflowsTab(QWidget):
             self.store.save(self.wf)
             self._load_list()
             self.status.setText(f"fluxo terminou: {e['status']} · nada foi commitado nem enviado pelo app")
+            if self.notify_fn is not None:                                   # F3
+                ok = e["status"] == "done"
+                self.notify_fn("TASK" if ok else "ERROR", f"Fluxo “{self.wf.title}” terminou: {e['status']}",
+                               f"SPEC {self.wf.spec_path} · {sum(s.status == 'done' for s in self.wf.stages)} etapa(s) concluída(s)",
+                               "", f"workflow:{self.wf.id}:{self.wf.spec_sha}:{e['status']}:{len(self.wf.stages)}")
 
     def _on_permission(self, i: int, req: PermissionRequest, respond) -> None:
         choice = self.ask_permission(req, self)
