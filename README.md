@@ -101,9 +101,12 @@ Requer Windows, Python 3.11+ e, para os estados reais, as CLIs `claude` e `gh` n
 ## Testes
 
 ```powershell
-.venv\Scripts\pip install -e .[dev]
+uv sync --locked --extra dev                            # mesmas versoes do CI (uv.lock); ou: .venv\Scripts\pip install -e .[dev]
 $env:QT_QPA_PLATFORM = "offscreen"; .venv\Scripts\python -m pytest -q
 ```
+
+As dependências ficam travadas no `uv.lock`; o CI reprova se o lock estiver desatualizado (`uv lock --check`).
+Mudou dependência no `pyproject.toml`? Rode `uv lock` e commite o `uv.lock` junto.
 
 ## Origem e limites
 

@@ -11,6 +11,7 @@ permissions:
 jobs:
   test:
     # A UI e Windows-only (CIM/PowerShell, Win32). Os testes de GUI rodam com Qt offscreen.
+    # Nome do job e matriz NAO mudam: a protecao do main exige "test (3.11)" e "test (3.12)".
     runs-on: windows-latest
     strategy:
       fail-fast: false
@@ -21,13 +22,16 @@ jobs:
       PYTHONUTF8: "1"
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: astral-sh/setup-uv@v5
         with:
           python-version: ${{ matrix.python-version }}
-      - name: Install
-        run: python -m pip install -e ".[dev]"
+      # H-012: dependencias travadas no uv.lock; CI nao muda sem commit. Lock desatualizado reprova aqui.
+      - name: Lock is current
+        run: uv lock --check
+      - name: Install (locked)
+        run: uv sync --locked --extra dev
       - name: Lint
-        run: python -m ruff check .
+        run: uv run ruff check .
       - name: Test
-        run: python -m pytest -q
+        run: uv run pytest -q
         timeout-minutes: 15
