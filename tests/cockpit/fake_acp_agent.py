@@ -170,7 +170,11 @@ def handle_prompt(rid: int, params: dict) -> None:
     elif word == "acentos":
         chunk(sid, "ação é ü ✓")
     _cancelled.discard(sid)
-    send({"jsonrpc": "2.0", "id": rid, "result": {"stopReason": reason}})
+    result = {"stopReason": reason}
+    if word == "usage":                                      # F6: usage acumulado da sessao, como o claude-agent-acp
+        result["usage"] = {"inputTokens": 1200, "outputTokens": 340, "cachedReadTokens": 38000,
+                           "cachedWriteTokens": 2400, "totalTokens": 41940}
+    send({"jsonrpc": "2.0", "id": rid, "result": result})
 
 
 def main() -> None:

@@ -19,7 +19,7 @@ from typing import Any
 
 STATES = ("MEASURED", "ESTIMATED", "UNAVAILABLE", "STALE")
 METRICS = ("input_tokens", "output_tokens", "context_used", "context_window", "model_max_context",
-           "cost_api_equivalent_usd")
+           "cost_api_equivalent_usd", "session_input_tokens", "session_output_tokens", "session_cache_tokens")
 SCHEMA = "usage-snapshot.v1"
 
 
@@ -60,11 +60,15 @@ class UsageSnapshot:
     context_window: Metric = field(default_factory=lambda: unavailable("nao informado pelo provedor"))
     model_max_context: Metric = field(default_factory=lambda: unavailable("nao informado pelo provedor"))
     cost_api_equivalent_usd: Metric = field(default_factory=lambda: unavailable("nao informado pelo provedor"))
+    session_input_tokens: Metric = field(default_factory=lambda: unavailable("nao informado pelo provedor"))
+    session_output_tokens: Metric = field(default_factory=lambda: unavailable("nao informado pelo provedor"))
+    session_cache_tokens: Metric = field(default_factory=lambda: unavailable("nao informado pelo provedor"))
     stale_reason: str = ""
+    covers: tuple[str, ...] = METRICS                                        # campos que ESTA fonte informa
 
     def to_dict(self) -> dict:
         out: dict[str, Any] = {"schema": SCHEMA, "provider_id": self.provider_id, "model_id": self.model_id,
-                               "stale_reason": self.stale_reason}
+                               "stale_reason": self.stale_reason, "covers": list(self.covers)}
         for name in METRICS:
             m: Metric = getattr(self, name)
             out[name] = {"value": m.value, "state": m.state, "source": m.source}
@@ -74,9 +78,10 @@ class UsageSnapshot:
     def from_dict(cls, d: Mapping[str, Any]) -> UsageSnapshot:
         if d.get("schema") != SCHEMA:
             raise ValueError(f"schema inesperado: {d.get('schema')!r}")
-        metrics = {n: Metric(d[n]["value"], d[n]["state"], d[n].get("source", "")) for n in METRICS}
+        metrics = {n: Metric(d[n]["value"], d[n]["state"], d[n].get("source", "")) for n in METRICS if n in d}
+        covers = tuple(c for c in d.get("covers", METRICS) if c in METRICS)  # campo novo ausente = nao informado
         return cls(str(d.get("provider_id", "")), str(d.get("model_id", "")), stale_reason=str(d.get("stale_reason", "")),
-                   **metrics)
+                   covers=covers, **metrics)
 
     def stale(self, why: str) -> UsageSnapshot:
         """Tudo que era conhecido vira STALE (ex.: troca de modelo); o que era UNAVAILABLE continua."""
@@ -84,15 +89,19 @@ class UsageSnapshot:
         return replace(self, stale_reason=why, **changes)
 
     def merged_with(self, newer: UsageSnapshot) -> UsageSnapshot:
-        """A atualizacao seguinte vence; campo que ela nao traz mantem o valor anterior, marcado STALE."""
+        """A atualizacao seguinte vence nos campos que a fonte dela cobre; campo coberto que ela nao traz mantem o valor
+        anterior, marcado STALE; campo que a fonte nao cobre (ex.: a resposta do prompt nao fala de contexto) fica
+        como estava."""
         if (newer.provider_id, newer.model_id) != (self.provider_id, self.model_id):
             return newer
         changes = {}
         for n in METRICS:
             old, new = getattr(self, n), getattr(newer, n)
-            if not new.known and old.known:
+            if n not in newer.covers:
+                changes[n] = old
+            elif not new.known and old.known:
                 changes[n] = replace(old, state="STALE")
-        return replace(newer, **changes) if changes else newer
+        return replace(newer, covers=tuple(dict.fromkeys((*self.covers, *newer.covers))), **changes)
 
 
 # ------------------------------------------------------------------------------------------------ provedores
@@ -128,6 +137,23 @@ def from_acp_usage_update(data: Mapping[str, Any], *, provider_id: str, model_id
         context_window=Metric(size, "MEASURED", "acp usage_update.size") if size else unavailable("acp: sem size"),
         cost_api_equivalent_usd=(Metric(amount, "ESTIMATED", "acp usage_update.cost (preco equivalente de API)")
                                  if amount is not None else unavailable("acp: custo nao informado neste update")),
+        covers=("context_used", "context_window", "cost_api_equivalent_usd"),
+    )
+
+
+def from_acp_prompt_usage(usage: Mapping[str, Any], *, provider_id: str, model_id: str) -> UsageSnapshot:
+    """`usage` da resposta do `session/prompt` (claude-agent-acp): contadores ACUMULADOS da sessao, nao do turno.
+    MEASURED como totais da sessao; cache = leitura + escrita."""
+    inp, out = _num(usage.get("inputTokens")), _num(usage.get("outputTokens"))
+    rd, wr = _num(usage.get("cachedReadTokens")), _num(usage.get("cachedWriteTokens"))
+    cache = (rd or 0) + (wr or 0) if rd is not None or wr is not None else None
+    src = "acp resposta do prompt: usage acumulado da sessao"
+    return UsageSnapshot(
+        provider_id, model_id,
+        session_input_tokens=Metric(inp, "MEASURED", src) if inp is not None else unavailable("acp: sem inputTokens"),
+        session_output_tokens=Metric(out, "MEASURED", src) if out is not None else unavailable("acp: sem outputTokens"),
+        session_cache_tokens=Metric(cache, "MEASURED", src) if cache is not None else unavailable("acp: sem cache"),
+        covers=("session_input_tokens", "session_output_tokens", "session_cache_tokens"),
     )
 
 
@@ -159,6 +185,10 @@ def usage_line(s: UsageSnapshot | None) -> str:
     if s.input_tokens.known and s.output_tokens.known:
         parts.append(f"turno {_tokens(s.input_tokens.value)} entrada / {_tokens(s.output_tokens.value)} saída "
                      f"({STATE_WORD[s.output_tokens.state]})")
+    si, so, sc = s.session_input_tokens, s.session_output_tokens, s.session_cache_tokens
+    if si.known and so.known:
+        cache = f" / {_tokens(sc.value)} cache" if sc.known else ""
+        parts.append(f"sessão {_tokens(si.value)} entrada / {_tokens(so.value)} saída{cache} ({STATE_WORD[so.state]})")
     c = s.cost_api_equivalent_usd
     if c.known:
         parts.append(f"custo equivalente de API US$ {c.value:.2f} ({STATE_WORD[c.state]}, não é fatura)")

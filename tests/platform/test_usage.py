@@ -7,6 +7,7 @@ import pytest
 from agent_bar.platform.usage import (
     Metric,
     UsageSnapshot,
+    from_acp_prompt_usage,
     from_acp_usage_update,
     from_ollama_done,
     usage_line,
@@ -108,3 +109,35 @@ def test_stale_marks_known_values_and_says_why():
 
 def test_nothing_reported_yet():
     assert usage_line(None) == "uso: não informado pelo provedor"
+
+
+# ------------------------------------------------------------------------------------------------ totais da sessao
+PROMPT_USAGE = {"inputTokens": 1200, "outputTokens": 340, "cachedReadTokens": 38000, "cachedWriteTokens": 2400,
+                "totalTokens": 41940}                                         # formato do claude-agent-acp
+
+
+def test_acp_prompt_usage_is_measured_as_session_totals_not_turn_counts():
+    s = from_acp_prompt_usage(PROMPT_USAGE, provider_id="p", model_id="m")
+    assert (s.session_input_tokens.value, s.session_output_tokens.value, s.session_cache_tokens.value) == (1200, 340, 40400)
+    assert s.session_output_tokens.state == "MEASURED"
+    assert s.input_tokens.state == "UNAVAILABLE"                               # nao e contagem do turno
+    assert usage_line(s) == "contexto não informado pelo provedor · sessão 1.2k entrada / 340 saída / 40k cache (medido)"
+
+
+def test_prompt_totals_do_not_make_context_or_cost_stale():
+    ctx = from_acp_usage_update({"used": 41950, "size": 200000, "cost": {"amount": 0.0312, "currency": "USD"}},
+                                provider_id="p", model_id="m")
+    s = ctx.merged_with(from_acp_prompt_usage(PROMPT_USAGE, provider_id="p", model_id="m"))
+    assert (s.context_used.state, s.cost_api_equivalent_usd.state) == ("MEASURED", "ESTIMATED")
+    assert s.session_input_tokens.state == "MEASURED"
+    again = s.merged_with(from_acp_usage_update({"used": 50000, "size": 200000}, provider_id="p", model_id="m"))
+    assert again.session_input_tokens.state == "MEASURED"                     # o usage_update nao fala de totais
+    assert again.cost_api_equivalent_usd.state == "STALE"                     # mas fala de custo: sem ele, desatualiza
+
+
+def test_snapshot_from_before_the_session_totals_still_loads():
+    d = ollama().to_dict()
+    for k in ("session_input_tokens", "session_output_tokens", "session_cache_tokens", "covers"):
+        d.pop(k)
+    s = UsageSnapshot.from_dict(d)
+    assert s.session_input_tokens.state == "UNAVAILABLE"

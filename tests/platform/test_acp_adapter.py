@@ -174,7 +174,11 @@ def test_usage_update_from_the_agent_becomes_a_usage_event(tmp_path):
         ev: list[AgentEvent] = []
         a.send_prompt(sid, "usage", ev.append).result(20)
         snaps = [UsageSnapshot.from_dict(e.data) for e in ev if e.kind == "usage"]
-        assert [s.context_used.value for s in snaps] == [41200, 41950]
-        assert snaps[-1].cost_api_equivalent_usd.state == "ESTIMATED" and snaps[0].cost_api_equivalent_usd.state == "UNAVAILABLE"
+        assert [s.context_used.value for s in snaps[:2]] == [41200, 41950]
+        assert snaps[1].cost_api_equivalent_usd.state == "ESTIMATED" and snaps[0].cost_api_equivalent_usd.state == "UNAVAILABLE"
+        totals = snaps[2]                                                     # resposta do prompt: totais da sessao
+        assert (totals.session_input_tokens.value, totals.session_output_tokens.value,
+                totals.session_cache_tokens.value) == (1200, 340, 40400)
+        assert set(totals.covers) == {"session_input_tokens", "session_output_tokens", "session_cache_tokens"}
     finally:
         a.disconnect()
