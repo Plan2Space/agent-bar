@@ -52,7 +52,7 @@ def test_two_conversations_run_at_the_same_time_each_with_its_own_agent(sessions
     b = sessions.add_session()
     a.send("slow")
     b.send("echo 2")
-    assert wait(lambda: not b.busy)
+    assert wait(lambda: not b.busy), ("a 2a conversa nao terminou: status, banner, cliente, pronta, papeis, status da 1a", b.status.text(), b.banner_label.text(), b.client is not None, b.ready, [m["role"] for m in b.chat.messages], a.status.text())
     assert a.busy and agent_texts(b) == ["c0 c1 "]                          # b terminou com a ainda trabalhando
     assert a.client.pid != b.client.pid
     sessions._tick()
