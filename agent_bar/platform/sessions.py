@@ -110,6 +110,12 @@ class SessionManager:
         with self._lock:
             return self._public(self._need(sid))
 
+    def models(self, provider_id: str, workspace: str = "") -> list[dict]:
+        """Modelos que o provedor anuncia (com `images`, `tools`, limites), pelo mesmo adaptador das sessões."""
+        with self._lock:
+            adapter = self._adapter(provider_id, workspace)
+        return adapter.list_models()
+
     def limit_for(self, provider_id: str) -> int:
         return int(self.limits.get(provider_id, self.default_limit))
 

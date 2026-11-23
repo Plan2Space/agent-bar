@@ -33,10 +33,12 @@ from PySide6.QtWidgets import (
 
 from agent_bar.cockpit import evidence as E
 from agent_bar.cockpit import gallery as G
+from agent_bar.cockpit import run_vision as RV
 from agent_bar.cockpit.ui.diff_panel import DiffPanel
 from agent_bar.cockpit.ui.github_tabs import BTN_CSS, COMBO_CSS, TEXT_CSS, TREE_CSS
 from agent_bar.cockpit.ui.human_panel import HumanPanel
 from agent_bar.cockpit.ui.packages_panel import PackagesPanel
+from agent_bar.platform.usage import usage_line
 
 STATE_COLOR = {"PASS": "#3ddc84", "APPROVED": "#3ddc84", "FAIL": "#ff6b6d", "CHANGES_REQUESTED": "#ff6b6d", "BLOCKED": "#ffc233"}
 STATE_KEYS = ("GEOMETRY_PASS", "FUNCTIONAL_PASS", "VISUAL_REVIEW", "HUMAN_APPROVAL")
@@ -49,6 +51,8 @@ GALLERY_COLUMNS = ["Data", "Fonte", "Tipo", "Run / referência", "Render", "Geom
 class _Bridge(QObject):
     loaded = Signal(int, object)
     gallery = Signal(int, object)
+    vision_models = Signal(object)
+    vision_done = Signal(object)
 
 
 class ImagePane(QWidget):
@@ -147,6 +151,11 @@ class ReviewTab(QWidget):
         self.bridge = _Bridge()
         self.bridge.loaded.connect(self._loaded)
         self.bridge.gallery.connect(self._gallery_loaded)
+        self.bridge.vision_models.connect(self._vision_models_loaded)
+        self.bridge.vision_done.connect(self._vision_finished)
+        self.vision: RV.RunVision | None = None
+        self.vision_result: RV.VisionResult | None = None
+        self.vision_error = ""
         self._build()
 
     # ------------------------------------------------------------------------------------------------- layout
@@ -271,9 +280,11 @@ class ReviewTab(QWidget):
         self.gallery_images = QListWidget()
         self.gallery_images.setStyleSheet("QListWidget{background:#17171a;color:#cfcfd4;border:1px solid #2a2a30;font-size:11px}")
         self.gallery_pane = ImagePane()
+        self.gallery_images.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
         rl.addWidget(self.gallery_detail)
         rl.addWidget(self.gallery_images, 1)
         rl.addWidget(self.gallery_pane, 2)
+        rl.addWidget(self._build_vision())
         split.addWidget(right)
         split.setSizes([700, 420])
         lay.addWidget(split, 1)
@@ -573,11 +584,132 @@ class ReviewTab(QWidget):
         else:
             self.gallery_pane.show_image(it.item_id, None, "nenhuma imagem com sha256 conferido")
 
+    # --------------------------------------------------------------------------------- avaliar este run (visão)
+    def _build_vision(self) -> QWidget:
+        """Manda as imagens escolhidas do run a um modelo com visão e mostra o texto, o uso e a entrega registrada.
+        Não grava nota nem veredito."""
+        from PySide6.QtWidgets import QPlainTextEdit
+        box = QWidget()
+        lay = QVBoxLayout(box)
+        lay.setContentsMargins(0, 4, 0, 0)
+        row = QHBoxLayout()
+        self.vision_model_box = QComboBox()
+        self.vision_model_box.setStyleSheet(COMBO_CSS)
+        self.vision_models_btn = QPushButton("Modelos")
+        self.vision_send_btn = QPushButton("Avaliar este run (enviar imagem)")
+        for b in (self.vision_models_btn, self.vision_send_btn):
+            b.setStyleSheet(BTN_CSS)
+        row.addWidget(self.vision_model_box, 2)
+        row.addWidget(self.vision_models_btn)
+        row.addWidget(self.vision_send_btn, 2)
+        self.vision_prompt = QPlainTextEdit(RV.DEFAULT_PROMPT)
+        self.vision_prompt.setMaximumHeight(54)
+        self.vision_status = QLabel("")
+        self.vision_status.setWordWrap(True)
+        self.vision_status.setStyleSheet("color:#8f8f98;font-size:11px")
+        self.vision_usage = QLabel("")
+        self.vision_usage.setWordWrap(True)
+        self.vision_usage.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.vision_usage.setStyleSheet("color:#8f8f98;font-size:11px")
+        self.vision_text = QTextBrowser()
+        self.vision_text.setStyleSheet(TEXT_CSS)
+        self.vision_text.setMaximumHeight(120)
+        lay.addLayout(row)
+        lay.addWidget(self.vision_prompt)
+        lay.addWidget(self.vision_status)
+        lay.addWidget(self.vision_text)
+        lay.addWidget(self.vision_usage)
+        self.vision_models_btn.clicked.connect(self.load_vision_models)
+        self.vision_send_btn.clicked.connect(self.evaluate_selected)
+        self._vision_enable()
+        return box
+
+    def set_vision(self, runner: RV.RunVision | None) -> None:
+        self.vision = runner
+        self._vision_enable()
+
+    def _vpool(self) -> ThreadPoolExecutor:
+        """Pool próprio: um envio de imagem (minutos no modelo local) não segura a leitura da galeria."""
+        if getattr(self, "_vision_pool", None) is None:
+            self._vision_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="cockpit-vision")
+        return self._vision_pool
+
+    def _vision_enable(self, busy: bool = False) -> None:
+        ok = self.vision is not None and not busy
+        self.vision_models_btn.setEnabled(ok)
+        self.vision_send_btn.setEnabled(ok and self.vision_model_box.count() > 0)
+        if self.vision is None:
+            self.vision_status.setText("avaliação por visão indisponível")
+
+    def load_vision_models(self) -> None:
+        if self.vision is None:
+            return
+        self.vision_status.setText("lendo os modelos do provedor…")
+        fut = self._vpool().submit(self.vision.models)
+        fut.add_done_callback(lambda f: self.bridge.vision_models.emit(f.exception() or f.result()))
+
+    def _vision_models_loaded(self, result: object) -> None:
+        self.vision_model_box.clear()
+        if isinstance(result, BaseException):
+            self.vision_status.setText(f"provedor indisponível: {type(result).__name__}: {result}")
+        else:
+            for m in result:  # type: ignore[union-attr]
+                tag = "visão" if m.get("images") == "SUPPORTED" else "sem visão"
+                self.vision_model_box.addItem(f"{m['model_id']} ({tag})", m["model_id"])
+            self.vision_status.setText(f"{self.vision_model_box.count()} modelo(s); só modelo com visão recebe imagem")
+        self._vision_enable()
+
+    def selected_image_keys(self) -> list[str]:
+        it = self._gallery_item(self.gallery_tree.currentItem())
+        if it is None:
+            return []
+        paths = {li.data(Qt.ItemDataRole.UserRole) for li in self.gallery_images.selectedItems()}
+        return [i.key for i in it.images if str(i.path) in paths]
+
+    def evaluate_selected(self) -> None:
+        """Clique em "Avaliar este run": item e imagens selecionados na galeria, modelo escolhido."""
+        item = self._gallery_item(self.gallery_tree.currentItem())
+        self.vision_result, self.vision_error = None, ""
+        self.vision_text.clear()
+        self.vision_usage.setText("")
+        if self.vision is None or item is None or self.vision_model_box.currentData() is None:
+            self.vision_error = "escolha um run da galeria e um modelo"
+            self.vision_status.setText(self.vision_error)
+            return
+        model, keys, prompt = self.vision_model_box.currentData(), self.selected_image_keys(), self.vision_prompt.toPlainText()
+        ref = G.reference_item(self.gallery_items())
+        self.vision_status.setText(f"enviando {len(keys)} imagem(ns) de {item.item_id} para {model}…")
+        self._vision_enable(busy=True)
+
+        def job():
+            return self.vision.ask(item, keys, model, prompt, reference=ref).result(600)  # type: ignore[union-attr]
+        fut = self._vpool().submit(job)
+        fut.add_done_callback(lambda f: self.bridge.vision_done.emit(f.exception() or f.result()))
+
+    def _vision_finished(self, result: object) -> None:
+        self._vision_enable()
+        if isinstance(result, RV.VisionRefused):
+            self.vision_error = "recusado, nada enviado: " + "; ".join(result.reasons)
+            self.vision_status.setText(self.vision_error)
+            return
+        if isinstance(result, BaseException):
+            self.vision_error = f"falhou: {type(result).__name__}: {result}"
+            self.vision_status.setText(self.vision_error)
+            return
+        res: RV.VisionResult = result  # type: ignore[assignment]
+        self.vision_result = res
+        self.vision_status.setText(f"{res.model_id} respondeu sobre {res.run_id} (texto do modelo; não é nota nem "
+                                   "veredito)")
+        self.vision_text.setPlainText(res.text)
+        self.vision_usage.setText(f"{usage_line(res.usage)} · {res.delivery_line()}")
+
     def _show_gallery_image(self, li: QListWidgetItem | None) -> None:
         if li is None:
             return
         self.gallery_pane.show_image(li.text(), Path(li.data(Qt.ItemDataRole.UserRole)))
 
     def shutdown(self) -> None:
+        if getattr(self, "_vision_pool", None) is not None:
+            self._vision_pool.shutdown(wait=True, cancel_futures=True)
         if self._own_pool:
             self.pool.shutdown(wait=True, cancel_futures=True)

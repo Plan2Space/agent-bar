@@ -7,6 +7,7 @@ from PySide6.QtWidgets import QMainWindow, QTabWidget
 from agent_bar.cockpit.acp import AsyncRuntime
 from agent_bar.cockpit.github import GhClient, configured_repos
 from agent_bar.cockpit.notifications import NotificationCenter, image_notification
+from agent_bar.cockpit.run_vision import RunVision
 from agent_bar.cockpit.ui.chat import ChatView
 from agent_bar.cockpit.ui.chat_sessions import ChatSessions
 from agent_bar.cockpit.ui.dev_tab import DevTab
@@ -17,6 +18,7 @@ from agent_bar.cockpit.ui.permissions_tab import PermissionsTab
 from agent_bar.cockpit.ui.review_tab import ReviewTab
 from agent_bar.cockpit.ui.workflows_tab import WorkflowsTab
 from agent_bar.platform.image_ledger import ImageLedger
+from agent_bar.platform.sessions import SessionManager
 from agent_bar.targets import load_targets
 
 TAB_CSS = ("QTabWidget::pane{border:0;background:#16161a}QTabBar::tab{background:#202026;color:#bdbdc4;padding:6px 14px;"
@@ -64,6 +66,9 @@ class CockpitWindow(QMainWindow):
         # Notificacoes; so publica aqui (thread-safe), a aba se atualiza pelo proprio timer
         self.image_ledger = ImageLedger(self.sessions.inbox.path,
                                         on_change=lambda rows: self.center.publish(**image_notification(rows)))
+        # "avaliar este run" (Revisão visual): SessionManager da plataforma com ESTE ledger (um registro só)
+        self.platform_sessions = SessionManager({"ollama": _ollama_adapter}, image_ledger=self.image_ledger)
+        self.review.set_vision(RunVision(self.platform_sessions, self.image_ledger))
         self.notifications = NotificationsTab(self.center, inbox=self.sessions.inbox, answer_fn=self.sessions.answer_permission,
                                               is_open_fn=self.sessions.broker.is_open)
         self.sessions.permission_listeners += [lambda _id: self.permissions.refresh(), lambda _id: self.notifications.refresh()]
@@ -144,9 +149,18 @@ class CockpitWindow(QMainWindow):
         self.sessions.shutdown(close_store=False)                           # #75: conversas fechadas, banco ainda aberto
         self.runtime.stop()                                                  # nenhum callback do agente chega depois daqui
         self.sessions.close_store()                                          # so agora os bancos
+        self.platform_sessions.close_all()                                   # antes do ledger: nenhum envio depois
         self.image_ledger.close()
         self.center.close()
 
     def closeEvent(self, e) -> None:                                            # noqa: N802
         self.shutdown()
         super().closeEvent(e)
+
+
+def _ollama_adapter(*_workspace):
+    """Adaptador Ollama no endpoint descoberto (OLLAMA_HOST ou o padrão), como o Chat."""
+    from agent_bar.platform.discovery import discover
+    from agent_bar.platform.ollama import OllamaAdapter
+    endpoint = next(p["endpoint"] for p in discover(which=lambda _n: None) if p["provider_id"] == "ollama")
+    return OllamaAdapter(endpoint, timeout=120)
