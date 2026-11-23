@@ -304,3 +304,10 @@ def test_card_image_prefers_the_render_frame(tmp_path):
     img = lambda k: G.GalleryImage(k, Path(k), "0" * 64, "r", k)                 # noqa: E731
     item = G.GalleryItem(G.PUBLISHED, PLANT, ROOM, "x", "render", images=[img("cama_3q"), img("render_dia_cama_3q")])
     assert G.primary_image(item).key == "render_dia_cama_3q"
+
+
+def test_a_single_rejected_frame_makes_the_run_unverified(tmp_path):
+    it = gallery(tmp_path).get(BAD_SHA)                                           # 1 quadro conferido, 1 divergente
+    assert len(it.images) == 1 and len(it.rejected) == 1
+    assert not it.verified
+    assert any("1 quadro(s) recusado(s)" in g for g in it.verification_gaps())
