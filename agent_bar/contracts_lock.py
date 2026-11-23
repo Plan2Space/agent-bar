@@ -71,7 +71,9 @@ def verify_code(lock: dict | None = None) -> list[Finding]:
 
 
 def _git(checkout: Path, *args: str) -> str:
-    return subprocess.run(["git", "-C", str(checkout), *args], capture_output=True, check=True).stdout.decode("utf-8")
+    from agent_bar.cockpit.acp import creation_flags  # sem janela de console (regra do app)
+    return subprocess.run(["git", "-C", str(checkout), *args], capture_output=True, check=True,
+                          creationflags=creation_flags()).stdout.decode("utf-8")
 
 
 def latest_version(text: str) -> tuple[int, int, int] | None:
