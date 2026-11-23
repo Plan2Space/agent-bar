@@ -72,6 +72,40 @@ def test_terminal_path_outside_fixture_root_is_rejected(tmp_path):
     assert not o.terminal and "SECRET" not in o.terminal_status
 
 
+def test_terminal_tail_redacts_credentials_before_reaching_the_panel(tmp_path):
+    gov, path, task_id = fixture_store(tmp_path)
+    token = "ghp_" + "a" * 36
+    (gov / "review.stdout.log").write_text(
+        f"push with {token}\nAuthorization: Bearer abcdefghijklmnop\napi_key=hunter2hunter2\nok line\n", encoding="utf-8")
+    (gov / "missing.stderr.log").write_text(
+        "-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEA\nQUJDREVGR0hJSktM\n-----END RSA PRIVATE KEY-----\nboom\n",
+        encoding="utf-8")
+    text = "\n".join(collect_observation(db_path=path).terminal)
+    assert "ok line" in text and "boom" in text
+    for leaked in (token, "abcdefghijklmnop", "hunter2", "MIIEowIBAAKCAQEA", "QUJDREVGR0hJSktM"):
+        assert leaked not in text
+    assert "<segredo>" in text
+
+
+def test_terminal_window_cut_inside_a_private_key_hides_the_key_body(tmp_path):
+    gov, path, _ = fixture_store(tmp_path)
+    body = "\n".join("QUJD" + str(i).zfill(4) * 15 for i in range(200))    # PEM body maior que a janela de 8 KiB
+    (gov / "review.stdout.log").write_text(
+        f"-----BEGIN PRIVATE KEY-----\n{body}\n-----END PRIVATE KEY-----\nafter key\n", encoding="utf-8")
+    text = "\n".join(collect_observation(db_path=path).terminal)
+    assert "after key" in text and "QUJD" not in text
+
+
+def test_store_errors_and_details_are_redacted(tmp_path):
+    gov, path, task_id = fixture_store(tmp_path)
+    with sqlite3.connect(path) as db:
+        db.execute("UPDATE events SET error=? WHERE id=?", ("auth failed token=s3cr3tvalue", task_id))
+        db.execute("UPDATE transitions SET detail=?", ("password: pa55word",))
+    o = collect_observation(db_path=path)
+    assert all("s3cr3tvalue" not in t.error for t in o.tasks)
+    assert all("pa55word" not in e.detail for e in o.timeline)
+
+
 def test_demo_is_explicit_and_cannot_be_mistaken_for_real(tmp_path, monkeypatch):
     gov, path, _ = fixture_store(tmp_path)
     monkeypatch.setenv("AGENT_BAR_DEMO", "1")
