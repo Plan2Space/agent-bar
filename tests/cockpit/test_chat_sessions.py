@@ -159,6 +159,7 @@ def _registry_with(tmp_path, pid, created, studio_pid=999999, studio_created=1.0
 
 def test_agents_left_by_a_crashed_studio_show_a_banner_and_only_those_are_ended(tmp_path):
     import subprocess
+
     from agent_bar.cockpit.agent_registry import AgentRegistry
     from agent_bar.platform.proc import creation_time
     leftover = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
@@ -179,6 +180,7 @@ def test_agents_left_by_a_crashed_studio_show_a_banner_and_only_those_are_ended(
 
 def test_a_reused_pid_or_a_live_studio_never_shows_as_an_orphan(tmp_path):
     import subprocess
+
     from agent_bar.cockpit.agent_registry import AgentRegistry
     from agent_bar.platform.proc import creation_time
     other = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
@@ -196,6 +198,7 @@ def test_a_reused_pid_or_a_live_studio_never_shows_as_an_orphan(tmp_path):
 
 def test_the_registry_follows_live_agents_and_is_cleared_on_a_clean_exit(tmp_path):
     import json
+
     from agent_bar.cockpit.agent_registry import AgentRegistry
     path = tmp_path / "agent-processes.json"
     (tmp_path / "ws").mkdir(exist_ok=True)
