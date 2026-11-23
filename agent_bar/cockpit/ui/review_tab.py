@@ -33,7 +33,9 @@ from PySide6.QtWidgets import (
 
 from agent_bar.cockpit import evidence as E
 from agent_bar.cockpit import gallery as G
+from agent_bar.cockpit import review_comments as RC
 from agent_bar.cockpit import run_vision as RV
+from agent_bar.cockpit.ui.design_view import DesignView
 from agent_bar.cockpit.ui.diff_panel import DiffPanel
 from agent_bar.cockpit.ui.github_tabs import BTN_CSS, COMBO_CSS, TEXT_CSS, TREE_CSS
 from agent_bar.cockpit.ui.human_panel import HumanPanel
@@ -45,7 +47,7 @@ STATE_KEYS = ("GEOMETRY_PASS", "FUNCTIONAL_PASS", "VISUAL_REVIEW", "HUMAN_APPROV
 HISTORY_COLUMNS = ["Data", "Etapa", "Run", "Fonte", "Situação", "Geometria", "Funcional", "Visual", "Tendência",
                    "Humano"]
 GALLERY_COLUMNS = ["Data", "Fonte", "Tipo", "Run / referência", "Render", "Geometria", "Funcional", "Construção",
-                   "Imagens", "Humano", "Elegível a melhor"]
+                   "Imagens", "Humano", "Verificado", "Elegível a melhor"]
 
 
 class _Bridge(QObject):
@@ -102,39 +104,19 @@ class ImagePane(QWidget):
         self._fit()
 
 
-class CardView(QWidget):
-    """Um cartão da faixa (referência / último render / melhor conhecido): título, imagem e legenda ou motivo."""
-
-    def __init__(self, role: str) -> None:
-        super().__init__()
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(0, 0, 0, 0)
-        self.title = QLabel(role)
-        self.title.setStyleSheet("color:#9a9aa3;font-size:12px;font-weight:600")
-        self.pane = ImagePane()
-        self.pane.setMinimumSize(220, 120)
-        self.pane.image.setMinimumSize(220, 110)
-        lay.addWidget(self.title)
-        lay.addWidget(self.pane, 1)
-        self.card: G.Card | None = None
-
-    def show_card(self, card: G.Card) -> None:
-        self.card = card
-        img = card.image
-        if img is None:
-            self.pane.show_image(card.text, None, card.text if card.item is None else "nenhuma imagem com sha256 conferido")
-        else:
-            self.pane.show_image(f"{card.text}\n{img.key} @ {img.sha256[:12]}…", img.path)
-
-
 class ReviewTab(QWidget):
     run_selected = Signal()                                                     # (a, b) mudou: relatório/pacotes ouvem
+    request_chat = Signal(str, str)                                             # workspace, pedido (o envio é manual)
 
     def __init__(self, root_fn: Callable[[], Path] = E.evidence_dir,
                  load_fn: Callable[[Path], E.Catalog] = E.load_catalog,
                  executor: ThreadPoolExecutor | None = None, report_store=None, package_writer=None,
-                 gallery_fn: Callable[[E.Catalog | None], G.Gallery] | None = G.build_gallery) -> None:
+                 gallery_fn: Callable[[E.Catalog | None], G.Gallery] | None = G.build_gallery,
+                 comment_store: RC.CommentStore | None = None) -> None:
         super().__init__()
+        self.comment_store = comment_store or RC.CommentStore(
+            protected=(E.evidence_dir(), G.engine_dir(), G.library_dir()))
+        self.last_comment: RC.ReviewComment | None = None
         self.gallery_fn = gallery_fn
         self.evaluations_for: Callable[[G.GalleryItem], list] = lambda _item: []   # S01C-F1-05 preenche
         self.gallery: G.Gallery | None = None
@@ -168,26 +150,33 @@ class ReviewTab(QWidget):
             w.setStyleSheet(COMBO_CSS)
         self.reload_btn = QPushButton("Recarregar")
         self.reload_btn.setStyleSheet(BTN_CSS)
-        for cap, w, s in (("Cômodo", self.room_box, 2), ("Run A", self.a_box, 3), ("Run B", self.b_box, 3)):
-            lb = QLabel(cap)
-            lb.setStyleSheet("color:#8f8f98;font-size:11px")
-            head.addWidget(lb)
-            head.addWidget(w, s)
+        lb = QLabel("Cômodo")
+        lb.setStyleSheet("color:#8f8f98;font-size:12px")
+        head.addWidget(lb)
+        head.addWidget(self.room_box, 3)
+        head.addStretch(4)
         head.addWidget(self.reload_btn)
         lay.addLayout(head)
+        # S01C-F1-04: a tela principal é a Galeria de design; o resto fica em Detalhes técnicos
+        self.pages = QTabWidget()
+        self.design = DesignView()
+        self.pages.addTab(self.design, "Galeria de design")
+        tech = QWidget()
+        lay_tech = QVBoxLayout(tech)
+        lay_tech.setContentsMargins(0, 4, 0, 0)
+        self.pages.addTab(tech, "Detalhes técnicos")
+        lay.addWidget(self.pages, 1)
+        pair = QHBoxLayout()
+        for cap, w in (("Run A", self.a_box), ("Run B", self.b_box)):
+            lbl = QLabel(cap)
+            lbl.setStyleSheet("color:#8f8f98;font-size:11px")
+            pair.addWidget(lbl)
+            pair.addWidget(w, 1)
+        lay_tech.addLayout(pair)
         self.source = QLabel("")
         self.source.setWordWrap(True)
         self.source.setStyleSheet("color:#8f8f98;font-size:11px")
-        lay.addWidget(self.source)
-        strip = QHBoxLayout()                                                   # S01C-F1-04: faixa de 3 cartões
-        self.card_views = {role: CardView(role) for role in ("referência", "último render", "melhor conhecido")}
-        for cv in self.card_views.values():
-            strip.addWidget(cv, 1)
-        strip_box = QWidget()
-        strip_box.setLayout(strip)
-        strip_box.setMaximumHeight(210)
-        strip.setContentsMargins(0, 0, 0, 0)
-        lay.addWidget(strip_box)
+        lay_tech.addWidget(self.source)
         split = QSplitter(Qt.Orientation.Horizontal)
         left = QWidget()
         ll = QVBoxLayout(left)
@@ -245,7 +234,9 @@ class ReviewTab(QWidget):
             self.details.addTab(w, title)
         vsplit.addWidget(self.details)
         vsplit.setSizes([470, 230])
-        lay.addWidget(vsplit, 1)
+        lay_tech.addWidget(vsplit, 1)
+        self.design.open_technical.connect(self.show_technical)
+        self.design.comment_requested.connect(self.comment_to_chat)
         self.reload_btn.clicked.connect(self.reload)
         self.room_box.activated.connect(lambda _i: self._fill_runs())
         self.a_box.activated.connect(lambda _i: self._compare())
@@ -470,8 +461,42 @@ class ReviewTab(QWidget):
         self.reports.setHtml(self._verdict_html(a) + "<hr>" + self._verdict_html(b))
 
     def _cards(self) -> None:
-        for card in G.cards(self.gallery_items(), self.evaluations_for):
-            self.card_views[card.role].show_card(card)
+        self.design.set_items(self.gallery_items(), self.evaluations_for)
+
+    def comment_to_chat(self, text: str) -> None:
+        """S01C-F1-11: o comentário vira item R41 (sem triagem) com o run, a câmera e a comparação visíveis, e o Chat
+        abre preenchido com esse contexto estruturado. Nada é enviado sozinho."""
+        d = self.design
+        vis = d.visible()
+        if vis is None:
+            d.comment_status.setText("escolha um render no histórico antes de comentar")
+            return
+        item, image, compared = vis
+        try:
+            c = RC.new_comment(text, item, image, reference=d.reference, compared=compared)
+            request = RC.chat_request(c)
+            self.comment_store.save(c)
+        except (RC.CommentRejected, E.EvidenceError, OSError) as exc:
+            d.comment_status.setText(f"comentário não registrado: {exc}")
+            return
+        self.last_comment = c
+        engine = G.engine_dir()
+        ws = str(engine) if (engine / ".git").exists() else ""
+        d.comment.clear()
+        d.comment_status.setText(f"comentário {c.id} registrado (R41, sem triagem) sobre {item.item_id} · câmera "
+                                 f"{image.key}. O Chat abriu com o pedido; envie quando quiser.")
+        self.request_chat.emit(ws, request)
+
+    def show_technical(self, item_id: str) -> None:
+        """Do item da galeria de design para os Detalhes técnicos dele (relatórios, manifest, hashes)."""
+        self.pages.setCurrentIndex(1)
+        self.details.setCurrentWidget(self.gallery_view)
+        t = self.gallery_tree
+        row = next((t.topLevelItem(i) for i in range(t.topLevelItemCount())
+                    if t.topLevelItem(i).data(0, Qt.ItemDataRole.UserRole) == item_id), None)
+        if row is not None:
+            t.setCurrentItem(row)
+            t.scrollToItem(row)
 
     def _history(self) -> None:
         """Histórico do cômodo, mais recente primeiro: runs da galeria (todas as fontes) e, depois, as etapas do evidence
@@ -546,13 +571,13 @@ class ReviewTab(QWidget):
         self.gallery_note.setText(
             "Do mais recente para o mais antigo. "
             + " · ".join(f"{G.SOURCE_LABEL[s]}: {n}" for s, n in counts.items() if n)
-            + ". Itens do motor: " + G.UNPUBLISHED_NOTE + ". Elegível = candidato a melhor render (F0 §4); "
-            "não é veredito visual." + errs)
+            + ". Itens do motor: " + G.UNPUBLISHED_NOTE + ". Visível, verificado, elegível e melhor são estados "
+            "separados; elegível = candidato a melhor render (F0 §4), não é veredito visual." + errs)
         for i in items:
-            blockers = i.eligibility()
+            st = i.states()                                                    # VISÍVEL sempre; os outros com motivo
             row = QTreeWidgetItem([i.when(), i.source, i.kind, i.item_id, i.render_verdict or "—",
                                    *(i.build.get(k, "—") for k in G.BUILD_KEYS), str(len(i.images)),
-                                   i.human_approval, "sim" if not blockers else "não: " + "; ".join(blockers)])
+                                   i.human_approval, st["VERIFICADO"], st["ELEGÍVEL"]])
             row.setData(0, Qt.ItemDataRole.UserRole, i.item_id)
             for col in (4, 5, 6, 7):
                 row.setForeground(col, QBrush(QColor(STATE_COLOR.get(row.text(col), "#cfcfd4"))))
@@ -570,7 +595,9 @@ class ReviewTab(QWidget):
             self.gallery_detail.setText("")
             self.gallery_pane.show_image("", None, "selecione um item da galeria")
             return
-        lines = [f"{it.item_id} · fonte {it.source} ({it.source_label})", *it.notes]
+        st = it.states()
+        lines = [f"{it.item_id} · fonte {it.source} ({it.source_label})", *it.notes,
+                 *(f"{k}: {v}" for k, v in st.items())]
         if it.camera_file:
             lines.append(f"câmeras/render spec: {it.camera_file}")
         lines += [f"erro: {e}" for e in it.errors[:4]] + [f"imagem recusada: {r}" for r in it.rejected[:6]]
@@ -709,6 +736,7 @@ class ReviewTab(QWidget):
         self.gallery_pane.show_image(li.text(), Path(li.data(Qt.ItemDataRole.UserRole)))
 
     def shutdown(self) -> None:
+        self.design.shutdown()
         if getattr(self, "_vision_pool", None) is not None:
             self._vision_pool.shutdown(wait=True, cancel_futures=True)
         if self._own_pool:

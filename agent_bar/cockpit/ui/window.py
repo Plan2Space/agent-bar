@@ -49,6 +49,7 @@ class CockpitWindow(QMainWindow):
         self.review = ReviewTab(**(review_kwargs or {}))
         self.tabs.addTab(self.review, "Revisão visual")
         self.review.packages.send_to_chat.connect(self.open_correction)
+        self.review.request_chat.connect(self.open_correction)               # S01C-F1-11: comentário da galeria
         self.tabs.addTab(self.library, "Biblioteca")
         gh = gh or GhClient()
         repos = repos or configured_repos(load_targets().org)
