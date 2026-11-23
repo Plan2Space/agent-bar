@@ -28,7 +28,7 @@ import sqlite3
 import threading
 import time
 import uuid
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, fields
 from datetime import datetime, timezone
 from pathlib import Path
@@ -91,8 +91,10 @@ class ImageDelivery:
     ref_source_manifest: str
     ref_build_spec_id: str
     ref_created_at: str
+    role: str = ""                   # papel da imagem no pedido: "reference" | "render" | "" (sem papel declarado)
 
 
+ROLES = ("", "reference", "render")
 _COLUMNS = [f.name for f in fields(ImageDelivery)]
 
 
@@ -115,19 +117,26 @@ class ImageLedger:
         if self.path != ":memory:":
             self._db.execute("PRAGMA journal_mode=WAL")
         cols = ", ".join(f"{c} {'REAL' if c == 'recorded_ts' else 'INTEGER' if c == 'bytes' else 'TEXT'} NOT NULL"
-                         for c in _COLUMNS if c != "id")
+                         + (" DEFAULT ''" if c == "role" else "") for c in _COLUMNS if c != "id")
         self._db.executescript(f"""
             CREATE TABLE IF NOT EXISTS image_deliveries (id TEXT PRIMARY KEY, {cols});
             CREATE INDEX IF NOT EXISTS image_deliveries_session ON image_deliveries(session_id, recorded_ts);
             CREATE INDEX IF NOT EXISTS image_deliveries_sha ON image_deliveries(sha256);
             CREATE INDEX IF NOT EXISTS image_deliveries_batch ON image_deliveries(batch_id);
         """)
+        have = {r["name"] for r in self._db.execute("PRAGMA table_info(image_deliveries)")}
+        if "role" not in have:                                                # registro de antes do papel: migra
+            self._db.execute("ALTER TABLE image_deliveries ADD COLUMN role TEXT NOT NULL DEFAULT ''")
 
     # ------------------------------------------------------------------------------------------------ gravar
     def record_delivery(self, images: Iterable[ImagePayload | str | Path], *, provider_id: str, model_id: str,
                         session_id: str, requested_by: str, purpose: str, provider_session_id: str = "",
-                        reference: ReferenceLink | None = None) -> list[ImageDelivery]:
-        """Grava o lote (tudo ou nada) com estado RECORDED. Qualquer falha -> ImageLedgerError."""
+                        reference: ReferenceLink | None = None,
+                        roles: Sequence[str] | None = None) -> list[ImageDelivery]:
+        """Grava o lote (tudo ou nada) com estado RECORDED. Qualquer falha -> ImageLedgerError.
+
+        `roles` (um por imagem, na ordem): o papel de cada imagem no mesmo pedido, ex.: a referência e o render. Com
+        papéis, o `source_hash` da referência é conferido só contra a imagem de papel "reference"."""
         if self.closed:
             raise ImageLedgerError("registro de imagem fechado: nada enviado")
         if purpose not in PURPOSES:
@@ -139,11 +148,16 @@ class ImageLedger:
         payloads = load_images(images)
         if not payloads:
             raise ImageLedgerError("nenhuma imagem para registrar")
+        role_of = list(roles) if roles is not None else [""] * len(payloads)
+        if len(role_of) != len(payloads) or any(r not in ROLES for r in role_of):
+            raise ImageLedgerError(f"papéis {role_of} não casam com {len(payloads)} imagem(ns) (aceita {list(ROLES)})")
         ref = reference or ReferenceLink(reference_id="")
         if reference is not None:
             if not reference.reference_id:
                 raise ImageLedgerError("referencia sem reference_id (chave do catalogo da design-library)")
-            if reference.source_hash and any(p.sha256 != reference.source_hash.lower() for p in payloads):
+            checked = [p for p, r in zip(payloads, role_of, strict=True) if r == "reference"] \
+                if "reference" in role_of else payloads
+            if reference.source_hash and any(p.sha256 != reference.source_hash.lower() for p in checked):
                 raise ImageLedgerError(f"source_hash da referencia {reference.reference_id} nao confere com o arquivo "
                                        f"entregue ({payloads[0].sha256[:12]}…)")
         batch, ts = uuid.uuid4().hex, self.clock()
@@ -154,7 +168,7 @@ class ImageLedger:
             error="", ref_id=ref.reference_id, ref_version=ref.reference_version, ref_source_type=ref.source_type,
             ref_project_id=ref.project_id, ref_room_id=ref.room_id, ref_original_file=ref.original_file,
             ref_source_manifest=ref.source_manifest, ref_build_spec_id=ref.build_spec_id,
-            ref_created_at=ref.created_at) for p in payloads]
+            ref_created_at=ref.created_at, role=role) for p, role in zip(payloads, role_of, strict=True)]
         sql = f"INSERT INTO image_deliveries ({', '.join(_COLUMNS)}) VALUES ({', '.join('?' * len(_COLUMNS))})"
         with self._lock:
             try:
@@ -224,14 +238,17 @@ class ImageLedger:
 def send_with_images(adapter: ProviderAdapter, ledger: ImageLedger | None, session_id: str, text: str, on_event,
                      images: Iterable[ImagePayload | str | Path], *, provider_id: str, model_id: str,
                      requested_by: str, purpose: str, studio_session_id: str = "",
-                     reference: ReferenceLink | None = None) -> cf.Future:
-    """Unica porta do Studio para mandar imagem a um agente: valida, registra, e so entao envia os mesmos bytes."""
+                     reference: ReferenceLink | None = None, roles: Sequence[str] | None = None) -> cf.Future:
+    """Unica porta do Studio para mandar imagem a um agente: valida, registra, e so entao envia os mesmos bytes.
+
+    SENT quer dizer "o adaptador aceitou o pedido com estas imagens", nao "o modelo recebeu": a confirmacao do provedor
+    (contagem de tokens de entrada) e de quem le o uso do turno."""
     if ledger is None:
         raise ImageLedgerError("sem registro de imagem configurado: nada enviado")
     payloads = load_images(images)                                            # ImageRejected antes de gravar
     rows = ledger.record_delivery(payloads, provider_id=provider_id, model_id=model_id,
                                   session_id=studio_session_id or session_id, provider_session_id=session_id,
-                                  requested_by=requested_by, purpose=purpose, reference=reference)
+                                  requested_by=requested_by, purpose=purpose, reference=reference, roles=roles)
     batch = rows[0].batch_id
     try:
         fut = adapter.send_prompt(session_id, text, on_event, images=payloads)

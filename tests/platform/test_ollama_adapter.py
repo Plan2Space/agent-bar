@@ -252,3 +252,33 @@ def test_turn_end_reports_usage_from_the_real_counters(adapter, server):
     adapter.send_prompt(sid, "semcontagem", ev.append).result(10)
     s = UsageSnapshot.from_dict(next(e for e in ev if e.kind == "usage").data)
     assert s.output_tokens.state == "UNAVAILABLE"                                 # nunca zero
+
+
+# --------------------------------------------------------------- contexto pedido (review do #94: referência + render)
+def test_requested_context_becomes_num_ctx_and_stays_out_of_the_session_record(adapter, server):
+    s = adapter.create_session(SessionRequest(model_id="vision-d", context_tokens=16384))
+    assert "context_tokens" not in s                                              # Session v1 sem campo novo
+    adapter.send_prompt(s["session_id"], "diga ok", lambda e: None).result(15)
+    [body] = [b for p, b in server.requests if p == "/api/chat"]
+    assert body["options"] == {"num_ctx": 16384}
+    plain = adapter.create_session(SessionRequest(model_id="vision-d"))
+    adapter.send_prompt(plain["session_id"], "diga ok", lambda e: None).result(15)
+    assert "options" not in [b for p, b in server.requests if p == "/api/chat"][-1]   # sem pedido, padrão do servidor
+
+
+def test_context_above_the_advertised_limit_is_refused(adapter):
+    from agent_bar.platform.adapter import ModelRejected
+    with pytest.raises(ModelRejected, match="contexto 65536 fora do limite anunciado"):
+        adapter.create_session(SessionRequest(model_id="vision-d", context_tokens=65536))
+
+
+def test_provider_error_text_reaches_the_failure_message():
+    import io
+    import urllib.error
+
+    from agent_bar.platform.ollama import _ollama_error
+    body = b'{"error":"request (4128 tokens) exceeds the available context size (4096 tokens), try increasing it"}'
+    exc = urllib.error.HTTPError("http://x/api/chat", 400, "Bad Request", {}, io.BytesIO(body))
+    assert _ollama_error(exc) == (": request (4128 tokens) exceeds the available context size (4096 tokens), "
+                                  "try increasing it")
+    assert _ollama_error(urllib.error.HTTPError("u", 500, "x", {}, io.BytesIO(b"<html>"))) == ""

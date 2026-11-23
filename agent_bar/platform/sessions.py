@@ -110,6 +110,12 @@ class SessionManager:
         with self._lock:
             return self._public(self._need(sid))
 
+    def models(self, provider_id: str, workspace: str = "") -> list[dict]:
+        """Modelos que o provedor anuncia (com `images`, `tools`, limites), pelo mesmo adaptador das sessões."""
+        with self._lock:
+            adapter = self._adapter(provider_id, workspace)
+        return adapter.list_models()
+
     def limit_for(self, provider_id: str) -> int:
         return int(self.limits.get(provider_id, self.default_limit))
 
@@ -161,6 +167,8 @@ class SessionManager:
             if self.open_count(provider_id) >= limit:
                 raise SessionLimitReached(f"{provider_id}: {limit} sessoes abertas (limite); feche uma antes de abrir outra")
             adapter = self._adapter(provider_id, request.workspace or "")
+            if request.context_tokens is not None and not adapter.supports_context_tokens:
+                raise CapabilityUnsupported("context_tokens", f"{provider_id} nao aceita fixar a janela de contexto")
             rec = adapter.create_session(request)
             sid = f"p2s-{uuid.uuid4().hex[:12]}"
             s = {
@@ -175,7 +183,7 @@ class SessionManager:
 
     def send(self, sid: str, text: str, on_event: Callable[[AgentEvent], None] = lambda e: None, *,
              images=(), purpose: str = "CHAT", requested_by: str = "studio",
-             reference: ReferenceLink | None = None) -> cf.Future:
+             reference: ReferenceLink | None = None, roles=None) -> cf.Future:
         """Future[PromptResult]. Provedor caido: as sessoes dele vao para ERROR e o future falha com o erro tipado
         (a UI oferece `recover`; o prompt NAO e reenviado sozinho).
         `images`: passa por `send_with_images` (registro antes do envio); sem `image_ledger`, ImageLedgerError."""
@@ -200,7 +208,7 @@ class SessionManager:
                     inner = send_with_images(adapter, self.image_ledger, psid, text, sink, images,
                                              provider_id=s["provider_id"], model_id=s["session"].get("model_accepted") or "provider-default",
                                              requested_by=requested_by, purpose=purpose, studio_session_id=sid,
-                                             reference=reference)
+                                             reference=reference, roles=roles)
                 else:
                     inner = adapter.send_prompt(psid, text, sink)
             except DOWN as exc:

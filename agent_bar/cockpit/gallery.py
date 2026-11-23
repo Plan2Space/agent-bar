@@ -13,6 +13,15 @@ manifest do motor, e "dia, sem hora" quando só houver o dia (VS-R3); run do mot
 `PUBLICADO` (VS-R4); `HUMAN_APPROVAL = PENDING_HUMAN` em todo item que não seja run publicado com human.json aceito
 (VS-R5). O veredito técnico de render fica separado da elegibilidade a "melhor render" (F0 §4): FAIL nunca é elegível,
 e sem avaliação válida nada é elegível. Nada aqui é veredito visual.
+
+Quatro estados SEPARADOS (nenhum infere o outro):
+  - VISÍVEL: todo item lido aparece, inclusive inválido, FAIL e não publicado, sempre com os motivos;
+  - VERIFICADO: sem erro de leitura, com imagem de sha256 conferido e, num render, o vínculo render → build conferido
+    pelo sha256 do .skp e o render_report presente. Falta de qualquer prova = não verificado (fail-closed);
+  - ELEGÍVEL: verificado, render PASS, build com geometria, funcional e construção PASS, PUBLICADO e com avaliação válida.
+    Run não publicado aparece e é comparável, mas não pode ser o melhor render validado (VS-R1a) até um contrato e uma
+    evidência autorizarem;
+  - MELHOR: escolhido entre os elegíveis pela regra registrada (S01C-F1-07). Até a regra existir, nenhum é escolhido.
 """
 from __future__ import annotations
 
@@ -29,11 +38,14 @@ from agent_bar.cockpit import evidence as E
 PUBLISHED = "PUBLICADO"
 ENGINE = "MOTOR_NAO_PUBLICADO"
 REFERENCE = "REFERENCIA"
-IMPORTED = "IMPORTADA_SEM_PROVENIENCIA"
+IMPORTED = "IMPORTADA_SEM_PROVENIENCIA"         # VS-R8: rótulo reservado; nenhum leitor o produz ainda (importação
+                                                # sem manifest depende do C-DL01 na design-library)
 SOURCES = (PUBLISHED, ENGINE, REFERENCE, IMPORTED)
 SOURCE_LABEL = {PUBLISHED: "publicado", ENGINE: "motor, não publicado", REFERENCE: "referência",
                 IMPORTED: "importada, sem proveniência"}
 UNPUBLISHED_NOTE = "não publicado, não validado pelo verify.py"
+UNPUBLISHED_BLOCK = "não publicado: aparece e pode ser comparado, mas não pode ser o melhor render validado (VS-R1a)"
+SKP_UNCHECKED = "skp não conferido"
 BUILD_KEYS = ("geometria", "funcional", "construção")
 ENGINE_REPO = "Plan2Space/sketchup-mcp-next"
 EVIDENCE_REPO = "Plan2Space/evidence"
@@ -117,13 +129,27 @@ class GalleryItem:
     human_approval: str = "PENDING_HUMAN"
     curation: str = ""           # estado de curadoria (só REFERENCIA)
     title: str = ""
+    synthetic: bool | None = None  # só REFERENCIA: imagem gerada (ex.: pelo ChatGPT), nunca foto real
+    usage: str = ""              # só REFERENCIA: ex.: conceptual-only
+    provenance: str = ""         # só REFERENCIA: registration.source_type / origin.kind
 
     @property
     def notes(self) -> list[str]:
         out = [UNPUBLISHED_NOTE] if self.source == ENGINE else []
         if self.source == REFERENCE:
             out.append(f"curadoria {self.curation or 'sem estado'}; referência estética, nunca geometria")
+            out.append(self.provenance_text())
         return out
+
+    def provenance_text(self) -> str:
+        """VS-R1: a referência diz se é sintética e para que pode ser usada."""
+        if self.synthetic is None:
+            kind = "proveniência sintética não declarada no manifest"
+        elif self.synthetic:
+            kind = f"sintética ({self.provenance or 'gerada por IA'})"
+        else:
+            kind = f"não sintética ({self.provenance or 'origem registrada'})"
+        return f"{kind}; uso {self.usage or 'não declarado'}"
 
     @property
     def source_label(self) -> str:
@@ -142,19 +168,35 @@ class GalleryItem:
     def sort_key(self) -> tuple[str, str]:
         return (self.day or self.started_at[:10], self.started_at)
 
+    def verification_gaps(self) -> list[str]:
+        """Por que o item NÃO está verificado (vazio = verificado). Falta de prova conta como falha (fail-closed)."""
+        out = [f"inválido: {e}" for e in self.errors[:3]]
+        if not self.images:
+            out.append("nenhuma imagem com sha256 conferido")
+        elif self.rejected:                                                    # um quadro divergente ou ausente basta
+            out.append(f"{len(self.rejected)} quadro(s) recusado(s): {self.rejected[0]}")
+        if self.kind == "render":
+            gaps = sorted({v for v in self.build.values() if v.startswith(SKP_UNCHECKED)})
+            out += [f"build: {g}" for g in gaps]
+        return out
+
+    @property
+    def verified(self) -> bool:
+        return not self.verification_gaps()
+
     def technical_blockers(self) -> list[str]:
         """Por que este item não pode ser "melhor render", sem contar avaliação (F0 §4). Vazio = tecnicamente apto."""
         if self.kind != "render":
             return ["não é run de render"]
-        out = [f"inválido: {e}" for e in self.errors[:3]]
+        out = self.verification_gaps()
         if self.render_verdict != "PASS":
             out.append(f"render {self.render_verdict or 'sem veredito'}")
         for k in BUILD_KEYS:
             v = self.build.get(k, "ausente")
-            if v != "PASS":
+            if v != "PASS" and not v.startswith(SKP_UNCHECKED):
                 out.append(f"build: {k} {v}")
-        if not self.images:
-            out.append("nenhuma imagem com sha256 conferido")
+        if self.source != PUBLISHED:
+            out.append(UNPUBLISHED_BLOCK)
         return out
 
     def eligibility(self, evaluations: Sequence[object] = ()) -> list[str]:
@@ -167,6 +209,14 @@ class GalleryItem:
 
     def eligible(self, evaluations: Sequence[object] = ()) -> bool:
         return not self.eligibility(evaluations)
+
+    def states(self, evaluations: Sequence[object] = ()) -> dict[str, str]:
+        """VISÍVEL, VERIFICADO, ELEGÍVEL e MELHOR, separados; cada "não" traz o motivo."""
+        gaps, blockers = self.verification_gaps(), self.eligibility(evaluations)
+        return {"VISÍVEL": "sim",
+                "VERIFICADO": "sim" if not gaps else "não: " + "; ".join(gaps),
+                "ELEGÍVEL": "sim" if not blockers else "não: " + "; ".join(blockers),
+                "MELHOR": "não escolhido: regra de melhor render ainda não existe (S01C-F1-07)"}
 
 
 @dataclass
@@ -204,13 +254,72 @@ class Card:
         return primary_image(self.item) if self.item is not None else None
 
 
+# Câmera da miniatura e da comparação: a que mais se aproxima da referência, em ordem FIXA e declarada (não depende da
+# ordem dos arquivos no manifest). r2_canto é a câmera mais nova, feita para a referência r2; depois perspectiva,
+# frente e cama_3q; o resto em ordem alfabética. Quadro renderizado vem antes da vista crua do SketchUp; entre luzes do
+# mesmo quadro, LIGHTING_PREFERENCE. Nunca inventa câmera: só escolhe entre as imagens conferidas do run.
+CAMERA_PREFERENCE = ("r2_canto", "perspectiva", "frente", "cama_3q")
+LIGHTING_PREFERENCE = ("dia", "entardecer", "noite")
+_FRAME = re.compile(r"^(render_)?(?:(dia|entardecer|noite)_)?(.+)$")
+
+
+def camera_of(key: str) -> tuple[str, str, bool]:
+    """`render_entardecer_close_banco` → ("close_banco", "entardecer", True); `perspectiva` → ("perspectiva", "", False).
+
+    O nome do quadro é câmera + luz; a câmera é o que sobra sem o prefixo de render e de luz."""
+    m = _FRAME.match(key)
+    render, light, camera = (m.group(1), m.group(2), m.group(3)) if m else (None, None, key)
+    return camera, light or "", bool(render or light)
+
+
+def camera_rank(img: GalleryImage) -> tuple:
+    camera, light, rendered = camera_of(img.key)
+    cam = CAMERA_PREFERENCE.index(camera) if camera in CAMERA_PREFERENCE else len(CAMERA_PREFERENCE)
+    lit = LIGHTING_PREFERENCE.index(light) if light in LIGHTING_PREFERENCE else len(LIGHTING_PREFERENCE)
+    return (0 if rendered else 1, cam, camera, lit, img.key)
+
+
+def camera_text(img: GalleryImage | None) -> str:
+    """Rótulo humano do quadro: `câmera perspectiva · luz entardecer` (ou `vista perspectiva` sem render)."""
+    if img is None:
+        return "câmera —"
+    camera, light, rendered = camera_of(img.key)
+    return f"câmera {camera}" + (f" · luz {light}" if light else "") if rendered else f"vista {camera} (sem render)"
+
+
 def primary_image(item: GalleryItem) -> GalleryImage | None:
-    """Imagem do cartão: o quadro de render quando houver (no publicado, `render_*`), senão a primeira conferida."""
-    for prefix in ("render_dia", "render_", "dia_"):
-        hit = next((i for i in item.images if i.key.startswith(prefix)), None)
-        if hit is not None:
-            return hit
-    return item.images[0] if item.images else None
+    """Imagem do cartão e do tile: o quadro de menor `camera_rank` entre as imagens conferidas do run."""
+    return min(item.images, key=camera_rank, default=None)
+
+
+def comparison_pair(a: GalleryItem, b: GalleryItem) -> tuple[GalleryImage | None, GalleryImage | None, str]:
+    """Quadros para comparar `a` com `b` na MESMA câmera, quando os dois a têm.
+
+    Percorre as câmeras de `a` na ordem fixa e pega a primeira que `b` também tem (mesma luz se houver, senão a luz
+    preferida de `b`). Sem câmera em comum, ou com a referência (outra câmera por natureza, VS-R7), cada lado mostra o seu
+    quadro principal e a nota diz isso. A nota é vazia quando o par é a câmera preferida de `a`."""
+    first = primary_image(a)
+    if b.source == REFERENCE or a.source == REFERENCE:
+        return first, primary_image(b), ""
+    by_cam: dict[tuple[str, bool], list[GalleryImage]] = {}
+    for img in b.images:
+        cam, _light, rendered = camera_of(img.key)
+        by_cam.setdefault((cam, rendered), []).append(img)
+    for img in sorted(a.images, key=camera_rank):
+        cam, light, rendered = camera_of(img.key)
+        if rendered != camera_of(first.key)[2]:                               # render só com render
+            continue
+        cands = by_cam.get((cam, rendered))
+        if cands:
+            other = next((c for c in cands if c.key == img.key), min(cands, key=camera_rank))
+            note = "" if img is first else (f"{b.item_id} não tem a câmera {camera_of(first.key)[0]}; "
+                                            f"os dois têm {cam}")
+            return img, other, note
+    other = primary_image(b)
+    if first is None or other is None:
+        return first, other, ""
+    return first, other, (f"sem câmera em comum: {b.item_id} não tem {camera_of(first.key)[0]}; "
+                          f"comparando câmeras diferentes")
 
 
 def caption(item: GalleryItem) -> str:
@@ -293,6 +402,25 @@ def _skp_sha(manifest: dict | None) -> str:
     return ""
 
 
+def _render_build(root: Path, skp: dict) -> dict[str, str]:
+    """Vereditos do build que este render usou, SÓ se o vínculo for provado pelo sha256 do .skp nos dois lados.
+    Sem prova (sem caminho, sem sha, build ausente, build sem artefato skp, sha diferente) -> `skp não conferido`."""
+    def unchecked(why: str) -> dict[str, str]:
+        return {k: f"{SKP_UNCHECKED} ({why})" for k in BUILD_KEYS}
+    if not skp.get("path"):
+        return unchecked("render sem input_skp.path")
+    if not skp.get("sha256"):
+        return unchecked("render sem input_skp.sha256")
+    build = _read_json((root / str(skp["path"])).parent / "run_manifest.json")
+    if build is None:
+        return unchecked("run_manifest do build ausente ou ilegível")
+    if not _skp_sha(build):
+        return unchecked("build sem artefato skp com sha256")
+    if _skp_sha(build) != skp.get("sha256"):
+        return unchecked("sha256 do skp do render difere do build")
+    return _build_verdicts(build)
+
+
 def _engine_render(root: Path, d: Path, m: dict, plant: str, room: str) -> GalleryItem:
     run_id = str(m.get("run_id") or d.name)
     it = GalleryItem(ENGINE, plant, room, run_id, "render", started_at=str(m.get("started_at") or ""),
@@ -302,14 +430,11 @@ def _engine_render(root: Path, d: Path, m: dict, plant: str, room: str) -> Galle
     if m.get("status") not in (None, "OK"):
         it.errors.append(f"status do render {m.get('status')}")
     report = _read_json(d / "render_report.json")
-    if report is not None and report.get("verdict") != m.get("verdict"):
+    if report is None:
+        it.errors.append("render_report.json ausente ou ilegível: veredito do render não conferido")
+    elif report.get("verdict") != m.get("verdict"):
         it.errors.append(f"render_report diz {report.get('verdict')}, render_manifest diz {m.get('verdict')}")
-    skp = m.get("input_skp") or {}
-    build_dir = (root / str(skp.get("path"))).parent if skp.get("path") else None
-    build = _read_json(build_dir / "run_manifest.json") if build_dir else None
-    it.build = _build_verdicts(build)
-    if build is not None and skp.get("sha256") and _skp_sha(build) and _skp_sha(build) != skp.get("sha256"):
-        it.build = {k: "skp do render difere do build" for k in BUILD_KEYS}
+    it.build = _render_build(root, m.get("input_skp") or {})
     for o in m.get("outputs") or []:
         if isinstance(o, dict) and o.get("png"):
             _engine_image(root, d, str(o["png"]), o.get("png_sha256"), str(o.get("key") or o["png"]), it)
@@ -405,9 +530,12 @@ def load_references(root: Path, plant: str, room: str) -> tuple[list[GalleryItem
             continue
         ref_id = f"{m.get('reference_id', mp.parent.name)}@v{m.get('version', '?')}"
         at = str(reg.get("registered_at") or "")
+        syn = m.get("synthetic")
         it = GalleryItem(REFERENCE, plant, room, ref_id, "reference", started_at=at, day=at[:10],
                          curation=str((m.get("curation") or {}).get("state") or ""), title=str(m.get("title") or ""),
-                         camera_file="")
+                         camera_file="", synthetic=syn if isinstance(syn, bool) else None,
+                         usage=str(m.get("usage") or ""),
+                         provenance=str(reg.get("source_type") or (m.get("origin") or {}).get("kind") or ""))
         asset = m.get("asset") or {}
         path, sha = Path(str(asset.get("path") or "")), str(asset.get("sha256") or "")
         got = file_sha256(path) if asset.get("path") else None
@@ -454,7 +582,8 @@ def build_gallery(catalog: E.Catalog | None, engine: Path | None = None, library
     return g
 
 
-__all__ = ["ENGINE", "IMPORTED", "NO_EVALUATION", "PUBLISHED", "REFERENCE", "SOURCES", "UNPUBLISHED_NOTE", "Card",
-           "Gallery", "GalleryImage", "GalleryItem", "build_gallery", "caption", "cards", "engine_dir", "file_sha256",
-           "latest_render", "library_dir", "load_engine", "load_references", "primary_image", "reference_item",
-           "trend_text", "visual_text"]
+__all__ = ["ENGINE", "IMPORTED", "NO_EVALUATION", "PUBLISHED", "REFERENCE", "SKP_UNCHECKED", "SOURCES",
+           "UNPUBLISHED_BLOCK", "UNPUBLISHED_NOTE", "Card", "Gallery", "GalleryImage", "GalleryItem", "build_gallery",
+           "CAMERA_PREFERENCE", "LIGHTING_PREFERENCE", "camera_of", "camera_rank", "camera_text",
+           "caption", "cards", "comparison_pair", "engine_dir", "file_sha256", "latest_render", "library_dir", "load_engine",
+           "load_references", "primary_image", "reference_item", "trend_text", "visual_text"]

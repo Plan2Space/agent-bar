@@ -9,6 +9,7 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 QtWidgets = pytest.importorskip("PySide6.QtWidgets")
+from PySide6.QtCore import Qt  # noqa: E402
 
 from agent_bar.cockpit import evidence as E  # noqa: E402
 from agent_bar.cockpit.ui.review_tab import ReviewTab  # noqa: E402
@@ -212,8 +213,9 @@ def test_gallery_tab_shows_render4_fail_and_not_eligible(tmp_path):
         rows = gallery_rows(tab)
         assert R4B not in rows
         r4 = rows[R4]
-        assert r4[1] == "PUBLICADO" and r4[4] == "FAIL" and r4[10].startswith("não: ") and "render FAIL" in r4[10]
-        assert all(not r[10].startswith("sim") for r in rows.values())             # sem avaliação: nada elegível
+        assert r4[1] == "PUBLICADO" and r4[4] == "FAIL" and r4[11].startswith("não: ") and "render FAIL" in r4[11]
+        assert r4[10] == "sim"                                                      # verificado, mas FAIL: visível
+        assert all(not r[11].startswith("sim") for r in rows.values())             # sem avaliação: nada elegível
         assert "não publicado, não validado pelo verify.py" in tab.gallery_note.text()
     finally:
         dispose(tab)
@@ -231,6 +233,8 @@ def test_gallery_item_lists_images_by_ident_and_explains_rejections(tmp_path):
         assert "@" in tab.gallery_images.item(0).text()
         assert "imagem recusada: noite_cama_3q: sha256 diverge do manifest" in tab.gallery_detail.text()
         assert "não publicado, não validado pelo verify.py" in tab.gallery_detail.text()
+        assert "VERIFICADO: não: inválido" not in tab.gallery_detail.text()        # imagem recusada não invalida o run
+        assert "ELEGÍVEL: não:" in tab.gallery_detail.text() and "MELHOR: não escolhido" in tab.gallery_detail.text()
         assert not tab.gallery_pane.image.pixmap().isNull()
     finally:
         dispose(tab)
@@ -242,7 +246,7 @@ def test_gallery_still_shows_the_engine_when_the_evidence_is_down(tmp_path):
     try:
         assert tab.catalog is None and tab.room_box.count() == 1
         r4 = gallery_rows(tab)[R4]
-        assert r4[1] == "MOTOR_NAO_PUBLICADO" and r4[4] == "FAIL" and r4[10].startswith("não: ")
+        assert r4[1] == "MOTOR_NAO_PUBLICADO" and r4[4] == "FAIL" and r4[11].startswith("não: ")
         assert "evidence indisponível" in tab.gallery_note.text()
     finally:
         dispose(tab)
@@ -254,20 +258,99 @@ def history_rows(tab):
     return [[h.topLevelItem(i).text(c) for c in range(h.columnCount())] for i in range(h.topLevelItemCount())]
 
 
-def test_three_cards_reference_latest_render_and_best_without_evaluation(tmp_path):
+def test_design_gallery_is_the_main_page_and_shows_three_big_cards(tmp_path):
     from tests.cockpit.gallery_fixture import UNPUB_FAIL
     tab = _gallery_tab(tmp_path)
     try:
-        cv = tab.card_views
-        assert list(cv) == ["referência", "último render", "melhor conhecido"]
-        assert cv["referência"].card.item.item_id == "ref-quarto-r2@v1"           # a com sha conferido
-        assert not cv["referência"].pane.image.pixmap().isNull()
-        last = cv["último render"].card
-        assert last.item.item_id == UNPUB_FAIL                                    # maior started_at, mesmo FAIL
-        assert "render FAIL" in last.text and "motor, não publicado" in last.text
-        best = cv["melhor conhecido"]
-        assert best.card.item is None and best.card.text == "sem avaliação"
-        assert best.pane.path is None and best.pane.image.text() == "sem avaliação"
+        assert tab.pages.tabText(0) == "Galeria de design" and tab.pages.currentIndex() == 0
+        assert tab.pages.tabText(1) == "Detalhes técnicos"
+        c = tab.design.cards
+        assert [c[k].title.text() for k in c] == ["REFERÊNCIA", "ÚLTIMO RENDER", "MELHOR RENDER"]
+        ref = c["referência"]
+        assert ref.item.item_id == "ref-quarto-r2@v1" and not ref.thumb.pixmap().isNull()   # miniatura real
+        assert "não é geometria validada" in ref.info.text() and "sintética" in ref.info.text()
+        last = c["último"]
+        assert last.item.item_id == UNPUB_FAIL and not last.thumb.pixmap().isNull()       # maior started_at
+        for piece in ("23/11 06:16 UTC", UNPUB_FAIL, "Geometria: PASS", "Render: FAIL", "Nota visual: sem avaliação"):
+            assert piece in last.info.text(), piece
+        best = c["melhor"]
+        assert best.item is None and best.thumb.path is None
+        assert best.info.text().startswith("Ainda não avaliado") and best.thumb.text() == "Ainda não avaliado"
+        assert not best.enlarge_btn.isEnabled()
+    finally:
+        dispose(tab)
+
+
+def test_best_card_never_shows_an_invalid_unpublished_or_unruled_render(tmp_path):
+    from agent_bar.cockpit import gallery as G
+    from tests.cockpit.gallery_fixture import OK_RENDER, PLANT, PUB_OK, R4, ROOM, build_negatives
+    tab = _gallery_tab(tmp_path)
+    try:
+        for evaluated in (OK_RENDER, R4):                                       # não publicado; FAIL
+            tab.evaluations_for = lambda item, e=evaluated: ["avaliação"] if item.item_id == e else []
+            tab._fill_gallery()
+            best = tab.design.cards["melhor"]
+            assert best.item is None and best.info.text().startswith("Nenhum render elegível")   # há avaliação
+            assert "nenhum render elegível" in best.info.text() and best.thumb.path is None
+        ev, engine, dl = build_negatives(tmp_path / "neg")
+        g = G.build_gallery(E.load_catalog(ev, expected={}), engine, dl, rooms=[(PLANT, ROOM)])
+        tab.design.set_items(g.of(PLANT, ROOM), lambda item: ["avaliação"] if item.item_id == PUB_OK else [])
+        best = tab.design.cards["melhor"]                                        # elegível existe, regra ainda não
+        assert best.item is None and "S01C-F1-07" in best.info.text()
+    finally:
+        dispose(tab)
+
+
+def test_history_gallery_is_newest_first_with_real_thumbnails_and_states(tmp_path):
+    from tests.cockpit.gallery_fixture import R4, R4B, UNPUB_FAIL
+    tab = _gallery_tab(tmp_path)
+    try:
+        h = tab.design.history
+        ids = [h.item(i).data(Qt.ItemDataRole.UserRole) for i in range(h.count())]
+        renders = [i.item_id for i in tab.gallery_items() if i.kind == "render"]
+        assert ids == renders and ids[0] == UNPUB_FAIL and R4B not in ids        # só renders, mais recente primeiro
+        assert all(not h.item(i).icon().isNull() for i in range(h.count()) if tab.gallery.get(ids[i]).images)
+        first = h.item(0).text()
+        assert first.startswith("23/11 06:16 UTC") and "câmera cama_3q · luz dia" in first and "visual: sem avaliação" in first
+        r4 = h.item(ids.index(R4)).text()
+        assert "render FAIL" in r4 and "FAIL, não elegível" in r4                # FAIL visível e identificado
+        import re
+        assert not re.search(r"[0-9a-f]{12,}", "".join(h.item(i).text() for i in range(h.count())))  # hash: detalhes
+    finally:
+        dispose(tab)
+
+
+def test_compare_with_reference_and_with_previous_version_side_by_side(tmp_path):
+    from tests.cockpit.gallery_fixture import BAD_SHA, UNPUB_FAIL
+    tab = _gallery_tab(tmp_path)
+    try:
+        d = tab.design
+        d.history.setCurrentRow(0)
+        d.compare_with_reference()
+        assert d.compared[0].item_id == UNPUB_FAIL and d.compared[1].item_id == "ref-quarto-r2@v1"
+        assert "qualitative-different-camera" in d.compare_label.text()
+        assert not d.left.pixmap().isNull() and not d.right.pixmap().isNull()
+        d.compare_with_previous()
+        assert d.compared[1].item_id == BAD_SHA                                   # o render anterior
+        assert d.left.path.name == d.right.path.name == "dia_cama_3q.png"          # mesmo quadro, se existir
+        assert "não é par de câmera conferido" in d.compare_label.text() and "VS-R1a" in d.compare_label.text()
+    finally:
+        dispose(tab)
+
+
+def test_enlarge_and_technical_details_navigation(tmp_path):
+    from tests.cockpit.gallery_fixture import R4
+    tab = _gallery_tab(tmp_path)
+    try:
+        d = tab.design
+        d.cards["referência"].enlarge_btn.click()
+        assert d.enlarged is not None and d.enlarged.isVisible()
+        h = d.history
+        h.setCurrentRow(next(i for i in range(h.count()) if h.item(i).data(Qt.ItemDataRole.UserRole) == R4))
+        d.tech_btn.click()
+        assert tab.pages.currentIndex() == 1 and tab.details.currentWidget() is tab.gallery_view
+        assert tab.gallery_tree.currentItem().text(3) == R4
+        assert "MELHOR: não escolhido" in tab.gallery_detail.text()
     finally:
         dispose(tab)
 
@@ -298,64 +381,124 @@ def test_cards_follow_the_evaluation_hook(tmp_path):
     try:
         tab.evaluations_for = lambda item: ["avaliação"] if item.item_id == OK_RENDER else []
         tab._fill_gallery()
-        assert tab.card_views["melhor conhecido"].card.text.startswith("inconclusivo")  # regra: S01C-F1-07
+        assert tab.design.cards["melhor"].info.text().startswith("Nenhum render elegível")  # não publicado
         row = next(r for r in history_rows(tab) if r[2] == OK_RENDER)
         assert row[7] == "1 avaliação(ões)"
+        h = tab.design.history
+        assert "visual: 1 avaliação(ões)" in next(h.item(i).text() for i in range(h.count())
+                                                   if h.item(i).data(Qt.ItemDataRole.UserRole) == OK_RENDER)
     finally:
         dispose(tab)
 
 
-# --------------------------------------------------------------------------- S01C-F1-05: avaliações por rubrica v1
-def test_evaluations_tab_shows_scores_per_criterion_and_low_confidence_for_qwen(tmp_path):
-    from agent_bar.cockpit import evaluations as V
+# --------------------------------------------------------------- revisão do #89 @ 52fc17c: VERIFICADO na tela principal
+def _neg_items(tmp_path):
     from agent_bar.cockpit import gallery as G
-    from tests.cockpit.gallery_fixture import OK_RENDER, build_all
-    from tests.cockpit.test_evaluations import QWEN, SCORES
-    ev_root, engine, dl = build_all(tmp_path)
-    g = G.build_gallery(E.load_catalog(ev_root, expected={}), engine, dl, rooms=[("planta_x", "quarto")])
-    item, ref = g.get(OK_RENDER), next(r for r in g.of("planta_x", "quarto", sources=[G.REFERENCE]) if r.images)
-    store = V.EvaluationStore(tmp_path / "data", protected=(ev_root, engine, dl))
-    store.save(V.new_evaluation(item, QWEN, reference=ref, camera="dia_cama_3q", scores=SCORES,
-                                image_shas=[item.images[0].sha256]), item)
-    tab = ReviewTab(root_fn=lambda: ev_root, load_fn=lambda r: E.load_catalog(r, expected={}),
-                    gallery_fn=lambda cat: G.build_gallery(cat, engine, dl, rooms=[("planta_x", "quarto")]),
-                    evaluation_store=store)
-    tab.resize(1200, 800)
-    tab.reload()
+    from tests.cockpit.gallery_fixture import PLANT, ROOM, build_negatives
+    ev, engine, dl = build_negatives(tmp_path / "neg")
+    g = G.build_gallery(E.load_catalog(ev, expected={}), engine, dl, rooms=[(PLANT, ROOM)])
+    return g, g.of(PLANT, ROOM)
+
+
+def test_unverified_render_never_shows_the_manifest_pass_on_the_main_screen(tmp_path):
+    from agent_bar.cockpit import gallery as G
+    from tests.cockpit.gallery_fixture import REPORT_FAIL
+    tab = _gallery_tab(tmp_path)
     try:
-        assert wait(lambda: tab.gallery_tree.topLevelItemCount() > 0)
-        t = tab.gallery_tree
-        t.setCurrentItem(next(t.topLevelItem(i) for i in range(t.topLevelItemCount())
-                              if t.topLevelItem(i).text(3) == OK_RENDER))
-        text = tab.evaluations_view.toPlainText()
-        assert "1 avaliação(ões) válida(s)" in text and "qwen2.5vl:7b" in text and "confiança baixa" in text
-        assert "Iluminação: 4/5 — luz quente de entardecer no lado esquerdo; sanca acesa" in text
-        assert item.images[0].ident in text and "/100" not in text
-        row = next(r for r in history_rows(tab) if r[2] == OK_RENDER)
-        assert row[7] == "1 avaliação(ões)"
-        assert tab.card_views["melhor conhecido"].card.text.startswith("inconclusivo")
+        g, items = _neg_items(tmp_path)
+        n1 = g.get(REPORT_FAIL)                                                  # manifest PASS, render_report FAIL
+        tab.design.set_items([n1] + [i for i in items if i.source == G.REFERENCE])
+        card = tab.design.cards["último"].info.text()
+        tile = tab.design.history.item(0).text()
+        for shown in (card, tile):
+            for claim in ("Render: PASS", "render PASS", "Geometria: PASS", "geometria PASS"):
+                assert claim not in shown, shown                                  # nem render nem geometria do manifest
+            assert "não verificado" in shown and "render_report diz FAIL" in shown, shown
     finally:
         dispose(tab)
 
 
-def test_window_wires_an_evaluation_store_in_app_data_protecting_the_sources(tmp_path, monkeypatch):
-    import sys
-
-    from PySide6.QtCore import QCoreApplication, QEvent
-
-    from agent_bar.cockpit.profiles import AgentProfile
-    from agent_bar.cockpit.ui.window import CockpitWindow
-    for var, name in (("AGENT_BAR_EVIDENCE_DIR", "ev"), ("AGENT_BAR_ENGINE_DIR", "motor"),
-                      ("AGENT_BAR_DESIGN_LIBRARY_DIR", "dl")):
-        monkeypatch.setenv(var, str(tmp_path / name))
-    stub = Path(__file__).with_name("fake_acp_agent.py")
-    win = CockpitWindow(repos=["o/r"], profiles_fn=lambda: [AgentProfile("stub", "Stub", (sys.executable, str(stub)))],
-                        workspaces_fn=lambda: [tmp_path / "x"], review_kwargs={"gallery_fn": None})
+def test_unpublished_items_carry_the_vs_r1a_text_on_card_tile_and_comparison(tmp_path):
+    from agent_bar.cockpit import gallery as G
+    tab = _gallery_tab(tmp_path)
     try:
-        store = win.review.evaluation_store
-        assert store.root == tmp_path / "cockpit-data" / "evaluations"
-        assert set(store.protected) == {tmp_path / "ev", tmp_path / "motor", tmp_path / "dl"}
+        d = tab.design
+        assert G.UNPUBLISHED_NOTE in d.cards["último"].info.text()
+        h = d.history
+        for i in range(h.count()):
+            it = tab.gallery.get(h.item(i).data(Qt.ItemDataRole.UserRole))
+            assert (G.UNPUBLISHED_NOTE in h.item(i).text()) == (it.source == G.ENGINE), h.item(i).text()
+        h.setCurrentRow(0)
+        d.compare_with_previous()
+        assert G.UNPUBLISHED_NOTE in d.left_cap.text() and G.UNPUBLISHED_NOTE in d.right_cap.text()
+        d.compare_with_reference()
+        assert "referência" in d.right_cap.text() and "sintética" in d.right_cap.text()
     finally:
-        win.shutdown()
-        win.deleteLater()
-        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+        dispose(tab)
+
+
+def test_best_card_headline_is_the_real_reason(tmp_path):
+    from tests.cockpit.gallery_fixture import OK_RENDER
+    tab = _gallery_tab(tmp_path)
+    try:
+        assert tab.design.cards["melhor"].info.text().startswith("Ainda não avaliado")   # sem nenhuma avaliação
+        tab.evaluations_for = lambda item: ["avaliação"] if item.item_id == OK_RENDER else []
+        tab._fill_gallery()
+        best = tab.design.cards["melhor"]
+        assert best.info.text().startswith("Nenhum render elegível") and best.thumb.text() == "Nenhum render elegível"
+    finally:
+        dispose(tab)
+
+
+def test_best_card_refuses_an_item_that_is_not_eligible(tmp_path, monkeypatch):
+    from agent_bar.cockpit import gallery as G
+    from tests.cockpit.gallery_fixture import UNPUB_FAIL
+    tab = _gallery_tab(tmp_path)
+    try:
+        bad = tab.gallery.get(UNPUB_FAIL)                                          # FAIL e não publicado
+        real = G.cards
+        monkeypatch.setattr(G, "cards", lambda items, ev=lambda _i: []: [*real(items, ev)[:2],
+                                                                           G.Card("melhor conhecido", bad, "forçado")])
+        tab._fill_gallery()
+        best = tab.design.cards["melhor"]
+        assert best.item is None and best.thumb.path is None                       # o cartão não aceita inelegível
+    finally:
+        dispose(tab)
+
+
+def test_design_view_card_tile_and_previous_comparison_use_the_preferred_camera(tmp_path):
+    """Pedido do coordenador: a miniatura não é o close do banco; a comparação usa a mesma câmera, e diz quando não dá."""
+    from agent_bar.cockpit import gallery as G
+    from agent_bar.cockpit.ui.design_view import DesignView
+    from tests.cockpit.evidence_fixture import png
+
+    def run(run_id, started, *keys):
+        imgs = []
+        for k in keys:
+            p = tmp_path / run_id / f"{k}.png"
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_bytes(png(f"{run_id}/{k}"))
+            imgs.append(G.GalleryImage(k, p, G.file_sha256(p), "r", f"views/{k}.png"))
+        return G.GalleryItem(G.PUBLISHED, "planta_74", "suite_01", run_id, "render", started_at=started,
+                             render_verdict="PASS", build={"geometria": "PASS"}, images=imgs)
+    rc5 = run("rc5", "2026-11-23T09:11:00Z", "render_entardecer_close_banco", "render_entardecer_perspectiva",
+              "render_entardecer_r2_canto")
+    rc4 = run("rc4", "2026-11-23T08:06:00Z", "render_entardecer_close_banco", "render_entardecer_perspectiva")
+    rc0 = run("rc0", "2026-11-22T08:00:00Z", "render_dia_cama_3q")
+    d = DesignView()
+    try:
+        d.set_items([rc5, rc4, rc0])
+        assert d.cards["último"].thumb.path.name == "render_entardecer_r2_canto.png"
+        assert "câmera r2_canto · luz entardecer" in d.cards["último"].info.text()
+        assert "câmera perspectiva · luz entardecer" in d.history.item(1).text()     # rc4: perspectiva, não o banco
+        d.history.setCurrentRow(0)
+        d.compare_with_previous()
+        assert d.left.path.name == d.right.path.name == "render_entardecer_perspectiva.png"
+        assert "rc4 não tem a câmera r2_canto" in d.compare_label.text()
+        d.history.setCurrentRow(1)
+        d.compare_with_previous()                                                 # rc4 × rc0: sem câmera em comum
+        assert (d.left.path.name, d.right.path.name) == ("render_entardecer_perspectiva.png", "render_dia_cama_3q.png")
+        assert "sem câmera em comum" in d.compare_label.text()
+    finally:
+        d.shutdown()
+        d.deleteLater()

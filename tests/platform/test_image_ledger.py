@@ -277,3 +277,54 @@ def test_only_the_ledger_sends_images_to_an_adapter():
                     and (any(k.arg == "images" for k in node.keywords) or len(node.args) >= 4)):
                 offenders.append(f"{py.relative_to(root)}:{node.lineno}")
     assert offenders == []
+
+
+# --------------------------------------------------------------- papéis no mesmo pedido (review do #94)
+def _payload(tag: bytes):
+    from agent_bar.platform.adapter import ImagePayload
+    data = b"\x89PNG\r\n\x1a\n" + tag
+    return ImagePayload(f"{tag.decode()}.png", "image/png", data, hashlib.sha256(data).hexdigest())
+
+
+def test_each_image_gets_its_role_and_the_reference_hash_is_checked_only_against_the_reference(tmp_path):
+    from agent_bar.platform.image_ledger import ImageLedger, ReferenceLink
+    ref, render = _payload(b"ref"), _payload(b"render")
+    led = ImageLedger(tmp_path / "l.sqlite")
+    try:
+        rows = led.record_delivery([ref, render], provider_id="ollama", model_id="m", session_id="s",
+                                   requested_by="studio:review", purpose="EVALUATION", roles=["reference", "render"],
+                                   reference=ReferenceLink("ref-x", source_hash=ref.sha256))
+        assert [(r.role, r.sha256) for r in rows] == [("reference", ref.sha256), ("render", render.sha256)]
+        assert [r.role for r in led.batch(rows[0].batch_id)] == ["reference", "render"]
+        with pytest.raises(ImageLedgerError, match="source_hash"):           # o hash da referência é o da imagem dela
+            led.record_delivery([ref, render], provider_id="ollama", model_id="m", session_id="s",
+                                requested_by="studio:review", purpose="EVALUATION", roles=["reference", "render"],
+                                reference=ReferenceLink("ref-x", source_hash=render.sha256))
+        for bad in (["reference"], ["reference", "pintura"]):
+            with pytest.raises(ImageLedgerError, match="papéis"):
+                led.record_delivery([ref, render], provider_id="ollama", model_id="m", session_id="s",
+                                    requested_by="studio:review", purpose="EVALUATION", roles=bad)
+    finally:
+        led.close()
+
+
+def test_a_ledger_written_before_roles_is_migrated_and_keeps_its_rows(tmp_path):
+    from agent_bar.platform.image_ledger import ImageLedger
+    path = tmp_path / "old.sqlite"
+    led = ImageLedger(path)
+    led.record_delivery([_payload(b"a")], provider_id="p", model_id="m", session_id="s", requested_by="r",
+                        purpose="CHAT")
+    led.close()
+    con = sqlite3.connect(path)                                                   # o registro de antes: sem a coluna
+    con.execute("ALTER TABLE image_deliveries DROP COLUMN role")
+    con.commit()
+    con.close()
+    led = ImageLedger(path)
+    try:
+        [old] = led.list()
+        assert old.role == ""
+        [new] = led.record_delivery([_payload(b"b")], provider_id="p", model_id="m", session_id="s",
+                                    requested_by="r", purpose="EVALUATION", roles=["render"])
+        assert new.role == "render" and len(led.list()) == 2
+    finally:
+        led.close()

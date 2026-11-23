@@ -34,22 +34,28 @@ from PySide6.QtWidgets import (
 from agent_bar.cockpit import evaluations as V
 from agent_bar.cockpit import evidence as E
 from agent_bar.cockpit import gallery as G
+from agent_bar.cockpit import review_comments as RC
+from agent_bar.cockpit import run_vision as RV
+from agent_bar.cockpit.ui.design_view import DesignView
 from agent_bar.cockpit.ui.diff_panel import DiffPanel
 from agent_bar.cockpit.ui.github_tabs import BTN_CSS, COMBO_CSS, TEXT_CSS, TREE_CSS
 from agent_bar.cockpit.ui.human_panel import HumanPanel
 from agent_bar.cockpit.ui.packages_panel import PackagesPanel
+from agent_bar.platform.usage import usage_line
 
 STATE_COLOR = {"PASS": "#3ddc84", "APPROVED": "#3ddc84", "FAIL": "#ff6b6d", "CHANGES_REQUESTED": "#ff6b6d", "BLOCKED": "#ffc233"}
 STATE_KEYS = ("GEOMETRY_PASS", "FUNCTIONAL_PASS", "VISUAL_REVIEW", "HUMAN_APPROVAL")
 HISTORY_COLUMNS = ["Data", "Etapa", "Run", "Fonte", "Situação", "Geometria", "Funcional", "Visual", "Tendência",
                    "Humano"]
 GALLERY_COLUMNS = ["Data", "Fonte", "Tipo", "Run / referência", "Render", "Geometria", "Funcional", "Construção",
-                   "Imagens", "Humano", "Elegível a melhor"]
+                   "Imagens", "Humano", "Verificado", "Elegível a melhor"]
 
 
 class _Bridge(QObject):
     loaded = Signal(int, object)
     gallery = Signal(int, object)
+    vision_models = Signal(object)
+    vision_done = Signal(object)
 
 
 class ImagePane(QWidget):
@@ -99,40 +105,20 @@ class ImagePane(QWidget):
         self._fit()
 
 
-class CardView(QWidget):
-    """Um cartão da faixa (referência / último render / melhor conhecido): título, imagem e legenda ou motivo."""
-
-    def __init__(self, role: str) -> None:
-        super().__init__()
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(0, 0, 0, 0)
-        self.title = QLabel(role)
-        self.title.setStyleSheet("color:#9a9aa3;font-size:12px;font-weight:600")
-        self.pane = ImagePane()
-        self.pane.setMinimumSize(220, 120)
-        self.pane.image.setMinimumSize(220, 110)
-        lay.addWidget(self.title)
-        lay.addWidget(self.pane, 1)
-        self.card: G.Card | None = None
-
-    def show_card(self, card: G.Card) -> None:
-        self.card = card
-        img = card.image
-        if img is None:
-            self.pane.show_image(card.text, None, card.text if card.item is None else "nenhuma imagem com sha256 conferido")
-        else:
-            self.pane.show_image(f"{card.text}\n{img.key} @ {img.sha256[:12]}…", img.path)
-
-
 class ReviewTab(QWidget):
     run_selected = Signal()                                                     # (a, b) mudou: relatório/pacotes ouvem
+    request_chat = Signal(str, str)                                             # workspace, pedido (o envio é manual)
 
     def __init__(self, root_fn: Callable[[], Path] = E.evidence_dir,
                  load_fn: Callable[[Path], E.Catalog] = E.load_catalog,
                  executor: ThreadPoolExecutor | None = None, report_store=None, package_writer=None,
                  gallery_fn: Callable[[E.Catalog | None], G.Gallery] | None = G.build_gallery,
-                 evaluation_store: V.EvaluationStore | None = None) -> None:
+                 evaluation_store: V.EvaluationStore | None = None,
+                 comment_store: RC.CommentStore | None = None) -> None:
         super().__init__()
+        self.comment_store = comment_store or RC.CommentStore(
+            protected=(E.evidence_dir(), G.engine_dir(), G.library_dir()))
+        self.last_comment: RC.ReviewComment | None = None
         self.gallery_fn = gallery_fn
         self.evaluation_store = evaluation_store
         self.evaluations_for: Callable[[G.GalleryItem], list] = (
@@ -151,6 +137,11 @@ class ReviewTab(QWidget):
         self.bridge = _Bridge()
         self.bridge.loaded.connect(self._loaded)
         self.bridge.gallery.connect(self._gallery_loaded)
+        self.bridge.vision_models.connect(self._vision_models_loaded)
+        self.bridge.vision_done.connect(self._vision_finished)
+        self.vision: RV.RunVision | None = None
+        self.vision_result: RV.VisionResult | None = None
+        self.vision_error = ""
         self._build()
 
     # ------------------------------------------------------------------------------------------------- layout
@@ -163,26 +154,33 @@ class ReviewTab(QWidget):
             w.setStyleSheet(COMBO_CSS)
         self.reload_btn = QPushButton("Recarregar")
         self.reload_btn.setStyleSheet(BTN_CSS)
-        for cap, w, s in (("Cômodo", self.room_box, 2), ("Run A", self.a_box, 3), ("Run B", self.b_box, 3)):
-            lb = QLabel(cap)
-            lb.setStyleSheet("color:#8f8f98;font-size:11px")
-            head.addWidget(lb)
-            head.addWidget(w, s)
+        lb = QLabel("Cômodo")
+        lb.setStyleSheet("color:#8f8f98;font-size:12px")
+        head.addWidget(lb)
+        head.addWidget(self.room_box, 3)
+        head.addStretch(4)
         head.addWidget(self.reload_btn)
         lay.addLayout(head)
+        # S01C-F1-04: a tela principal é a Galeria de design; o resto fica em Detalhes técnicos
+        self.pages = QTabWidget()
+        self.design = DesignView()
+        self.pages.addTab(self.design, "Galeria de design")
+        tech = QWidget()
+        lay_tech = QVBoxLayout(tech)
+        lay_tech.setContentsMargins(0, 4, 0, 0)
+        self.pages.addTab(tech, "Detalhes técnicos")
+        lay.addWidget(self.pages, 1)
+        pair = QHBoxLayout()
+        for cap, w in (("Run A", self.a_box), ("Run B", self.b_box)):
+            lbl = QLabel(cap)
+            lbl.setStyleSheet("color:#8f8f98;font-size:11px")
+            pair.addWidget(lbl)
+            pair.addWidget(w, 1)
+        lay_tech.addLayout(pair)
         self.source = QLabel("")
         self.source.setWordWrap(True)
         self.source.setStyleSheet("color:#8f8f98;font-size:11px")
-        lay.addWidget(self.source)
-        strip = QHBoxLayout()                                                   # S01C-F1-04: faixa de 3 cartões
-        self.card_views = {role: CardView(role) for role in ("referência", "último render", "melhor conhecido")}
-        for cv in self.card_views.values():
-            strip.addWidget(cv, 1)
-        strip_box = QWidget()
-        strip_box.setLayout(strip)
-        strip_box.setMaximumHeight(210)
-        strip.setContentsMargins(0, 0, 0, 0)
-        lay.addWidget(strip_box)
+        lay_tech.addWidget(self.source)
         split = QSplitter(Qt.Orientation.Horizontal)
         left = QWidget()
         ll = QVBoxLayout(left)
@@ -243,7 +241,9 @@ class ReviewTab(QWidget):
             self.details.addTab(w, title)
         vsplit.addWidget(self.details)
         vsplit.setSizes([470, 230])
-        lay.addWidget(vsplit, 1)
+        lay_tech.addWidget(vsplit, 1)
+        self.design.open_technical.connect(self.show_technical)
+        self.design.comment_requested.connect(self.comment_to_chat)
         self.reload_btn.clicked.connect(self.reload)
         self.room_box.activated.connect(lambda _i: self._fill_runs())
         self.a_box.activated.connect(lambda _i: self._compare())
@@ -278,9 +278,11 @@ class ReviewTab(QWidget):
         self.gallery_images = QListWidget()
         self.gallery_images.setStyleSheet("QListWidget{background:#17171a;color:#cfcfd4;border:1px solid #2a2a30;font-size:11px}")
         self.gallery_pane = ImagePane()
+        self.gallery_images.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
         rl.addWidget(self.gallery_detail)
         rl.addWidget(self.gallery_images, 1)
         rl.addWidget(self.gallery_pane, 2)
+        rl.addWidget(self._build_vision())
         split.addWidget(right)
         split.setSizes([700, 420])
         lay.addWidget(split, 1)
@@ -466,8 +468,42 @@ class ReviewTab(QWidget):
         self.reports.setHtml(self._verdict_html(a) + "<hr>" + self._verdict_html(b))
 
     def _cards(self) -> None:
-        for card in G.cards(self.gallery_items(), self.evaluations_for):
-            self.card_views[card.role].show_card(card)
+        self.design.set_items(self.gallery_items(), self.evaluations_for)
+
+    def comment_to_chat(self, text: str) -> None:
+        """S01C-F1-11: o comentário vira item R41 (sem triagem) com o run, a câmera e a comparação visíveis, e o Chat
+        abre preenchido com esse contexto estruturado. Nada é enviado sozinho."""
+        d = self.design
+        vis = d.visible()
+        if vis is None:
+            d.comment_status.setText("escolha um render no histórico antes de comentar")
+            return
+        item, image, compared = vis
+        try:
+            c = RC.new_comment(text, item, image, reference=d.reference, compared=compared)
+            request = RC.chat_request(c)
+            self.comment_store.save(c)
+        except (RC.CommentRejected, E.EvidenceError, OSError) as exc:
+            d.comment_status.setText(f"comentário não registrado: {exc}")
+            return
+        self.last_comment = c
+        engine = G.engine_dir()
+        ws = str(engine) if (engine / ".git").exists() else ""
+        d.comment.clear()
+        d.comment_status.setText(f"comentário {c.id} registrado (R41, sem triagem) sobre {item.item_id} · câmera "
+                                 f"{image.key}. O Chat abriu com o pedido; envie quando quiser.")
+        self.request_chat.emit(ws, request)
+
+    def show_technical(self, item_id: str) -> None:
+        """Do item da galeria de design para os Detalhes técnicos dele (relatórios, manifest, hashes)."""
+        self.pages.setCurrentIndex(1)
+        self.details.setCurrentWidget(self.gallery_view)
+        t = self.gallery_tree
+        row = next((t.topLevelItem(i) for i in range(t.topLevelItemCount())
+                    if t.topLevelItem(i).data(0, Qt.ItemDataRole.UserRole) == item_id), None)
+        if row is not None:
+            t.setCurrentItem(row)
+            t.scrollToItem(row)
 
     def _history(self) -> None:
         """Histórico do cômodo, mais recente primeiro: runs da galeria (todas as fontes) e, depois, as etapas do evidence
@@ -542,13 +578,13 @@ class ReviewTab(QWidget):
         self.gallery_note.setText(
             "Do mais recente para o mais antigo. "
             + " · ".join(f"{G.SOURCE_LABEL[s]}: {n}" for s, n in counts.items() if n)
-            + ". Itens do motor: " + G.UNPUBLISHED_NOTE + ". Elegível = candidato a melhor render (F0 §4); "
-            "não é veredito visual." + errs)
+            + ". Itens do motor: " + G.UNPUBLISHED_NOTE + ". Visível, verificado, elegível e melhor são estados "
+            "separados; elegível = candidato a melhor render (F0 §4), não é veredito visual." + errs)
         for i in items:
-            blockers = i.eligibility()
+            st = i.states()                                                    # VISÍVEL sempre; os outros com motivo
             row = QTreeWidgetItem([i.when(), i.source, i.kind, i.item_id, i.render_verdict or "—",
                                    *(i.build.get(k, "—") for k in G.BUILD_KEYS), str(len(i.images)),
-                                   i.human_approval, "sim" if not blockers else "não: " + "; ".join(blockers)])
+                                   i.human_approval, st["VERIFICADO"], st["ELEGÍVEL"]])
             row.setData(0, Qt.ItemDataRole.UserRole, i.item_id)
             for col in (4, 5, 6, 7):
                 row.setForeground(col, QBrush(QColor(STATE_COLOR.get(row.text(col), "#cfcfd4"))))
@@ -567,7 +603,9 @@ class ReviewTab(QWidget):
             self.gallery_detail.setText("")
             self.gallery_pane.show_image("", None, "selecione um item da galeria")
             return
-        lines = [f"{it.item_id} · fonte {it.source} ({it.source_label})", *it.notes]
+        st = it.states()
+        lines = [f"{it.item_id} · fonte {it.source} ({it.source_label})", *it.notes,
+                 *(f"{k}: {v}" for k, v in st.items())]
         if it.camera_file:
             lines.append(f"câmeras/render spec: {it.camera_file}")
         lines += [f"erro: {e}" for e in it.errors[:4]] + [f"imagem recusada: {r}" for r in it.rejected[:6]]
@@ -617,11 +655,135 @@ class ReviewTab(QWidget):
                          + "<br>".join(e(b) for b in bad) + "</p>")
         self.evaluations_view.setHtml("".join(parts))
 
+    # --------------------------------------------------------------------------------- avaliar este run (visão)
+    def _build_vision(self) -> QWidget:
+        """Manda as imagens escolhidas do run a um modelo com visão e mostra o texto, o uso e a entrega registrada.
+        Não grava nota nem veredito."""
+        from PySide6.QtWidgets import QPlainTextEdit
+        box = QWidget()
+        lay = QVBoxLayout(box)
+        lay.setContentsMargins(0, 4, 0, 0)
+        row = QHBoxLayout()
+        self.vision_model_box = QComboBox()
+        self.vision_model_box.setStyleSheet(COMBO_CSS)
+        self.vision_models_btn = QPushButton("Modelos")
+        self.vision_send_btn = QPushButton("Avaliar este run (enviar imagem)")
+        for b in (self.vision_models_btn, self.vision_send_btn):
+            b.setStyleSheet(BTN_CSS)
+        row.addWidget(self.vision_model_box, 2)
+        row.addWidget(self.vision_models_btn)
+        row.addWidget(self.vision_send_btn, 2)
+        self.vision_prompt = QPlainTextEdit(RV.DEFAULT_PROMPT)
+        self.vision_prompt.setMaximumHeight(54)
+        self.vision_status = QLabel("")
+        self.vision_status.setWordWrap(True)
+        self.vision_status.setStyleSheet("color:#8f8f98;font-size:11px")
+        self.vision_usage = QLabel("")
+        self.vision_usage.setWordWrap(True)
+        self.vision_usage.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.vision_usage.setStyleSheet("color:#8f8f98;font-size:11px")
+        self.vision_text = QTextBrowser()
+        self.vision_text.setStyleSheet(TEXT_CSS)
+        self.vision_text.setMaximumHeight(120)
+        lay.addLayout(row)
+        lay.addWidget(self.vision_prompt)
+        lay.addWidget(self.vision_status)
+        lay.addWidget(self.vision_text)
+        lay.addWidget(self.vision_usage)
+        self.vision_models_btn.clicked.connect(self.load_vision_models)
+        self.vision_send_btn.clicked.connect(self.evaluate_selected)
+        self._vision_enable()
+        return box
+
+    def set_vision(self, runner: RV.RunVision | None) -> None:
+        self.vision = runner
+        self._vision_enable()
+
+    def _vpool(self) -> ThreadPoolExecutor:
+        """Pool próprio: um envio de imagem (minutos no modelo local) não segura a leitura da galeria."""
+        if getattr(self, "_vision_pool", None) is None:
+            self._vision_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="cockpit-vision")
+        return self._vision_pool
+
+    def _vision_enable(self, busy: bool = False) -> None:
+        ok = self.vision is not None and not busy
+        self.vision_models_btn.setEnabled(ok)
+        self.vision_send_btn.setEnabled(ok and self.vision_model_box.count() > 0)
+        if self.vision is None:
+            self.vision_status.setText("avaliação por visão indisponível")
+
+    def load_vision_models(self) -> None:
+        if self.vision is None:
+            return
+        self.vision_status.setText("lendo os modelos do provedor…")
+        fut = self._vpool().submit(self.vision.models)
+        fut.add_done_callback(lambda f: self.bridge.vision_models.emit(f.exception() or f.result()))
+
+    def _vision_models_loaded(self, result: object) -> None:
+        self.vision_model_box.clear()
+        if isinstance(result, BaseException):
+            self.vision_status.setText(f"provedor indisponível: {type(result).__name__}: {result}")
+        else:
+            for m in result:  # type: ignore[union-attr]
+                tag = "visão" if m.get("images") == "SUPPORTED" else "sem visão"
+                self.vision_model_box.addItem(f"{m['model_id']} ({tag})", m["model_id"])
+            self.vision_status.setText(f"{self.vision_model_box.count()} modelo(s); só modelo com visão recebe imagem")
+        self._vision_enable()
+
+    def selected_image_keys(self) -> list[str]:
+        it = self._gallery_item(self.gallery_tree.currentItem())
+        if it is None:
+            return []
+        paths = {li.data(Qt.ItemDataRole.UserRole) for li in self.gallery_images.selectedItems()}
+        return [i.key for i in it.images if str(i.path) in paths]
+
+    def evaluate_selected(self) -> None:
+        """Clique em "Avaliar este run": item e imagens selecionados na galeria, modelo escolhido."""
+        item = self._gallery_item(self.gallery_tree.currentItem())
+        self.vision_result, self.vision_error = None, ""
+        self.vision_text.clear()
+        self.vision_usage.setText("")
+        if self.vision is None or item is None or self.vision_model_box.currentData() is None:
+            self.vision_error = "escolha um run da galeria e um modelo"
+            self.vision_status.setText(self.vision_error)
+            return
+        model, keys, prompt = self.vision_model_box.currentData(), self.selected_image_keys(), self.vision_prompt.toPlainText()
+        ref = G.reference_item(self.gallery_items())
+        self.vision_status.setText(f"enviando {len(keys)} imagem(ns) de {item.item_id} para {model}…")
+        self._vision_enable(busy=True)
+
+        def job():
+            return self.vision.ask(item, keys, model, prompt, reference=ref).result(600)  # type: ignore[union-attr]
+        fut = self._vpool().submit(job)
+        fut.add_done_callback(lambda f: self.bridge.vision_done.emit(f.exception() or f.result()))
+
+    def _vision_finished(self, result: object) -> None:
+        self._vision_enable()
+        if isinstance(result, RV.VisionRefused):
+            self.vision_error = "recusado, nada enviado: " + "; ".join(result.reasons)
+            self.vision_status.setText(self.vision_error)
+            return
+        if isinstance(result, BaseException):
+            self.vision_error = f"falhou: {type(result).__name__}: {result}"
+            self.vision_status.setText(self.vision_error)
+            return
+        res: RV.VisionResult = result  # type: ignore[assignment]
+        self.vision_result = res
+        self.vision_status.setText(f"{res.model_id} respondeu sobre {res.run_id} (texto do modelo; não é nota nem "
+                                   "veredito)")
+        self.vision_text.setPlainText(res.text)
+        ok, confirm = res.confirmation()                                       # SENT não é "chegou"
+        self.vision_usage.setText(f"{usage_line(res.usage)} · {res.delivery_line()}\n"
+                                  f"{'confirmado pelo provedor' if ok else 'não confirmado'}: {confirm}")
+
     def _show_gallery_image(self, li: QListWidgetItem | None) -> None:
         if li is None:
             return
         self.gallery_pane.show_image(li.text(), Path(li.data(Qt.ItemDataRole.UserRole)))
 
     def shutdown(self) -> None:
+        self.design.shutdown()
+        if getattr(self, "_vision_pool", None) is not None:
+            self._vision_pool.shutdown(wait=True, cancel_futures=True)
         if self._own_pool:
             self.pool.shutdown(wait=True, cancel_futures=True)

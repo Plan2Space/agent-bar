@@ -21,6 +21,9 @@ MODELS = {
 }
 
 
+IMAGE_TOKENS = 256                                                          # como o Ollama: a imagem entra no prompt
+
+
 class FakeOllama:
     def __init__(self, models: dict | None = None):
         self.models = MODELS if models is None else models
@@ -92,8 +95,9 @@ class FakeOllama:
                         for part in ("o", "k"):
                             line({"model": model, "message": {"role": "assistant", "content": part}, "done": False})
                     final = {"model": model, "message": {"role": "assistant", "content": ""}, "done": True,
-                             "done_reason": "stop", "prompt_eval_count": 13, "prompt_eval_cached_count": 0,
-                             "eval_count": 2}
+                             "done_reason": "stop",
+                             "prompt_eval_count": 13 + IMAGE_TOKENS * len(body["messages"][-1].get("images") or []),
+                             "prompt_eval_cached_count": 0, "eval_count": 2}
                     if "semcontagem" in last:                         # servidor que nao manda os contadores
                         final = {k: v for k, v in final.items() if not k.endswith("_count")}
                     line(final)
