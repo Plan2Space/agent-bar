@@ -15,13 +15,23 @@ from collections.abc import Callable
 from pathlib import Path
 
 from PySide6.QtCore import QTimer
-from PySide6.QtWidgets import QPushButton, QTabWidget, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QTabWidget,
+    QVBoxLayout,
+    QWidget,
+)
 
 from agent_bar.cockpit import profiles as prof
+from agent_bar.cockpit.agent_registry import AgentRegistry
 from agent_bar.cockpit.permission_broker import PermissionBroker
 from agent_bar.cockpit.permission_inbox import PermissionInbox
 from agent_bar.cockpit.store import data_dir
 from agent_bar.cockpit.ui.chat import ChatView
+from agent_bar.platform.proc import same_process
 from agent_bar.platform.sessions import DEFAULT_LIMIT, DEFAULT_LIMITS, limits_from_env
 
 PROFILE_PROVIDER = {"claude": "claude-acp", "ollama": "ollama", "demo": "demo"}
@@ -29,7 +39,7 @@ PROFILE_PROVIDER = {"claude": "claude-acp", "ollama": "ollama", "demo": "demo"}
 
 class ChatSessions(QWidget):
     def __init__(self, make_view: Callable[..., ChatView] = ChatView, *, inbox: PermissionInbox | None = None,
-                 limits: dict[str, int] | None = None, **view_kwargs) -> None:
+                 limits: dict[str, int] | None = None, registry: AgentRegistry | None = None, **view_kwargs) -> None:
         super().__init__()
         self.make_view = make_view
         self.view_kwargs = view_kwargs
@@ -44,6 +54,23 @@ class ChatSessions(QWidget):
         self.permission_listeners: list[Callable[[str], None]] = []
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
+        self.registry = registry or AgentRegistry(data_dir() / "agent-processes.json")
+        self.orphans = self.registry.previous_orphans()                     # agentes de uma execucao que caiu
+        self.orphan_bar = QFrame()
+        self.orphan_bar.setStyleSheet("QFrame{background:#3a2a10;border:1px solid #7a5a20;border-radius:6px}")
+        ob = QHBoxLayout(self.orphan_bar)
+        self.orphan_label = QLabel("")
+        self.orphan_label.setWordWrap(True)
+        self.orphan_label.setStyleSheet("color:#ffc233;border:0")
+        self.orphan_end_btn = QPushButton("Encerrar esses processos")
+        self.orphan_keep_btn = QPushButton("Deixar")
+        ob.addWidget(self.orphan_label, 1)
+        ob.addWidget(self.orphan_end_btn)
+        ob.addWidget(self.orphan_keep_btn)
+        self.orphan_end_btn.clicked.connect(self.end_orphans)
+        self.orphan_keep_btn.clicked.connect(lambda: self.orphan_bar.setVisible(False))
+        lay.addWidget(self.orphan_bar)
+        self._show_orphans()
         self.tabs = QTabWidget()
         self.tabs.setTabsClosable(True)
         self.tabs.setMovable(True)
@@ -121,6 +148,8 @@ class ChatSessions(QWidget):
                 if self.tabs.tabText(i) != title:
                     self.tabs.setTabText(i, title)
         self.broker.expire()                                                 # um vigia para o broker compartilhado
+        self.registry.record([(v.client.pid, v.profile().key) for v in self.views
+                              if v.client is not None and getattr(v.client, "pid", None) and getattr(v.client, "alive", False)])
 
     def _permission_changed(self, entry_id: str) -> None:
         for v in list(self.views):
@@ -140,6 +169,24 @@ class ChatSessions(QWidget):
         owner = next((v for v in self.views if entry_id in v._perm_cards), self.current())
         return owner.answer_permission(entry_id, choice)
 
+    # ------------------------------------------------------------------------------------------------ orfaos
+    def _show_orphans(self) -> None:
+        if not self.orphans:
+            self.orphan_bar.setVisible(False)
+            return
+        pids = ", ".join(f"{o['pid']} ({o.get('profile') or '?'})" for o in self.orphans)
+        self.orphan_label.setText(f"⚠ {len(self.orphans)} agente(s) de uma execução anterior do Studio que caiu ainda "
+                                  f"estão rodando: {pids}. Não pertencem a nenhuma conversa aberta.")
+        self.orphan_bar.setVisible(True)
+
+    def end_orphans(self) -> list[int]:
+        """Encerra so os orfaos cuja identidade (PID + criacao) ainda bate."""
+        ended = self.registry.end(self.orphans)
+        self.orphans = [o for o in self.orphans                              # sobra so quem nao saiu e ainda e o mesmo
+                        if o["pid"] not in ended and same_process(o["pid"], o.get("created"))]
+        self._show_orphans()
+        return ended
+
     def shutdown(self, close_store: bool = True) -> None:
         """Encerra as conversas e responde (cancelled) o que estava aberto. `close_store=False`: quem chama ainda vai
         parar o runtime compartilhado e so depois fechar o banco (`close_store()`), para nenhum callback tardio do
@@ -147,6 +194,7 @@ class ChatSessions(QWidget):
         self.timer.stop()
         for v in list(self.views):
             v.shutdown()
+        self.registry.record([])                                             # saida limpa: nenhum agente desta execucao
         self.broker.cancel_all("o Studio foi fechado")
         if close_store:
             self.close_store()

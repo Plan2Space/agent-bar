@@ -368,6 +368,7 @@ class AcpClient:
         self._reader: asyncio.Task | None = None
         self._stderr_file = None
         self._job: _Job | None = None
+        self.contained = False                                             # o agente esta no Job (morre se o Studio cair)
         self._closed = False
         self._starting: asyncio.Future | None = None
         AcpClient._instances.add(self)
@@ -507,7 +508,9 @@ class AcpClient:
             *argv, cwd=self.cwd, env=self.env, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
             stderr=stderr, limit=LINE_LIMIT, creationflags=creation_flags())
         self.pid = self.proc.pid
-        self._job.assign(self.pid)
+        self.contained = self._job.assign(self.pid)
+        if not self.contained and sys.platform == "win32":                 # sem o Job, o agente pode sobreviver a uma queda
+            log.warning("agente pid=%s fora do Job Object: se o Studio cair, ele pode continuar rodando", self.pid)
         log.info("agente iniciado pid=%s exe=%s", self.pid, Path(argv[0]).name)
         self._reader = asyncio.ensure_future(self._read_loop())
         if self._closed:                                                   # close() chegou durante o spawn: nao deixar orfao
