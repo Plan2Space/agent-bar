@@ -28,6 +28,7 @@ from agent_bar.inbox import Inbox, InboxNotifier, human_inbox
 
 ICON = Path(__file__).resolve().parents[1] / "launchers" / "agent_bar.ico"
 HUMAN_SOURCE = "agent-bar:precisa-de-voce"
+RUNTIME_SOURCE = "agent-bar:runtime"
 
 
 class Worker(QObject):
@@ -113,7 +114,21 @@ class AppCore(QObject):
         self._closed = False
 
     def start(self) -> None:
+        self.publish_runtime()
         self.worker.start()
+
+    def publish_runtime(self) -> None:
+        """UX-02: runtime divergente (instalado x pyproject x uv.lock) vira item ACTION_REQUIRED em Notificações, com o
+        comando reproduzível. Não reinstala nada."""
+        st = self.runtime_pin
+        if st.ok is not False or self.center is None:
+            return
+        try:
+            self.center.publish("ERROR", "agent-runtime diverge do fixado no projeto", body=st.message,
+                                state="ACTION_REQUIRED", source=RUNTIME_SOURCE,
+                                dedupe_key=f"runtime-pin:{st.installed}:{st.pinned}:{st.locked}")
+        except Exception:                                                     # noqa: BLE001 - aviso nunca derruba o início
+            traceback.print_exc()
 
     # ------------------------------------------------------------------------------------------------ coleta
     def on_snapshot(self, s) -> None:
@@ -154,7 +169,7 @@ class AppCore(QObject):
                 win = self.cockpit_factory()
             else:
                 from agent_bar.cockpit.ui.window import CockpitWindow
-                win = CockpitWindow()
+                win = CockpitWindow(runtime_pin=self.runtime_pin)
             self.cockpit = win
         win.show()
         win.raise_()
@@ -178,4 +193,4 @@ class AppCore(QObject):
         self.quit_fn()
 
 
-__all__ = ["HUMAN_SOURCE", "AppCore", "Worker"]
+__all__ = ["HUMAN_SOURCE", "RUNTIME_SOURCE", "AppCore", "Worker"]
