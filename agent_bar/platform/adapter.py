@@ -93,11 +93,15 @@ class ImagePayload:
 
 
 def load_images(paths) -> list[ImagePayload]:
-    """Le e valida as imagens antes de qualquer envio (tudo ou nada): ausente, tipo ou tamanho errado -> ImageRejected."""
+    """Le e valida as imagens antes de qualquer envio (tudo ou nada): ausente, tipo ou tamanho errado -> ImageRejected.
+    `ImagePayload` ja lido passa direto: quem registrou o sha256 envia exatamente aqueles bytes."""
     import hashlib
     from pathlib import Path
     out = []
     for raw in paths or ():
+        if isinstance(raw, ImagePayload):
+            out.append(raw)
+            continue
         p = Path(raw)
         mime = IMAGE_TYPES.get(p.suffix.lower())
         if mime is None:

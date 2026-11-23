@@ -36,6 +36,7 @@ from agent_bar.platform.adapter import (
     SessionNotFound,
     SessionRequest,
 )
+from agent_bar.platform.image_ledger import ImageLedger, ReferenceLink, send_with_images
 from agent_bar.platform.proc import creation_time, kill_tree, same_process
 
 SCHEMA = "p2s.session-manager.v1"
@@ -82,8 +83,10 @@ class SessionManager:
     def __init__(self, factories: Mapping[str, Callable[..., ProviderAdapter]], *, store_path: Path | None = None,
                  limits: Mapping[str, int] | None = None, default_limit: int = DEFAULT_LIMIT,
                  clock: Callable[[], float] = time.time, stall_timeout: float = STALL_TIMEOUT_S,
-                 idle_timeout: float = IDLE_TIMEOUT_S, killer: Callable[[int], bool] = kill_tree):
+                 idle_timeout: float = IDLE_TIMEOUT_S, killer: Callable[[int], bool] = kill_tree,
+                 image_ledger: ImageLedger | None = None):
         self.factories = dict(factories)
+        self.image_ledger = image_ledger                                     # sem ele, imagem nao sai (S01C-R3)
         self.store_path = store_path
         self.limits = {**DEFAULT_LIMITS, **limits_from_env(), **(limits or {})}
         self.default_limit = default_limit
@@ -170,9 +173,12 @@ class SessionManager:
             self._save()
             return self._public(s)
 
-    def send(self, sid: str, text: str, on_event: Callable[[AgentEvent], None] = lambda e: None) -> cf.Future:
+    def send(self, sid: str, text: str, on_event: Callable[[AgentEvent], None] = lambda e: None, *,
+             images=(), purpose: str = "CHAT", requested_by: str = "studio",
+             reference: ReferenceLink | None = None) -> cf.Future:
         """Future[PromptResult]. Provedor caido: as sessoes dele vao para ERROR e o future falha com o erro tipado
-        (a UI oferece `recover`; o prompt NAO e reenviado sozinho)."""
+        (a UI oferece `recover`; o prompt NAO e reenviado sozinho).
+        `images`: passa por `send_with_images` (registro antes do envio); sem `image_ledger`, ImageLedgerError."""
         with self._lock:
             s = self._need(sid)
             if s["state"] in ("CLOSED", "ERROR"):
@@ -190,7 +196,13 @@ class SessionManager:
                     parts.append(ev.text)
                 on_event(ev)
             try:
-                inner = adapter.send_prompt(psid, text, sink)
+                if images:
+                    inner = send_with_images(adapter, self.image_ledger, psid, text, sink, images,
+                                             provider_id=s["provider_id"], model_id=s["session"].get("model_accepted") or "provider-default",
+                                             requested_by=requested_by, purpose=purpose, studio_session_id=sid,
+                                             reference=reference)
+                else:
+                    inner = adapter.send_prompt(psid, text, sink)
             except DOWN as exc:
                 self._mark_provider_down(key, f"{exc.code}: {exc.message}")
                 raise

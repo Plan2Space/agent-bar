@@ -24,7 +24,27 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
-CATEGORIES = ("PERMISSION", "AGENT", "TASK", "BUILD", "RENDER", "PR_CI", "ERROR", "REVIEW", "HUMAN_APPROVAL")
+CATEGORIES = ("PERMISSION", "AGENT", "TASK", "BUILD", "RENDER", "PR_CI", "ERROR", "REVIEW", "HUMAN_APPROVAL", "IMAGE")
+IMAGE_STATE = {"RECORDED": "NEW", "SENT": "NEW", "NOT_SENT": "FAILED"}
+IMAGE_VERB = {"RECORDED": "Imagem registrada para envio", "SENT": "Imagem entregue", "NOT_SENT": "Imagem não enviada"}
+PURPOSE_TEXT = {"REFERENCE": "referência", "EVALUATION": "avaliação", "CORRECTION_PACKAGE": "pacote de correção",
+                "CHAT": "Chat"}
+
+
+def image_notification(rows) -> dict:
+    """Argumentos de `NotificationCenter.publish` para um lote do registro de imagem (uma notificacao por lote)."""
+    first = rows[0]
+    names = ", ".join(f"{Path(r.path).name} (sha256 {r.sha256[:12]}…)" for r in rows[:4])
+    more = f" e mais {len(rows) - 4}" if len(rows) > 4 else ""
+    body = (f"{first.provider_id} · {first.model_id} · para {PURPOSE_TEXT.get(first.purpose, first.purpose)} · "
+            f"pedido por {first.requested_by} · {names}{more}")
+    if first.ref_id:
+        body += f" · referência {first.ref_id}{' ' + first.ref_version if first.ref_version else ''}"
+    if first.error:
+        body += f" · {first.error}"
+    return {"category": "IMAGE", "title": f"{IMAGE_VERB.get(first.status, 'Imagem')}: {len(rows)} arquivo(s)",
+            "body": body, "state": IMAGE_STATE.get(first.status, "NEW"), "session_id": first.session_id,
+            "source": f"image:{first.batch_id}", "link": "chat", "dedupe_key": f"image:{first.batch_id}"}
 STATES = ("NEW", "READ", "ACTION_REQUIRED", "RESOLVED", "EXPIRED", "FAILED")
 OPEN_STATES = ("NEW", "ACTION_REQUIRED")
 PERMISSION_STATE = {"PENDING": "ACTION_REQUIRED", "ALLOWED": "RESOLVED", "DENIED": "RESOLVED", "EXPIRED": "EXPIRED",
