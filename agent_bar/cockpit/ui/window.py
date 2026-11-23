@@ -6,7 +6,7 @@ from PySide6.QtWidgets import QMainWindow, QTabWidget
 
 from agent_bar.cockpit.acp import AsyncRuntime
 from agent_bar.cockpit.github import GhClient, configured_repos
-from agent_bar.cockpit.notifications import NotificationCenter
+from agent_bar.cockpit.notifications import NotificationCenter, image_notification
 from agent_bar.cockpit.ui.chat import ChatView
 from agent_bar.cockpit.ui.chat_sessions import ChatSessions
 from agent_bar.cockpit.ui.dev_tab import DevTab
@@ -16,6 +16,7 @@ from agent_bar.cockpit.ui.notifications_tab import NotificationsTab
 from agent_bar.cockpit.ui.permissions_tab import PermissionsTab
 from agent_bar.cockpit.ui.review_tab import ReviewTab
 from agent_bar.cockpit.ui.workflows_tab import WorkflowsTab
+from agent_bar.platform.image_ledger import ImageLedger
 from agent_bar.targets import load_targets
 
 TAB_CSS = ("QTabWidget::pane{border:0;background:#16161a}QTabBar::tab{background:#202026;color:#bdbdc4;padding:6px 14px;"
@@ -59,6 +60,10 @@ class CockpitWindow(QMainWindow):
                                           is_open_fn=self.sessions.broker.is_open)  # um inbox e um broker para todas as abas
         self.tabs.insertTab(1, self.permissions, "Permissões")
         self.center = NotificationCenter(self.sessions.inbox.path)          # F3: mesmo SQLite do Inbox
+        # S01C-R3: toda imagem entregue a um agente fica registrada (tabela propria, mesmo SQLite) e aparece nas
+        # Notificacoes; so publica aqui (thread-safe), a aba se atualiza pelo proprio timer
+        self.image_ledger = ImageLedger(self.sessions.inbox.path,
+                                        on_change=lambda rows: self.center.publish(**image_notification(rows)))
         self.notifications = NotificationsTab(self.center, inbox=self.sessions.inbox, answer_fn=self.sessions.answer_permission,
                                               is_open_fn=self.sessions.broker.is_open)
         self.sessions.permission_listeners += [lambda _id: self.permissions.refresh(), lambda _id: self.notifications.refresh()]
@@ -139,6 +144,7 @@ class CockpitWindow(QMainWindow):
         self.sessions.shutdown(close_store=False)                           # #75: conversas fechadas, banco ainda aberto
         self.runtime.stop()                                                  # nenhum callback do agente chega depois daqui
         self.sessions.close_store()                                          # so agora os bancos
+        self.image_ledger.close()
         self.center.close()
 
     def closeEvent(self, e) -> None:                                            # noqa: N802

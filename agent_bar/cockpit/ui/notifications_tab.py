@@ -29,7 +29,7 @@ from PySide6.QtWidgets import (
 from agent_bar.cockpit.notifications import CATEGORIES, NotificationCenter
 
 CATEGORY_TEXT = {"PERMISSION": "Permissão", "AGENT": "Agente", "TASK": "Tarefa", "BUILD": "Build", "RENDER": "Render",
-                 "PR_CI": "PR/CI", "ERROR": "Erro", "REVIEW": "Revisão", "HUMAN_APPROVAL": "Aprovação humana"}
+                 "PR_CI": "PR/CI", "ERROR": "Erro", "REVIEW": "Revisão", "HUMAN_APPROVAL": "Aprovação humana", "IMAGE": "Imagem"}
 STATE_TEXT = {"NEW": "nova", "READ": "lida", "ACTION_REQUIRED": "pede ação", "RESOLVED": "resolvida",
               "EXPIRED": "expirada", "FAILED": "falhou"}
 STATE_COLOR = {"ACTION_REQUIRED": "#ffc233", "NEW": "#4aa8ff", "FAILED": "#ff9a9b", "EXPIRED": "#8f8f98",
