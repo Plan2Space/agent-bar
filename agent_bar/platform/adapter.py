@@ -161,6 +161,7 @@ class ProviderAdapter(ABC):
     que comprovou suportar (e declara SUPPORTED em `describe()` com a evidencia)."""
 
     adapter_id: str = ""
+    supports_context_tokens: bool = False                                     # fixa a janela (SessionRequest)
 
     @abstractmethod
     def describe(self) -> dict:

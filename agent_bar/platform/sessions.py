@@ -167,6 +167,8 @@ class SessionManager:
             if self.open_count(provider_id) >= limit:
                 raise SessionLimitReached(f"{provider_id}: {limit} sessoes abertas (limite); feche uma antes de abrir outra")
             adapter = self._adapter(provider_id, request.workspace or "")
+            if request.context_tokens is not None and not adapter.supports_context_tokens:
+                raise CapabilityUnsupported("context_tokens", f"{provider_id} nao aceita fixar a janela de contexto")
             rec = adapter.create_session(request)
             sid = f"p2s-{uuid.uuid4().hex[:12]}"
             s = {

@@ -8,9 +8,11 @@ Ordem, e o que cada passo recusa (nada é enviado quando algo é recusado):
      conferiu contra o catálogo/manifest (VS-R2); divergiu, recusa;
   4. as imagens vão no MESMO pedido, referência primeiro, como `ImagePayload` (sem segunda leitura); o ledger grava uma
      linha por imagem com o papel (`reference`/`render`) antes do envio e marca SENT quando o adaptador aceita;
-  5. confirmação: SENT não prova que o modelo recebeu. A confirmação é a contagem MEDIDA de tokens de entrada que o
-     provedor devolveu, comparada com uma linha de base só de texto (mesmo texto, sessão nova, sem imagem). Sem
-     contagem medida, a linha diz "entregue ao adaptador; contagem do provedor indisponível", nunca "chegou".
+  5. confirmação: SENT não prova que o modelo recebeu. Depois do turno, mede-se (sessões novas, mesmo texto) a linha
+     de base só de texto e o custo de CADA imagem sozinha (essas imagens também passam pelo ledger, CALIBRATION_BY).
+     Confirma só se o acréscimo medido do pedido com todas as imagens >= soma dos custos - metade do menor: faltando
+     qualquer imagem, não fecha. Sem contagem medida: "entregue ao adaptador; contagem do provedor indisponível".
+     No Ollama 0.40 o prompt_eval_count conta o prompt inteiro mesmo com cache (medido: par 4029 = 41 + 2042 + 1946).
 Este caminho só entrega imagem e devolve o texto do modelo: não grava nota, veredito nem aprovação (a nota é do
 S01C-F1-05, com os campos e as recusas dele).
 """
@@ -37,6 +39,7 @@ from agent_bar.platform.usage import UsageSnapshot
 
 PROVIDER = "ollama"
 REQUESTED_BY = "studio:review"
+CALIBRATION_BY = "studio:review:calibracao"          # turnos que medem o custo de cada imagem sozinha
 PURPOSE = "EVALUATION"
 DEFAULT_PROMPT = ("Compare o render com a referência: descreva de forma objetiva o que cada imagem mostra (cama, "
                   "cabeceira, enxoval, materiais, iluminação, mobiliário) e o que difere entre elas. Cite só elementos "
@@ -68,6 +71,8 @@ class VisionResult:
     stop_reason: str = ""
     baseline: UsageSnapshot | None = None        # mesmo texto, sem imagem, sessão nova
     baseline_error: str = ""
+    # calibração por imagem: mesmo texto + SÓ aquela imagem, sessão nova; (papel, sha256, tokens medidos ou None, erro)
+    calibration: list[tuple[str, str, int | None, str]] = field(default_factory=list)
 
     def delivery_line(self) -> str:
         """O que foi entregue ao adaptador, como o ledger registrou (vai junto da linha de uso)."""
@@ -80,7 +85,9 @@ class VisionResult:
                 f"(registro {first.batch_id[:8]}…: {shas})")
 
     def confirmation(self) -> tuple[bool, str]:
-        """(confirmado, texto). Só confirma com contagem MEDIDA do provedor acima da linha de base só de texto."""
+        """(confirmado, texto). Confirma só quando o acréscimo MEDIDO do pedido com todas as imagens fecha com a soma
+        do custo de CADA imagem medida sozinha, com folga de metade da menor (CONFIRM_RULE). Assim, faltando qualquer
+        uma das imagens, o acréscimo fica abaixo do exigido. Sem medir cada imagem, não confirma."""
         n = len(self.deliveries)
         got = self.usage.input_tokens if self.usage is not None else None
         if got is None or got.state != "MEASURED" or got.value is None:
@@ -91,11 +98,21 @@ class VisionResult:
             return False, (f"o provedor contou {got.value} tokens de entrada; linha de base só de texto indisponível "
                            f"({why}): não confirmado que as imagens chegaram")
         delta = int(got.value) - int(base.value)
-        if n and delta >= n * MIN_IMAGE_TOKENS:
-            return True, (f"o provedor contou {got.value} tokens de entrada contra {base.value} só de texto (+{delta}): "
-                          f"compatível com {n} imagem(ns) no prompt")
-        return False, (f"o provedor contou {got.value} tokens de entrada contra {base.value} só de texto (+{delta}): "
-                       f"não confirma {n} imagem(ns) (mínimo {MIN_IMAGE_TOKENS} por imagem)")
+        head = f"o provedor contou {got.value} tokens de entrada contra {base.value} só de texto (+{delta})"
+        if not n or len(self.calibration) != n or any(t is None for _r, _s, t, _e in self.calibration):
+            why = "; ".join(e for *_x, e in self.calibration if e) or "custo de cada imagem não medido"
+            return False, f"{head}; não dá para separar por imagem ({why}): não confirmado que as {n} chegaram"
+        costs = [(role or "imagem", int(t) - int(base.value)) for role, _s, t, _e in self.calibration]  # type: ignore[arg-type]
+        parts = " + ".join(f"{c} ({r})" for r, c in costs)
+        small = min(c for _r, c in costs)
+        if small < MIN_IMAGE_TOKENS:
+            return False, f"{head}; uma imagem sozinha custou só {small} (mínimo {MIN_IMAGE_TOKENS}): não confirmado"
+        need = sum(c for _r, c in costs) - small // 2
+        if delta >= need:
+            return True, (f"{head}; cada imagem sozinha custa {parts}: o acréscimo só fecha com as {n} imagens "
+                          f"(exigido ≥ {need})")
+        return False, (f"{head}; cada imagem sozinha custa {parts}: acréscimo abaixo de {need}, falta pelo menos uma "
+                       f"das {n} imagens: não confirmado")
 
 
 def verified_payloads(item: GalleryItem, keys: Sequence[str]) -> list[ImagePayload]:
@@ -221,33 +238,49 @@ class RunVision:
                 return
             self._finish(result)
             if self.baseline:
-                self._baseline(result, model_id, text)
+                result.baseline, result.baseline_error = self._measure(model_id, text)
+                for p, role in zip(payloads, roles, strict=True):            # cada imagem sozinha, também registrada
+                    snap, err = self._measure(model_id, text, [p], [role], link if role == "reference" else None)
+                    m = snap.input_tokens if snap is not None else None
+                    val = int(m.value) if m is not None and m.state == "MEASURED" and m.value is not None else None
+                    result.calibration.append((role, p.sha256, val, err or ("" if val is not None else "sem contagem")))
             out.set_result(result)
         threading.Thread(target=run, name="run-vision", daemon=True).start()
         return out
 
-    def _baseline(self, result: VisionResult, model_id: str, text: str) -> None:
-        """Mesmo texto, sem imagem, numa sessão nova: a contagem medida que serve de linha de base."""
+    def _measure(self, model_id: str, text: str, images: Sequence[ImagePayload] = (), roles: Sequence[str] = (),
+                 link: ReferenceLink | None = None) -> tuple[UsageSnapshot | None, str]:
+        """Um turno de medida numa sessão nova: o mesmo texto, sem imagem (linha de base) ou com UMA imagem
+        (calibração). Imagem de calibração passa pelo ledger como qualquer outra (CALIBRATION_BY)."""
         try:
             req = SessionRequest(model_id=model_id, context_tokens=VISION_CONTEXT)
-            sid = self.sessions.open(self.provider_id, req, title="linha de base")["id"]
-        except Exception as exc:                                              # noqa: BLE001 - sem base, não confirma
-            result.baseline_error = f"{type(exc).__name__}: {exc}"
-            return
+            sid = self.sessions.open(self.provider_id, req, title="medida de tokens")["id"]
+        except Exception as exc:                                              # noqa: BLE001 - sem medida, não confirma
+            return None, f"{type(exc).__name__}: {exc}"
+        got: list[UsageSnapshot] = []
 
         def sink(ev: AgentEvent) -> None:
             if ev.kind == "usage":
-                snap = UsageSnapshot.from_dict(ev.data)
-                result.baseline = snap if result.baseline is None else result.baseline.merged_with(snap)
+                got.append(UsageSnapshot.from_dict(ev.data))
+        err = ""
         try:
-            self.sessions.send(sid, text, sink).result(self.timeout)
+            if images:
+                fut = self.sessions.send(sid, text, sink, images=list(images), purpose=PURPOSE,
+                                         requested_by=CALIBRATION_BY, reference=link, roles=list(roles))
+            else:
+                fut = self.sessions.send(sid, text, sink)
+            fut.result(self.timeout)
         except Exception as exc:                                              # noqa: BLE001
-            result.baseline_error = f"{type(exc).__name__}: {exc}"
+            err = f"{type(exc).__name__}: {exc}"
         finally:
             try:
                 self.sessions.close(sid)
             except Exception:                                                 # noqa: BLE001
                 pass
+        snap = None
+        for s in got:
+            snap = s if snap is None else snap.merged_with(s)
+        return snap, err
 
     def _finish(self, result: VisionResult) -> None:
         result.deliveries = self.ledger.list(session_id=result.session_id)
@@ -257,5 +290,5 @@ class RunVision:
             pass
 
 
-__all__ = ["DEFAULT_PROMPT", "MIN_IMAGE_TOKENS", "PURPOSE", "REQUESTED_BY", "RunVision", "VisionRefused", "VisionResult",
+__all__ = ["CALIBRATION_BY", "DEFAULT_PROMPT", "MIN_IMAGE_TOKENS", "PURPOSE", "REQUESTED_BY", "RunVision", "VisionRefused", "VisionResult",
            "VISION_CONTEXT", "framing", "reference_link", "verified_payloads"]

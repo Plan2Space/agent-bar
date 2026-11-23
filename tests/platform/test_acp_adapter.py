@@ -184,3 +184,17 @@ def test_usage_update_from_the_agent_becomes_a_usage_event(tmp_path):
         assert totals.model_reported == "claude-opus-5-5"
     finally:
         a.disconnect()
+
+
+def test_a_fixed_context_window_is_refused_not_ignored(tmp_path):
+    """Review do #94 (NIT): o ACP não fixa a janela; pedir context_tokens é recusado com erro tipado."""
+    from agent_bar.platform.adapter import CapabilityUnsupported
+    a = make(tmp_path)
+    a.connect()
+    try:
+        assert a.supports_context_tokens is False
+        with pytest.raises(CapabilityUnsupported, match="context_tokens"):
+            a.create_session(SessionRequest(context_tokens=16384))
+        assert a.create_session(SessionRequest())["session_id"]
+    finally:
+        a.disconnect()

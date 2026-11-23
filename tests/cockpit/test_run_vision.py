@@ -98,26 +98,32 @@ def test_click_sends_reference_and_render_in_one_request_records_both_and_confir
     click_and_wait(tab)
     assert tab.vision_error == ""
     # entrega: um único pedido com as DUAS imagens, referência primeiro, os bytes exatos dos arquivos conferidos
-    assert images_sent(srv) == [[b64(ref.path), b64(img.path)]]
+    # depois, a calibração: cada imagem sozinha (sessões novas), para provar que o acréscimo é das duas
+    assert images_sent(srv) == [[b64(ref.path), b64(img.path)], [b64(ref.path)], [b64(img.path)]]
     chat = [b for p, b in srv.requests if p == "/api/chat" and b["messages"][-1].get("images")][0]
     assert "1. referência do cômodo ref-quarto-r2@v1" in chat["messages"][-1]["content"]
     assert f"2. render do run {OK_RENDER}" in chat["messages"][-1]["content"]
     # registro: o ledger DA JANELA, uma linha por imagem com o papel, mesmo lote, SENT
-    rows = sorted(win.image_ledger.list(), key=lambda r: r.role)
+    rows = sorted(win.image_ledger.list(session_id=tab.vision_result.session_id), key=lambda r: r.role)
     assert [(r.role, r.sha256, r.status) for r in rows] == [("reference", ref.sha256, "SENT"), ("render", img.sha256, "SENT")]
     assert len({r.batch_id for r in rows}) == 1
     assert all((r.model_id, r.purpose, r.requested_by, r.ref_id) == ("vision-d", "EVALUATION", "studio:review",
                                                                       "ref-quarto-r2") for r in rows)
     assert all(r.session_id == tab.vision_result.session_id for r in rows)
     # notificação: publicada pelo on_change do mesmo ledger
-    notes = win.center.list(categories=["IMAGE"])
-    assert len(notes) == 1 and img.sha256[:12] in notes[0].body and "vision-d" in notes[0].body
-    # confirmação: contagem MEDIDA do provedor contra a linha de base só de texto, não o SENT
+    cal = [r for r in win.image_ledger.list() if r.session_id != tab.vision_result.session_id]
+    assert sorted((r.role, r.sha256, r.requested_by) for r in cal) == [
+        ("reference", ref.sha256, "studio:review:calibracao"), ("render", img.sha256, "studio:review:calibracao")]
+    assert len({r.batch_id for r in cal}) == 2                                   # uma imagem por turno de calibração
+    notes = win.center.list(categories=["IMAGE"])                                 # o pedido + as 2 calibrações
+    assert len(notes) == 3 and any(img.sha256[:12] in n.body and "vision-d" in n.body for n in notes)
+    # confirmação: acréscimo MEDIDO contra a soma do custo de cada imagem sozinha, não o SENT
     line = tab.vision_usage.text()
     assert f"turno {13 + 2 * IMAGE_TOKENS} entrada" in line
     assert "entregue ao adaptador: 2 imagem(ns) SENT para vision-d" in line and img.sha256[:12] in line
     assert f"confirmado pelo provedor: o provedor contou {13 + 2 * IMAGE_TOKENS} tokens de entrada contra 13 só " \
-           f"de texto (+{2 * IMAGE_TOKENS}): compatível com 2 imagem(ns)" in line
+           f"de texto (+{2 * IMAGE_TOKENS}); cada imagem sozinha custa {IMAGE_TOKENS} (reference) + {IMAGE_TOKENS} " \
+           f"(render): o acréscimo só fecha com as 2 imagens" in line
     assert "imagens=2" in tab.vision_text.toPlainText()
     assert "não é nota nem veredito" in tab.vision_status.text()
     assert win.platform_sessions.get(rows[0].session_id)["state"] == "CLOSED"      # sessão não fica pendurada
@@ -176,17 +182,49 @@ def _render_item(tmp_path: Path) -> G.GalleryItem:
                          images=[G.GalleryImage("dia_cama_3q", p, hashlib.sha256(p.read_bytes()).hexdigest(), "l", "x")])
 
 
-@pytest.mark.parametrize("got,base,n,ok", [(13 + 512, 13, 2, True), (13 + 100, 13, 2, False), (None, 13, 2, False),
-                                           (525, None, 2, False)])
-def test_confirmation_needs_measured_counts_above_the_text_baseline(got, base, n, ok):
+REAL_REF, REAL_RENDER, REAL_TEXT = 2083, 1987, 41                            # qwen2.5vl:7b medido (cache_probe.txt)
+
+
+@pytest.mark.parametrize("label,got,base,cal,ok", [
+    # MUST do review: com 2 linhas SENT, o acréscimo de UMA imagem só NÃO confirma; o das duas confirma
+    ("real: as duas", REAL_TEXT + 2042 + 1946, REAL_TEXT, [REAL_REF, REAL_RENDER], True),
+    ("real: só a referência", REAL_REF, REAL_TEXT, [REAL_REF, REAL_RENDER], False),
+    ("real: só o render", REAL_RENDER, REAL_TEXT, [REAL_REF, REAL_RENDER], False),
+    ("revisor: base 300, +2000 de uma", 2300, 300, [2300, 2300], False),
+    ("fake: as duas", 13 + 512, 13, [13 + 256, 13 + 256], True),
+    ("fake: uma (+256)", 13 + 256, 13, [13 + 256, 13 + 256], False),
+    ("sem calibração", 13 + 512, 13, None, False),
+    ("calibração sem contagem", 13 + 512, 13, [13 + 256, None], False),
+    ("sem contagem do pedido", None, 13, [269, 269], False),
+    ("sem linha de base", 525, None, [269, 269], False),
+    ("imagem barata demais", 13 + 40, 13, [13 + 20, 13 + 20], False)])
+def test_confirmation_needs_the_measured_increase_of_every_image(label, got, base, cal, ok):
     from agent_bar.cockpit.run_vision import VisionResult
     from agent_bar.platform.usage import Metric, UsageSnapshot
 
     def snap(v):
         return None if v is None else UsageSnapshot("ollama", "m", input_tokens=Metric(v, "MEASURED", "test"))
     res = VisionResult("r", "m", "s", usage=snap(got), baseline=snap(base))
-    res.deliveries = [object()] * n                                              # type: ignore[list-item]
-    assert res.confirmation()[0] is ok
+    res.deliveries = [object(), object()]                                         # type: ignore[list-item] - 2 SENT
+    if cal is not None:
+        res.calibration = [(role, "0" * 64, t, "" if t is not None else "sem contagem")
+                           for role, t in zip(("reference", "render"), cal, strict=True)]
+    confirmed, text = res.confirmation()
+    assert confirmed is ok, (label, text)
+    assert ("não confirmado" in text) is not ok or label == "imagem barata demais"
+
+
+def test_context_tokens_is_refused_by_a_provider_that_cannot_honour_it():
+    from agent_bar.platform.adapter import CapabilityUnsupported, SessionRequest
+    from agent_bar.platform.sessions import SessionManager
+    from tests.platform.fake_adapter import FakeAdapter
+    sm = SessionManager({"fake": lambda: FakeAdapter()})
+    try:
+        with pytest.raises(CapabilityUnsupported, match="context_tokens"):
+            sm.open("fake", SessionRequest(context_tokens=16384))
+        assert sm.open("fake", SessionRequest())["state"]                        # sem o pedido, abre normal
+    finally:
+        sm.close_all()
 
 
 def test_model_without_vision_is_refused_and_nothing_is_sent(studio):

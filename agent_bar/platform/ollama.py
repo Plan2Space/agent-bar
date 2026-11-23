@@ -82,6 +82,7 @@ def think_param(level: str | None) -> bool | str | None:
 
 class OllamaAdapter(ProviderAdapter):
     adapter_id = "ollama"
+    supports_context_tokens = True                                            # options.num_ctx
 
     def __init__(self, endpoint: str = OLLAMA_DEFAULT, env: Any = None, opener: Opener = urllib.request.urlopen,
                  timeout: float = 10.0):
