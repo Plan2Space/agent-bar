@@ -54,6 +54,33 @@ def thumbnail(path: Path, size: QSize = THUMB) -> QPixmap:
     return QPixmap.fromImage(img) if not img.isNull() else QPixmap()
 
 
+def tech_text(item: G.GalleryItem) -> str:
+    """Estado técnico para a tela principal: só o que foi VERIFICADO; senão "não verificado" com o motivo (nunca o
+    PASS do manifest de um run cujas provas não fecham)."""
+    gaps = item.verification_gaps()
+    if gaps:
+        return f"não verificado: {gaps[0]}"
+    return f"render {item.render_verdict or '—'} · geometria {item.build.get('geometria', '—')}"
+
+
+def source_text(item: G.GalleryItem) -> str:
+    """Fonte do item; run do motor leva sempre o texto do VS-R1a."""
+    if item.source == G.ENGINE:
+        return f"motor: {G.UNPUBLISHED_NOTE}"
+    if item.source == G.REFERENCE:
+        return f"referência: {item.provenance_text()}"
+    return item.source_label
+
+
+def best_headline(reason: str) -> str:
+    """Título do cartão MELHOR conforme o motivo real (sem avaliação ≠ nenhum elegível ≠ regra pendente)."""
+    if reason == G.NO_EVALUATION:
+        return NOT_EVALUATED
+    if reason.startswith("nenhum render elegível"):
+        return "Nenhum render elegível"
+    return "Melhor ainda não escolhido"
+
+
 def compare_label(a: G.GalleryItem, b: G.GalleryItem, img_a: G.GalleryImage, img_b: G.GalleryImage) -> str:
     """O que a comparação lado a lado vale (VS-R7, VS-R1a, R38): nunca chama de "mesma câmera" sem prova."""
     if b.source == G.REFERENCE or a.source == G.REFERENCE:
@@ -264,13 +291,17 @@ class DesignView(QWidget):
             self.cards["último"].fill(None, ["nenhum render do cômodo"], "nenhum render")
         else:
             img = G.primary_image(last)
+            state = (f"Geometria: {last.build.get('geometria', '—')} · Render: {last.render_verdict or '—'}"
+                     if last.verified else f"Estado técnico: {tech_text(last)}")
             self.cards["último"].fill(last, [
-                f"{last.when()} · {last.item_id}", f"câmera {img.key if img else '—'} · {last.source_label}",
-                f"Geometria: {last.build.get('geometria', '—')} · Render: {last.render_verdict or '—'}",
+                f"{last.when()} · {last.item_id}", f"câmera {img.key if img else '—'}", source_text(last), state,
                 f"Nota visual: {G.visual_text(self.evaluations_for(last))}"])
         best = G.cards(self.items, self.evaluations_for)[2]
+        if best.item is not None and not best.item.eligible(self.evaluations_for(best.item)):
+            best = G.Card(best.role, None, "nenhum render elegível: candidato inelegível recusado")
         if best.item is None:                                                     # nunca um inválido para preencher
-            self.cards["melhor"].fill(None, [NOT_EVALUATED, best.text], NOT_EVALUATED)
+            head = best_headline(best.text)
+            self.cards["melhor"].fill(None, [head, best.text], head)
         else:                                                                     # (S01C-F1-07 decide; hoje não ocorre)
             self.cards["melhor"].fill(best.item, [f"{best.item.when()} · {best.item.item_id}", best.text])
 
@@ -278,12 +309,14 @@ class DesignView(QWidget):
         self.history.clear()
         for it in self.renders:
             img = G.primary_image(it)
+            mark = (" · FAIL, não elegível" if it.verified and it.render_verdict == "FAIL"
+                    else " · não verificado, não elegível" if not it.verified else "")
             text = "\n".join([
                 f"{it.when()} · {it.item_id.split('-', 1)[-1]}",
                 f"câmera {img.key if img else '—'} · especialista —",
-                f"técnico: render {it.render_verdict or '—'} · geometria {it.build.get('geometria', '—')}",
+                f"técnico: {tech_text(it)}",
                 f"visual: {G.visual_text(self.evaluations_for(it))}",
-                f"{it.source_label}{' · FAIL, não elegível' if it.render_verdict == 'FAIL' else ''}",
+                f"{source_text(it)}{mark}",
             ])
             li = QListWidgetItem(text)
             if img is not None:
@@ -337,9 +370,9 @@ class DesignView(QWidget):
             return
         self.compared = (a, b)
         self.compared_images = (img_a, img_b)
-        self.left_cap.setText(f"{a.when()} · {a.item_id}\ncâmera {img_a.key}")
+        self.left_cap.setText(f"{a.when()} · {a.item_id}\ncâmera {img_a.key} · {source_text(a)}")
         self.right_cap.setText(f"{b.when()} · {b.item_id}\n{'referência' if b.source == G.REFERENCE else 'câmera'} "
-                               f"{img_b.key}")
+                               f"{img_b.key} · {source_text(b)}")
         self.left.set_image(img_a.path)
         self.right.set_image(img_b.path)
         self.compare_label.setText(compare_label(a, b, img_a, img_b))
@@ -382,4 +415,5 @@ class DesignView(QWidget):
             self.enlarged = None
 
 
-__all__ = ["NOT_EVALUATED", "BigCard", "DesignView", "compare_label", "thumbnail"]
+__all__ = ["NOT_EVALUATED", "BigCard", "DesignView", "best_headline", "compare_label", "source_text", "tech_text",
+           "thumbnail"]

@@ -173,6 +173,8 @@ class GalleryItem:
         out = [f"inválido: {e}" for e in self.errors[:3]]
         if not self.images:
             out.append("nenhuma imagem com sha256 conferido")
+        elif self.rejected:                                                    # um quadro divergente ou ausente basta
+            out.append(f"{len(self.rejected)} quadro(s) recusado(s): {self.rejected[0]}")
         if self.kind == "render":
             gaps = sorted({v for v in self.build.values() if v.startswith(SKP_UNCHECKED)})
             out += [f"build: {g}" for g in gaps]
@@ -355,7 +357,7 @@ def _render_build(root: Path, skp: dict) -> dict[str, str]:
         return unchecked("run_manifest do build ausente ou ilegível")
     if not _skp_sha(build):
         return unchecked("build sem artefato skp com sha256")
-    if _skp_sha(build) != skp["sha256"]:
+    if _skp_sha(build) != skp.get("sha256"):
         return unchecked("sha256 do skp do render difere do build")
     return _build_verdicts(build)
 

@@ -290,8 +290,8 @@ def test_best_card_never_shows_an_invalid_unpublished_or_unruled_render(tmp_path
             tab.evaluations_for = lambda item, e=evaluated: ["avaliação"] if item.item_id == e else []
             tab._fill_gallery()
             best = tab.design.cards["melhor"]
-            assert best.item is None and best.info.text().startswith("Ainda não avaliado")
-            assert "nenhum render elegível" in best.info.text()
+            assert best.item is None and best.info.text().startswith("Nenhum render elegível")   # há avaliação
+            assert "nenhum render elegível" in best.info.text() and best.thumb.path is None
         ev, engine, dl = build_negatives(tmp_path / "neg")
         g = G.build_gallery(E.load_catalog(ev, expected={}), engine, dl, rooms=[(PLANT, ROOM)])
         tab.design.set_items(g.of(PLANT, ROOM), lambda item: ["avaliação"] if item.item_id == PUB_OK else [])
@@ -314,7 +314,8 @@ def test_history_gallery_is_newest_first_with_real_thumbnails_and_states(tmp_pat
         assert first.startswith("23/11 06:16 UTC") and "câmera dia_cama_3q" in first and "visual: sem avaliação" in first
         r4 = h.item(ids.index(R4)).text()
         assert "render FAIL" in r4 and "FAIL, não elegível" in r4                # FAIL visível e identificado
-        assert "sha256" not in "".join(h.item(i).text() for i in range(h.count()))   # hashes ficam nos detalhes
+        import re
+        assert not re.search(r"[0-9a-f]{12,}", "".join(h.item(i).text() for i in range(h.count())))  # hash: detalhes
     finally:
         dispose(tab)
 
@@ -380,11 +381,86 @@ def test_cards_follow_the_evaluation_hook(tmp_path):
     try:
         tab.evaluations_for = lambda item: ["avaliação"] if item.item_id == OK_RENDER else []
         tab._fill_gallery()
-        assert tab.design.cards["melhor"].info.text().startswith("Ainda não avaliado")  # não publicado
+        assert tab.design.cards["melhor"].info.text().startswith("Nenhum render elegível")  # não publicado
         row = next(r for r in history_rows(tab) if r[2] == OK_RENDER)
         assert row[7] == "1 avaliação(ões)"
         h = tab.design.history
         assert "visual: 1 avaliação(ões)" in next(h.item(i).text() for i in range(h.count())
                                                    if h.item(i).data(Qt.ItemDataRole.UserRole) == OK_RENDER)
+    finally:
+        dispose(tab)
+
+
+# --------------------------------------------------------------- revisão do #89 @ 52fc17c: VERIFICADO na tela principal
+def _neg_items(tmp_path):
+    from agent_bar.cockpit import gallery as G
+    from tests.cockpit.gallery_fixture import PLANT, ROOM, build_negatives
+    ev, engine, dl = build_negatives(tmp_path / "neg")
+    g = G.build_gallery(E.load_catalog(ev, expected={}), engine, dl, rooms=[(PLANT, ROOM)])
+    return g, g.of(PLANT, ROOM)
+
+
+def test_unverified_render_never_shows_the_manifest_pass_on_the_main_screen(tmp_path):
+    from agent_bar.cockpit import gallery as G
+    from tests.cockpit.gallery_fixture import REPORT_FAIL
+    tab = _gallery_tab(tmp_path)
+    try:
+        g, items = _neg_items(tmp_path)
+        n1 = g.get(REPORT_FAIL)                                                  # manifest PASS, render_report FAIL
+        tab.design.set_items([n1] + [i for i in items if i.source == G.REFERENCE])
+        card = tab.design.cards["último"].info.text()
+        tile = tab.design.history.item(0).text()
+        for shown in (card, tile):
+            for claim in ("Render: PASS", "render PASS", "Geometria: PASS", "geometria PASS"):
+                assert claim not in shown, shown                                  # nem render nem geometria do manifest
+            assert "não verificado" in shown and "render_report diz FAIL" in shown, shown
+    finally:
+        dispose(tab)
+
+
+def test_unpublished_items_carry_the_vs_r1a_text_on_card_tile_and_comparison(tmp_path):
+    from agent_bar.cockpit import gallery as G
+    tab = _gallery_tab(tmp_path)
+    try:
+        d = tab.design
+        assert G.UNPUBLISHED_NOTE in d.cards["último"].info.text()
+        h = d.history
+        for i in range(h.count()):
+            it = tab.gallery.get(h.item(i).data(Qt.ItemDataRole.UserRole))
+            assert (G.UNPUBLISHED_NOTE in h.item(i).text()) == (it.source == G.ENGINE), h.item(i).text()
+        h.setCurrentRow(0)
+        d.compare_with_previous()
+        assert G.UNPUBLISHED_NOTE in d.left_cap.text() and G.UNPUBLISHED_NOTE in d.right_cap.text()
+        d.compare_with_reference()
+        assert "referência" in d.right_cap.text() and "sintética" in d.right_cap.text()
+    finally:
+        dispose(tab)
+
+
+def test_best_card_headline_is_the_real_reason(tmp_path):
+    from tests.cockpit.gallery_fixture import OK_RENDER
+    tab = _gallery_tab(tmp_path)
+    try:
+        assert tab.design.cards["melhor"].info.text().startswith("Ainda não avaliado")   # sem nenhuma avaliação
+        tab.evaluations_for = lambda item: ["avaliação"] if item.item_id == OK_RENDER else []
+        tab._fill_gallery()
+        best = tab.design.cards["melhor"]
+        assert best.info.text().startswith("Nenhum render elegível") and best.thumb.text() == "Nenhum render elegível"
+    finally:
+        dispose(tab)
+
+
+def test_best_card_refuses_an_item_that_is_not_eligible(tmp_path, monkeypatch):
+    from agent_bar.cockpit import gallery as G
+    from tests.cockpit.gallery_fixture import UNPUB_FAIL
+    tab = _gallery_tab(tmp_path)
+    try:
+        bad = tab.gallery.get(UNPUB_FAIL)                                          # FAIL e não publicado
+        real = G.cards
+        monkeypatch.setattr(G, "cards", lambda items, ev=lambda _i: []: [*real(items, ev)[:2],
+                                                                           G.Card("melhor conhecido", bad, "forçado")])
+        tab._fill_gallery()
+        best = tab.design.cards["melhor"]
+        assert best.item is None and best.thumb.path is None                       # o cartão não aceita inelegível
     finally:
         dispose(tab)
