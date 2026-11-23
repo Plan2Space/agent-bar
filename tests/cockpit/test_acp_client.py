@@ -354,3 +354,21 @@ def test_config_option_update_notifications_refresh_the_client_state():
         assert c.config_options == opts
     finally:
         c.rt.stop()
+
+
+def test_answering_a_permission_after_the_client_and_its_loop_are_gone_is_a_no_op(tmp_path):
+    """#78 (Frente H, 7/40 no 3.11): a resposta a um pedido chegava depois do encerramento e chamava
+    call_soon_threadsafe num loop fechado -> RuntimeError: Event loop is closed. Sem loop nao ha canal ate o agente."""
+    held = []
+    c, _ = make(tmp_path, on_permission=lambda req, respond: held.append(respond))
+    c.prompt("perm")
+    end = time.time() + T
+    while time.time() < end and not held:
+        time.sleep(0.02)
+    assert held
+    c.close().result(T)
+    while time.time() < end and not c.rt.loop.is_closed():
+        time.sleep(0.02)
+    assert c.rt.loop.is_closed()
+    held[0](None)                                                            # antes: RuntimeError: Event loop is closed
+    held[0]("allow")

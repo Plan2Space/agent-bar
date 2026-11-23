@@ -56,6 +56,7 @@ class NotificationCenter:
         self.clock = clock
         self.on_change = on_change
         self._lock = threading.RLock()
+        self.closed = False
         self._db = sqlite3.connect(self.path, check_same_thread=False, isolation_level=None, timeout=5)
         self._db.row_factory = sqlite3.Row
         if self.path != ":memory:":
@@ -95,7 +96,11 @@ class NotificationCenter:
     def sync_permissions(self, inbox) -> int:
         """Espelha o Permission Inbox: uma notificacao por pedido, estado acompanhando a decisao. Idempotente."""
         n = 0
-        for e in inbox.history(limit=1000):
+        try:
+            entries = inbox.history(limit=1000)
+        except RuntimeError:                                                 # InboxClosed: Studio encerrando
+            return 0
+        for e in entries:
             state = PERMISSION_STATE.get(e.status, "NEW")
             verb = {"ACTION_REQUIRED": "Permissão pedida", "RESOLVED": "Permissão decidida", "EXPIRED": "Permissão sem resposta"}
             body = f"{e.provider} · {e.kind} · risco {e.risk}"
@@ -197,4 +202,27 @@ class NotificationCenter:
 
     def close(self) -> None:
         with self._lock:
-            self._db.close()
+            if not self.closed:
+                self.closed = True
+                self._db.close()
+
+
+# ------------------------------------------------------------------------------------- uso depois do close (#75)
+def _quiet_after_close(default):
+    """Depois do close (Studio encerrando), timers e sinais atrasados nao derrubam nada: a chamada vira no-op."""
+    import functools
+
+    def deco(fn):
+        @functools.wraps(fn)
+        def wrapper(self, *a, **kw):
+            if self.closed:
+                return default() if callable(default) else default
+            return fn(self, *a, **kw)
+        return wrapper
+    return deco
+
+
+for _name, _default in (("publish", None), ("sync_permissions", 0), ("mark_read", None), ("mark_all_read", 0),
+                        ("resolve", None), ("apply_retention", 0), ("counts", lambda: {s: 0 for s in STATES}),
+                        ("badge", 0), ("list", list)):
+    setattr(NotificationCenter, _name, _quiet_after_close(_default)(getattr(NotificationCenter, _name)))

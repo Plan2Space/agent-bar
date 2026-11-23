@@ -36,7 +36,7 @@ from agent_bar.cockpit.acp import (
 )
 from agent_bar.cockpit.library import compose_prompt
 from agent_bar.cockpit.permission_broker import PermissionBroker
-from agent_bar.cockpit.permission_inbox import PermissionInbox
+from agent_bar.cockpit.permission_inbox import InboxClosed, PermissionInbox
 from agent_bar.cockpit.store import Chat, ChatStore, data_dir
 from agent_bar.cockpit.ui.composer import Composer, load_enter_sends, save_enter_sends
 from agent_bar.cockpit.ui.widgets import (
@@ -317,7 +317,7 @@ class ChatView(QWidget):
         stick = self._near_bottom()
         self.tlay.insertWidget(self.tlay.count() - 1, w)
         if stick:
-            QTimer.singleShot(0, lambda: self.scroll.verticalScrollBar().setValue(self.scroll.verticalScrollBar().maximum()))
+            QTimer.singleShot(0, self.scroll, self._scroll_to_end)
 
     def _set_busy(self, busy: bool) -> None:
         self.busy = busy
@@ -638,6 +638,10 @@ class ChatView(QWidget):
             except Exception:                                                 # noqa: BLE001
                 log.exception("ouvinte de permissao falhou")
 
+    def _scroll_to_end(self) -> None:
+        bar = self.scroll.verticalScrollBar()
+        bar.setValue(bar.maximum())
+
     def _submit_from_keyboard(self) -> None:
         """Enter nunca para o agente: com turno em curso, o texto fica na caixa como rascunho (so o botao Parar para)."""
         if self.busy:
@@ -717,10 +721,14 @@ class ChatView(QWidget):
             respond(None)
             return
         self.flush()
-        entry = self.inbox.record(req.tool_call or {}, provider=self.profile().key, session_id=req.session_id,
-                                  workspace=self.workspace(),
-                                  mode_decides_alone=bool(self._modes.get("availableModes"))
-                                  and not mode_is_safe(self.chat.mode, self._modes))
+        try:
+            entry = self.inbox.record(req.tool_call or {}, provider=self.profile().key, session_id=req.session_id,
+                                      workspace=self.workspace(),
+                                      mode_decides_alone=bool(self._modes.get("availableModes"))
+                                      and not mode_is_safe(self.chat.mode, self._modes))
+        except InboxClosed:                                                  # #75: Studio fechando; o agente nunca fica pendurado
+            respond(None)
+            return
         if entry.repeat_note:                                                # explica pedido repetido antes do dialogo
             self._add(Notice(f"pedido repetido: {entry.repeat_note}", "#ffc233"))
         if entry.status != "PENDING":                                        # politica ja decidiu (proibido ou regra)
@@ -762,7 +770,10 @@ class ChatView(QWidget):
             self.flush()
             tid = str(u.data.get("toolCallId", ""))
             if u.data.get("status") in ("completed", "failed"):             # resultado da execucao no inbox
-                self.inbox.finish_tool_call(u.session_id, tid, str(u.data["status"]))
+                try:
+                    self.inbox.finish_tool_call(u.session_id, tid, str(u.data["status"]))
+                except InboxClosed:
+                    pass
             card = self.cards.get(tid)
             if card is None:
                 card = ToolCard(tid)
@@ -806,7 +817,7 @@ class ChatView(QWidget):
             self.text_block.append("".join(self._buf))
             self._buf.clear()
         if self._near_bottom():
-            QTimer.singleShot(0, lambda: self.scroll.verticalScrollBar().setValue(self.scroll.verticalScrollBar().maximum()))
+            QTimer.singleShot(0, self.scroll, self._scroll_to_end)
 
     # ---------------------------------------------------------------------------------------------- historico
     def _refresh_history(self) -> None:
@@ -892,6 +903,8 @@ class ChatView(QWidget):
 
     def shutdown(self) -> None:
         """Encerra os clientes que esta aba iniciou (e so eles) e o runtime proprio."""
+        self.gen += 1                       # #75: o que o agente ainda tem na fila vira geracao velha e e descartado
+        self.pending_prompt = None          # (permissao velha recebe None = cancelled; nada toca o inbox fechado)
         if self.client is not None:
             self._closing.append(self.client.close())
         for fut in self._closing:                                          # inclusive clientes trocados antes (workspace/agente)
