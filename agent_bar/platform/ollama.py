@@ -64,6 +64,16 @@ def effort_levels_from_show(show: dict) -> list[str]:
     return out
 
 
+def _ollama_error(exc: urllib.error.HTTPError) -> str:
+    """O campo `error` do corpo da resposta do Ollama, curto e numa linha (ex.: contexto excedido); vazio se não há."""
+    try:
+        msg = str(json.loads(exc.read(2048).decode("utf-8", "replace")).get("error") or "")
+    except (OSError, ValueError, AttributeError):
+        return ""
+    msg = " ".join(msg.split())[:200]
+    return f": {msg}" if msg else ""
+
+
 def think_param(level: str | None) -> bool | str | None:
     if level is None:
         return None
@@ -83,6 +93,7 @@ class OllamaAdapter(ProviderAdapter):
         self._models: dict[str, dict] = {}
         self._sessions: dict[str, dict] = {}
         self._history: dict[str, list[dict]] = {}
+        self._num_ctx: dict[str, int] = {}                                    # sid -> options.num_ctx pedido
         self._running: dict[str, dict] = {}                                   # sid -> {"resp": ..., "cancel": Event}
         self._ids = itertools.count(1)
         self._lock = threading.Lock()
@@ -213,6 +224,10 @@ class OllamaAdapter(ProviderAdapter):
         levels = self._models[model]["effort_levels"]
         if request.effort is not None and request.effort not in levels:
             raise EffortRejected(f"{model} nao anuncia o esforco {request.effort!r} (anuncia {levels})")
+        limit = (self._models[model].get("limits") or {}).get("context_tokens")
+        ctx = request.context_tokens
+        if ctx is not None and (ctx <= 0 or (limit and ctx > limit)):
+            raise ModelRejected(f"{model}: contexto {ctx} fora do limite anunciado ({limit})")
         sid = f"ollama-{next(self._ids)}"
         rec = {
             "schema": "p2s.session.v1", "session_id": sid, "provider_id": "ollama",
@@ -225,6 +240,8 @@ class OllamaAdapter(ProviderAdapter):
         with self._lock:
             self._sessions[sid] = rec
             self._history[sid] = []
+            if ctx is not None:                                               # fora do Session v1: só vira num_ctx
+                self._num_ctx[sid] = ctx
         return dict(rec)
 
     def send_prompt(self, session_id: str, text: str, on_event, images=()) -> cf.Future:
@@ -249,6 +266,8 @@ class OllamaAdapter(ProviderAdapter):
         sent = [*messages[:-1], {**messages[-1], "images": [base64.b64encode(p.data).decode("ascii") for p in payloads]}] \
             if payloads else messages                                        # a imagem vai so neste turno
         body: dict = {"model": rec["model_accepted"], "messages": sent, "stream": True}
+        if self._num_ctx.get(session_id):
+            body["options"] = {"num_ctx": self._num_ctx[session_id]}
         think = think_param(rec["effort_accepted"])
         if think is not None:
             body["think"] = think
@@ -267,7 +286,7 @@ class OllamaAdapter(ProviderAdapter):
         try:
             resp = self._post("/api/chat", body, stream=True, timeout=300)
         except urllib.error.HTTPError as exc:
-            raise PromptFailed(f"HTTP {exc.code}") from None
+            raise PromptFailed(f"HTTP {exc.code}{_ollama_error(exc)}") from None
         except (urllib.error.URLError, OSError) as exc:
             if run["cancel"].is_set():
                 return PromptResult("cancelled")
@@ -343,3 +362,4 @@ class OllamaAdapter(ProviderAdapter):
         with self._lock:
             self._sessions.pop(session_id, None)
             self._history.pop(session_id, None)
+            self._num_ctx.pop(session_id, None)

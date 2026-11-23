@@ -181,7 +181,7 @@ class SessionManager:
 
     def send(self, sid: str, text: str, on_event: Callable[[AgentEvent], None] = lambda e: None, *,
              images=(), purpose: str = "CHAT", requested_by: str = "studio",
-             reference: ReferenceLink | None = None) -> cf.Future:
+             reference: ReferenceLink | None = None, roles=None) -> cf.Future:
         """Future[PromptResult]. Provedor caido: as sessoes dele vao para ERROR e o future falha com o erro tipado
         (a UI oferece `recover`; o prompt NAO e reenviado sozinho).
         `images`: passa por `send_with_images` (registro antes do envio); sem `image_ledger`, ImageLedgerError."""
@@ -206,7 +206,7 @@ class SessionManager:
                     inner = send_with_images(adapter, self.image_ledger, psid, text, sink, images,
                                              provider_id=s["provider_id"], model_id=s["session"].get("model_accepted") or "provider-default",
                                              requested_by=requested_by, purpose=purpose, studio_session_id=sid,
-                                             reference=reference)
+                                             reference=reference, roles=roles)
                 else:
                     inner = adapter.send_prompt(psid, text, sink)
             except DOWN as exc:

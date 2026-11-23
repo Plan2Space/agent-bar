@@ -728,7 +728,9 @@ class ReviewTab(QWidget):
         self.vision_status.setText(f"{res.model_id} respondeu sobre {res.run_id} (texto do modelo; não é nota nem "
                                    "veredito)")
         self.vision_text.setPlainText(res.text)
-        self.vision_usage.setText(f"{usage_line(res.usage)} · {res.delivery_line()}")
+        ok, confirm = res.confirmation()                                       # SENT não é "chegou"
+        self.vision_usage.setText(f"{usage_line(res.usage)} · {res.delivery_line()}\n"
+                                  f"{'confirmado pelo provedor' if ok else 'não confirmado'}: {confirm}")
 
     def _show_gallery_image(self, li: QListWidgetItem | None) -> None:
         if li is None:

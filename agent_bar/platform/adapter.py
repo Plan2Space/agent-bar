@@ -142,6 +142,7 @@ class SessionRequest:
     effort: str | None = None                                                # None = padrao do provedor
     workspace: str | None = None
     links: Mapping[str, str | None] = field(default_factory=dict)
+    context_tokens: int | None = None                                        # None = padrao do provedor (num_ctx)
 
 
 @dataclass(frozen=True)

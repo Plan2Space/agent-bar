@@ -1,11 +1,16 @@
-"""run_vision.py — "avaliar este run": imagens de um run da galeria para um modelo com visão, pelo caminho único da
-plataforma (SessionManager → send_with_images → ImageLedger → adaptador). Sem Qt.
+"""run_vision.py — "avaliar este run": a REFERÊNCIA do cômodo e o RENDER do run, no mesmo pedido, para um modelo com
+visão, pelo caminho único da plataforma (SessionManager → send_with_images → ImageLedger → adaptador). Sem Qt.
 
 Ordem, e o que cada passo recusa (nada é enviado quando algo é recusado):
   1. o modelo precisa anunciar `images = SUPPORTED` no provedor (VS-R10); senão, recusa com o motivo;
-  2. cada imagem é relida do disco e o sha256 dos BYTES tem de ser o que a galeria conferiu (VS-R2); divergiu, recusa;
-  3. os mesmos bytes vão como `ImagePayload` (sem segunda leitura): o ledger grava antes do envio e marca SENT/NOT_SENT,
-     a Notificação sai pelo `on_change` do ledger da janela e o evento de uso do turno volta junto do texto.
+  2. o cômodo precisa ter referência com imagem conferida (pedido do Felipe: "Enviar a referência e o render real");
+  3. cada imagem (a da referência e as do render) é relida do disco e o sha256 dos BYTES tem de ser o que a galeria
+     conferiu contra o catálogo/manifest (VS-R2); divergiu, recusa;
+  4. as imagens vão no MESMO pedido, referência primeiro, como `ImagePayload` (sem segunda leitura); o ledger grava uma
+     linha por imagem com o papel (`reference`/`render`) antes do envio e marca SENT quando o adaptador aceita;
+  5. confirmação: SENT não prova que o modelo recebeu. A confirmação é a contagem MEDIDA de tokens de entrada que o
+     provedor devolveu, comparada com uma linha de base só de texto (mesmo texto, sessão nova, sem imagem). Sem
+     contagem medida, a linha diz "entregue ao adaptador; contagem do provedor indisponível", nunca "chegou".
 Este caminho só entrega imagem e devolve o texto do modelo: não grava nota, veredito nem aprovação (a nota é do
 S01C-F1-05, com os campos e as recusas dele).
 """
@@ -13,11 +18,12 @@ from __future__ import annotations
 
 import concurrent.futures as cf
 import hashlib
+import threading
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from agent_bar.cockpit.gallery import GalleryItem
+from agent_bar.cockpit.gallery import GalleryItem, primary_image
 from agent_bar.platform.adapter import (
     IMAGE_LIMIT,
     IMAGE_TYPES,
@@ -32,8 +38,15 @@ from agent_bar.platform.usage import UsageSnapshot
 PROVIDER = "ollama"
 REQUESTED_BY = "studio:review"
 PURPOSE = "EVALUATION"
-DEFAULT_PROMPT = ("Descreva de forma objetiva o que aparece nesta imagem de render de um quarto: cama, cabeceira, "
-                  "enxoval, materiais, iluminação e mobiliário. Cite só elementos visíveis. Não dê nota nem veredito.")
+DEFAULT_PROMPT = ("Compare o render com a referência: descreva de forma objetiva o que cada imagem mostra (cama, "
+                  "cabeceira, enxoval, materiais, iluminação, mobiliário) e o que difere entre elas. Cite só elementos "
+                  "visíveis. Não dê nota nem veredito.")
+# Abaixo disto por imagem, a contagem do provedor não confirma que a imagem entrou no prompt (o fake conta 256; o
+# qwen2.5vl:7b real contou ~2000 para uma imagem, #90).
+MIN_IMAGE_TOKENS = 64
+# Contexto pedido ao provedor: a referência e um render em resolução cheia passam dos 4096 do padrão do Ollama
+# (medido: 4128 tokens com o rc5 r2_canto, #94). Nunca acima do limite que o modelo anuncia (o adaptador recusa).
+VISION_CONTEXT = 16384
 
 
 class VisionRefused(Exception):
@@ -53,15 +66,36 @@ class VisionResult:
     usage: UsageSnapshot | None = None
     deliveries: list[ImageDelivery] = field(default_factory=list)
     stop_reason: str = ""
+    baseline: UsageSnapshot | None = None        # mesmo texto, sem imagem, sessão nova
+    baseline_error: str = ""
 
     def delivery_line(self) -> str:
-        """O que foi entregue, como o ledger registrou (vai junto da linha de uso)."""
+        """O que foi entregue ao adaptador, como o ledger registrou (vai junto da linha de uso)."""
         if not self.deliveries:
             return "nenhuma imagem registrada"
         first = self.deliveries[0]
-        shas = ", ".join(f"{Path(d.path).name} sha256 {d.sha256[:12]}…" for d in self.deliveries[:3])
-        return (f"entrega: {len(self.deliveries)} imagem(ns) {first.status} para {first.model_id} "
+        rows = sorted(self.deliveries, key=lambda d: d.role != "reference")
+        shas = ", ".join(f"{d.role or 'imagem'} {Path(d.path).name} sha256 {d.sha256[:12]}…" for d in rows[:4])
+        return (f"entregue ao adaptador: {len(self.deliveries)} imagem(ns) {first.status} para {first.model_id} "
                 f"(registro {first.batch_id[:8]}…: {shas})")
+
+    def confirmation(self) -> tuple[bool, str]:
+        """(confirmado, texto). Só confirma com contagem MEDIDA do provedor acima da linha de base só de texto."""
+        n = len(self.deliveries)
+        got = self.usage.input_tokens if self.usage is not None else None
+        if got is None or got.state != "MEASURED" or got.value is None:
+            return False, "entregue ao adaptador; contagem do provedor indisponível: não confirmado que o modelo recebeu"
+        base = self.baseline.input_tokens if self.baseline is not None else None
+        if base is None or base.state != "MEASURED" or base.value is None:
+            why = self.baseline_error or "sem contagem medida"
+            return False, (f"o provedor contou {got.value} tokens de entrada; linha de base só de texto indisponível "
+                           f"({why}): não confirmado que as imagens chegaram")
+        delta = int(got.value) - int(base.value)
+        if n and delta >= n * MIN_IMAGE_TOKENS:
+            return True, (f"o provedor contou {got.value} tokens de entrada contra {base.value} só de texto (+{delta}): "
+                          f"compatível com {n} imagem(ns) no prompt")
+        return False, (f"o provedor contou {got.value} tokens de entrada contra {base.value} só de texto (+{delta}): "
+                       f"não confirma {n} imagem(ns) (mínimo {MIN_IMAGE_TOKENS} por imagem)")
 
 
 def verified_payloads(item: GalleryItem, keys: Sequence[str]) -> list[ImagePayload]:
@@ -96,22 +130,35 @@ def verified_payloads(item: GalleryItem, keys: Sequence[str]) -> list[ImagePaylo
     return out
 
 
-def reference_link(ref: GalleryItem | None) -> ReferenceLink | None:
+def reference_link(ref: GalleryItem | None, image_sha256: str = "") -> ReferenceLink | None:
+    """Liga as linhas do ledger à referência do catálogo. `image_sha256`: o da imagem da referência que vai no pedido
+    (o ledger confere contra a linha de papel "reference")."""
     if ref is None:
         return None
     rid, _, version = ref.item_id.partition("@")
-    # sem source_hash: o arquivo entregue e o render, nao a referencia (o ledger confere source_hash contra a entrega)
-    return ReferenceLink(rid, reference_version=ref.images[0].key if ref.images else version,
+    img = primary_image(ref)
+    return ReferenceLink(rid, reference_version=version or (img.key if img else ""), source_hash=image_sha256,
                          project_id=ref.plant, room_id=ref.room)
+
+
+def framing(ref: GalleryItem, ref_key: str, item: GalleryItem, keys: Sequence[str]) -> str:
+    """Diz ao modelo qual imagem é qual, na ordem em que vão (sem caminho de arquivo)."""
+    lines = ["Imagens deste pedido, na ordem:",
+             f"1. referência do cômodo {ref.item_id} (quadro {ref_key}): estética e sintética, não é geometria nem medida;"]
+    lines += [f"{n}. render do run {item.item_id}, quadro {k};" for n, k in enumerate(keys, 2)]
+    return "\n".join(lines)
 
 
 class RunVision:
     """Usa as instâncias da janela: o SessionManager da plataforma e o MESMO ImageLedger (sem segundo registro)."""
 
-    def __init__(self, sessions: SessionManager, ledger: ImageLedger, provider_id: str = PROVIDER) -> None:
+    def __init__(self, sessions: SessionManager, ledger: ImageLedger, provider_id: str = PROVIDER, *,
+                 baseline: bool = True, timeout: float = 600.0) -> None:
         self.sessions = sessions
         self.ledger = ledger
         self.provider_id = provider_id
+        self.baseline = baseline
+        self.timeout = timeout
 
     def models(self) -> list[dict]:
         return self.sessions.models(self.provider_id)
@@ -127,8 +174,24 @@ class RunVision:
             raise VisionRefused([f"{model_id} sem visão (images={model.get('images')}): nenhuma imagem enviada"])
         if not prompt.strip():
             raise VisionRefused(["pedido sem texto"])
-        payloads = verified_payloads(item, image_keys)
-        sid = self.sessions.open(self.provider_id, SessionRequest(model_id=model_id), title=f"avaliar {item.item_id}")["id"]
+        ref_img = primary_image(reference) if reference is not None else None
+        if reference is None or ref_img is None:
+            raise VisionRefused(["cômodo sem referência com imagem conferida: a avaliação manda a referência e o "
+                                 "render juntos; nada enviado"])
+        reasons: list[str] = []
+        payloads: list[ImagePayload] = []
+        for it, keys in ((reference, [ref_img.key]), (item, list(image_keys))):
+            try:
+                payloads += verified_payloads(it, keys)
+            except VisionRefused as exc:
+                reasons += [f"{'referência' if it is reference else 'render'} {r}" for r in exc.reasons]
+        if reasons:
+            raise VisionRefused(reasons)
+        roles = ["reference"] + ["render"] * (len(payloads) - 1)
+        text = framing(reference, ref_img.key, item, image_keys) + "\n\n" + prompt
+        link = reference_link(reference, payloads[0].sha256)
+        req = SessionRequest(model_id=model_id, context_tokens=VISION_CONTEXT)
+        sid = self.sessions.open(self.provider_id, req, title=f"avaliar {item.item_id}")["id"]
         result = VisionResult(item.item_id, model_id, sid)
         parts: list[str] = []
 
@@ -140,24 +203,51 @@ class RunVision:
                 result.usage = snap if result.usage is None else result.usage.merged_with(snap)
             on_event(ev)
         try:
-            inner = self.sessions.send(sid, prompt, sink, images=payloads, purpose=PURPOSE, requested_by=REQUESTED_BY,
-                                       reference=reference_link(reference))
+            inner = self.sessions.send(sid, text, sink, images=payloads, purpose=PURPOSE, requested_by=REQUESTED_BY,
+                                       reference=link, roles=roles)
         except Exception:
             self._finish(result)
             raise
         out: cf.Future = cf.Future()
 
-        def done(f: cf.Future) -> None:
-            self._finish(result)
-            exc = f.exception()
-            if exc is not None:
+        def run() -> None:                                                    # fora da thread do provedor
+            try:
+                res = inner.result(self.timeout)
+                result.text = "".join(parts)
+                result.stop_reason = str(getattr(res, "stop_reason", "") or "")
+            except BaseException as exc:                                      # noqa: BLE001 - vai para o future
+                self._finish(result)
                 out.set_exception(exc)
                 return
-            result.text = "".join(parts)
-            result.stop_reason = str(getattr(f.result(), "stop_reason", "") or "")
+            self._finish(result)
+            if self.baseline:
+                self._baseline(result, model_id, text)
             out.set_result(result)
-        inner.add_done_callback(done)
+        threading.Thread(target=run, name="run-vision", daemon=True).start()
         return out
+
+    def _baseline(self, result: VisionResult, model_id: str, text: str) -> None:
+        """Mesmo texto, sem imagem, numa sessão nova: a contagem medida que serve de linha de base."""
+        try:
+            req = SessionRequest(model_id=model_id, context_tokens=VISION_CONTEXT)
+            sid = self.sessions.open(self.provider_id, req, title="linha de base")["id"]
+        except Exception as exc:                                              # noqa: BLE001 - sem base, não confirma
+            result.baseline_error = f"{type(exc).__name__}: {exc}"
+            return
+
+        def sink(ev: AgentEvent) -> None:
+            if ev.kind == "usage":
+                snap = UsageSnapshot.from_dict(ev.data)
+                result.baseline = snap if result.baseline is None else result.baseline.merged_with(snap)
+        try:
+            self.sessions.send(sid, text, sink).result(self.timeout)
+        except Exception as exc:                                              # noqa: BLE001
+            result.baseline_error = f"{type(exc).__name__}: {exc}"
+        finally:
+            try:
+                self.sessions.close(sid)
+            except Exception:                                                 # noqa: BLE001
+                pass
 
     def _finish(self, result: VisionResult) -> None:
         result.deliveries = self.ledger.list(session_id=result.session_id)
@@ -167,5 +257,5 @@ class RunVision:
             pass
 
 
-__all__ = ["DEFAULT_PROMPT", "PURPOSE", "REQUESTED_BY", "RunVision", "VisionRefused", "VisionResult", "reference_link",
-           "verified_payloads"]
+__all__ = ["DEFAULT_PROMPT", "MIN_IMAGE_TOKENS", "PURPOSE", "REQUESTED_BY", "RunVision", "VisionRefused", "VisionResult",
+           "VISION_CONTEXT", "framing", "reference_link", "verified_payloads"]
