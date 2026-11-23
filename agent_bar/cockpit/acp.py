@@ -669,7 +669,13 @@ class AcpClient:
         loop = asyncio.get_running_loop()
 
         def respond(option_id: str | None) -> None:                              # chamado de qualquer thread
-            loop.call_soon_threadsafe(lambda: asyncio.ensure_future(self._answer_permission(rid, option_id)))
+            if loop.is_closed():                                                 # #78: cliente encerrado, agente ja morreu:
+                log.debug("resposta de permissao %s apos o encerramento: sem canal", rid)   # nao ha a quem responder
+                return
+            try:
+                loop.call_soon_threadsafe(lambda: asyncio.ensure_future(self._answer_permission(rid, option_id)))
+            except RuntimeError:                                                 # o loop fechou entre o teste e a chamada
+                log.debug("resposta de permissao %s: loop fechou durante o envio", rid)
 
         self._perm_pending[rid] = (req.session_id, respond)
         try:
