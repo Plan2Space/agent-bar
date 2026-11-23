@@ -205,6 +205,8 @@ class GalleryItem:
         out = self.technical_blockers()
         if not evaluations:
             out.append("sem avaliação")
+        elif not [e for e in evaluations if not uncalibrated(e)]:                # D-S01C-2: nota sem calibração não pesa
+            out.append(UNCALIBRATED_ONLY)
         return out
 
     def eligible(self, evaluations: Sequence[object] = ()) -> bool:
@@ -240,6 +242,13 @@ class Gallery:
 
 # ------------------------------------------------------------------------------- cartões e histórico (S01C-F1-04)
 NO_EVALUATION = "sem avaliação"
+UNCALIBRATED_ONLY = "só avaliações sem calibração (S01C-F1-06)"
+
+
+def uncalibrated(evaluation: object) -> bool:
+    """Avaliação de confiança baixa (avaliador sem calibração aprovada, D-S01C-2): aparece, mas não conta para ELEGÍVEL."""
+    conf = evaluation.get("confidence") if isinstance(evaluation, dict) else getattr(evaluation, "confidence", None)
+    return conf == "baixa"
 BEST_RULE_PENDING = "inconclusivo: regra de melhor render ainda não implementada (S01C-F1-07)"
 
 
@@ -360,7 +369,7 @@ def cards(items: Sequence[GalleryItem], evaluations_for=lambda _item: ()) -> lis
     if not any(evaluations_for(i) for i in renders):
         out.append(Card("melhor conhecido", None, NO_EVALUATION))
     elif not any(i.eligible(evaluations_for(i)) for i in renders):
-        out.append(Card("melhor conhecido", None, "nenhum render elegível (FAIL, build incompleto ou sem avaliação)"))
+        out.append(Card("melhor conhecido", None, "nenhum render elegível (FAIL, build incompleto, sem avaliação ou só avaliações sem calibração)"))
     else:
         out.append(Card("melhor conhecido", None, BEST_RULE_PENDING))
     return out
@@ -583,6 +592,7 @@ def build_gallery(catalog: E.Catalog | None, engine: Path | None = None, library
 
 
 __all__ = ["ENGINE", "IMPORTED", "NO_EVALUATION", "PUBLISHED", "REFERENCE", "SKP_UNCHECKED", "SOURCES",
+           "UNCALIBRATED_ONLY", "uncalibrated",
            "UNPUBLISHED_BLOCK", "UNPUBLISHED_NOTE", "Card", "Gallery", "GalleryImage", "GalleryItem", "build_gallery",
            "CAMERA_PREFERENCE", "LIGHTING_PREFERENCE", "camera_of", "camera_rank", "camera_text",
            "caption", "cards", "comparison_pair", "engine_dir", "file_sha256", "latest_render", "library_dir", "load_engine",
