@@ -160,10 +160,16 @@ def handle_prompt(rid: int, params: dict) -> None:
     elif word == "unknown":
         update(sid, {"sessionUpdate": "something_new", "x": 1})
     elif word == "usage":                                    # F6: como o claude-agent-acp informa uso
-        update(sid, {"sessionUpdate": "usage_update", "used": 41200, "size": 200000})
+        update(sid, {"sessionUpdate": "usage_update", "used": 41200, "size": 200000,
+                     "_meta": {"_claude/model": "claude-opus-5-5"}})
         chunk(sid, "ok")
+        update(sid, {"sessionUpdate": "usage_update", "used": 41950, "size": 200000, "_meta": {
+            "_claude/model": "claude-opus-5-5",
+            "_claude/rateLimit": {"status": "allowed", "unifiedWindows": {
+                "five_hour": {"utilization": 0.16, "resetsAt": 1795421400, "status": "allowed"},
+                "seven_day": {"utilization": 0.42, "resetsAt": 1795716000, "status": "allowed"}}}}})
         update(sid, {"sessionUpdate": "usage_update", "used": 41950, "size": 200000,
-                     "cost": {"amount": 0.0312, "currency": "USD"}})
+                     "cost": {"amount": 0.0312, "currency": "USD"}, "_meta": {"_claude/model": "claude-opus-5-5"}})
     elif word == "askfs":
         res = ask("fs/read_text_file", {"sessionId": sid, "path": "C:/x.txt"})
         chunk(sid, json.dumps(res.get("error", {}).get("code")))
@@ -174,6 +180,9 @@ def handle_prompt(rid: int, params: dict) -> None:
     if word == "usage":                                      # F6: usage acumulado da sessao, como o claude-agent-acp
         result["usage"] = {"inputTokens": 1200, "outputTokens": 340, "cachedReadTokens": 38000,
                            "cachedWriteTokens": 2400, "totalTokens": 41940}
+        result["_meta"] = {"quota": {"model_usage": [
+            {"model": "claude-haiku-5-5", "token_count": {"totalTokens": 1189, "inputTokens": 1173, "outputTokens": 16}},
+            {"model": "claude-opus-5-5", "token_count": {"totalTokens": 41940, "inputTokens": 1200, "outputTokens": 340}}]}}
     send({"jsonrpc": "2.0", "id": rid, "result": result})
 
 

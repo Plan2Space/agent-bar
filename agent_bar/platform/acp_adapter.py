@@ -355,7 +355,8 @@ class AcpAdapter(ProviderAdapter):
             reason = str((res or {}).get("stopReason", "")) if isinstance(res, dict) else ""
             model = find_config(self._config.get(session_id, []), "model")
             if isinstance(res, dict) and isinstance(res.get("usage"), dict):  # F6: totais da sessao
-                snap = from_acp_prompt_usage(res["usage"], provider_id=self.provider_id,
+                meta = res.get("_meta") if isinstance(res.get("_meta"), dict) else {}
+                snap = from_acp_prompt_usage({**res["usage"], "_meta": meta}, provider_id=self.provider_id,
                                              model_id=str(rec.get("model_accepted") or ""))
                 on_event(AgentEvent("usage", "", snap.to_dict()))
             eff = find_config(self._config.get(session_id, []), "thought_level")

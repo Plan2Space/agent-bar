@@ -2,6 +2,8 @@
 informa e UNAVAILABLE (nunca zero); o maximo do modelo nao e a janela; custo equivalente de API nao e fatura."""
 from __future__ import annotations
 
+from datetime import timezone
+
 import pytest
 
 from agent_bar.platform.usage import (
@@ -121,7 +123,8 @@ def test_acp_prompt_usage_is_measured_as_session_totals_not_turn_counts():
     assert (s.session_input_tokens.value, s.session_output_tokens.value, s.session_cache_tokens.value) == (1200, 340, 40400)
     assert s.session_output_tokens.state == "MEASURED"
     assert s.input_tokens.state == "UNAVAILABLE"                               # nao e contagem do turno
-    assert usage_line(s) == "contexto não informado pelo provedor · sessão 1.2k entrada / 340 saída / 40k cache (medido)"
+    assert usage_line(s) == ("contexto não informado pelo provedor · sessão, modelo principal: 1.2k entrada / "
+                             "340 saída / 40k cache (medido)")
 
 
 def test_prompt_totals_do_not_make_context_or_cost_stale():
@@ -141,3 +144,56 @@ def test_snapshot_from_before_the_session_totals_still_loads():
         d.pop(k)
     s = UsageSnapshot.from_dict(d)
     assert s.session_input_tokens.state == "UNAVAILABLE"
+
+
+# ------------------------------------------------------------------------------------------------ recorte 3 (prova real)
+RATE_META = {"_claude/model": "claude-opus-5-5", "_claude/rateLimit": {"status": "allowed", "unifiedWindows": {
+    "five_hour": {"utilization": 0.16, "resetsAt": 1795421400, "status": "allowed"},
+    "seven_day": {"utilization": 0.42, "resetsAt": 1795716000, "status": "allowed"}}}}   # usage_update real, 2026-11-23
+REAL_PROMPT = {"inputTokens": 2, "outputTokens": 4, "cachedReadTokens": 17425, "cachedWriteTokens": 27280,
+               "totalTokens": 44711, "_meta": {"quota": {"model_usage": [
+                   {"model": "claude-haiku-5-5", "token_count": {"totalTokens": 1189}},
+                   {"model": "claude-opus-5-5", "token_count": {"totalTokens": 44711}}]}}}
+
+
+def test_account_limit_is_measured_with_its_reset_time():
+    s = from_acp_usage_update({"used": 44711, "size": 1000000, "_meta": RATE_META}, provider_id="p", model_id="default")
+    five, seven = s.account_5h_utilization, s.account_7d_utilization
+    assert (five.value, five.state, five.resets_at) == (0.16, "MEASURED", 1795421400)
+    assert (seven.value, seven.resets_at) == (0.42, 1795716000)
+    assert "conta: 5h 16%, renova 08:10 · 7d 42%, renova 26/11 18:00 (medido)" in usage_line(s, tz=timezone.utc)
+
+
+def test_an_update_without_rate_limit_does_not_make_the_account_stale():
+    first = from_acp_usage_update({"used": 1, "size": 10, "_meta": RATE_META}, provider_id="p", model_id="m")
+    later = first.merged_with(from_acp_usage_update({"used": 2, "size": 10}, provider_id="p", model_id="m"))
+    assert later.account_5h_utilization.state == "MEASURED"                  # o update seguinte nao fala de limite
+
+
+def test_background_models_are_shown_apart_and_not_summed():
+    s = from_acp_prompt_usage(REAL_PROMPT, provider_id="p", model_id="default")
+    assert s.session_input_tokens.value == 2 and s.session_output_tokens.value == 4     # so o principal
+    assert (s.session_background_tokens.value, s.session_background_tokens.state) == (1189, "MEASURED")
+    assert s.model_reported == "claude-opus-5-5"
+    line = usage_line(s)
+    assert line.startswith("modelo claude-opus-5-5 · ")
+    assert "sessão, modelo principal: 2 entrada / 4 saída / 45k cache (medido)" in line
+    assert "fundo 1.2k (claude-haiku-5-5; medido, fora do total acima)" in line
+
+
+@pytest.mark.parametrize("meta,why", [({}, "sem _meta.quota.model_usage"),
+                                      ({"quota": {"model_usage": [{"model": "x", "token_count": {"totalTokens": 9}}]}},
+                                       "separar o modelo principal")])
+def test_background_is_unavailable_when_it_cannot_be_separated(meta, why):
+    s = from_acp_prompt_usage({**REAL_PROMPT, "_meta": meta}, provider_id="p", model_id="m")
+    assert s.session_background_tokens.state == "UNAVAILABLE" and why in s.session_background_tokens.source
+
+
+def test_a_million_token_window_reads_1m():
+    s = from_acp_usage_update({"used": 44711, "size": 1000000}, provider_id="p", model_id="m")
+    assert usage_line(s).startswith("contexto 45k/1M (medido)")
+
+
+def test_reported_model_equal_to_the_configured_one_is_not_repeated():
+    s = from_acp_usage_update({"used": 1, "size": 10, "_meta": {"_claude/model": "m"}}, provider_id="p", model_id="m")
+    assert not usage_line(s).startswith("modelo")
