@@ -131,6 +131,17 @@ class PermissionsTab(QWidget):
                 ("Decidido por", e.decided_by), ("Pedido em", when(e.created_at)), ("Vence em", when(e.expires_at)),
                 ("Decidido em", when(e.decided_at)), ("Resultado da execução", e.result), ("Id", e.id))) + "</table>")
 
+    def select(self, rid: str) -> None:
+        """Seleciona o pedido `rid` (vindo de uma notificacao), limpando filtros que o esconderiam."""
+        self.status_box.setCurrentIndex(0)
+        self.search.clear()
+        self.refresh()
+        for i in range(self.tree.topLevelItemCount()):
+            it = self.tree.topLevelItem(i)
+            if it.data(0, Qt.ItemDataRole.UserRole) == rid:
+                self.tree.setCurrentItem(it)
+                return
+
     def _disable_rule(self) -> None:
         rid = self.rules_box.currentData()
         if rid:

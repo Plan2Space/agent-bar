@@ -1,14 +1,17 @@
 """window.py — janela do cockpit ACP (D2): QMainWindow redimensionavel com abas Chat, Permissões, Fluxos, Revisão visual, Biblioteca, PRs, Actions e Dev."""
 from __future__ import annotations
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QMainWindow, QTabWidget
 
 from agent_bar.cockpit.acp import AsyncRuntime
 from agent_bar.cockpit.github import GhClient, configured_repos
+from agent_bar.cockpit.notifications import NotificationCenter
 from agent_bar.cockpit.ui.chat import ChatView
 from agent_bar.cockpit.ui.dev_tab import DevTab
 from agent_bar.cockpit.ui.github_tabs import ActionsTab, PrsTab
 from agent_bar.cockpit.ui.library_tab import LibraryTab
+from agent_bar.cockpit.ui.notifications_tab import NotificationsTab
 from agent_bar.cockpit.ui.permissions_tab import PermissionsTab
 from agent_bar.cockpit.ui.review_tab import ReviewTab
 from agent_bar.cockpit.ui.workflows_tab import WorkflowsTab
@@ -51,11 +54,37 @@ class CockpitWindow(QMainWindow):
         self.tabs.addTab(self.dev, "Dev")
         self.permissions = PermissionsTab(self.chat.inbox)                    # F4: o mesmo inbox que o Chat grava
         self.tabs.insertTab(1, self.permissions, "Permissões")
+        self.center = NotificationCenter(self.chat.inbox.path)              # F3: mesmo SQLite do Inbox
+        self.notifications = NotificationsTab(self.center, inbox=self.chat.inbox)
+        self.tabs.insertTab(2, self.notifications, "Notificações")
+        self.tabs.setCornerWidget(self.notifications.bell, Qt.Corner.TopRightCorner)
+        self.notifications.bell.show()
+        self.notifications.bell.clicked.connect(lambda: self.tabs.setCurrentWidget(self.notifications))
+        self.notifications.open_link.connect(self.open_link)
+        self.chat.notify_fn = self._notify
+        self.chat.visible_fn = lambda: self.isActiveWindow() and self.tabs.currentWidget() is self.chat
+        self.workflows.notify_fn = self._notify
         self.prs.review_requested.connect(self.open_review)
         self.tabs.currentChanged.connect(self._tab_changed)
         self.setCentralWidget(self.tabs)
         self.setStyleSheet("QMainWindow{background:#16161a}")
         self._closed = False
+
+    def _notify(self, category: str, title: str, body: str = "", session_id: str = "", dedupe_key: str | None = None,
+                state: str = "NEW") -> None:
+        self.center.publish(category, title, body=body, session_id=session_id, dedupe_key=dedupe_key, state=state,
+                            link="chat" if category in ("AGENT", "ERROR") else ("workflows" if category == "TASK" else ""))
+        self.notifications.refresh()
+
+    def open_link(self, link: str) -> None:
+        """Leva a origem de uma notificacao: `permissions:<id>`, `chat`, `workflows`."""
+        kind, _, ref = link.partition(":")
+        target = {"permissions": self.permissions, "chat": self.chat, "workflows": self.workflows}.get(kind)
+        if target is None:
+            return
+        self.tabs.setCurrentWidget(target)
+        if target is self.permissions and ref:
+            self.permissions.select(ref)
 
     def _tab_changed(self, idx: int) -> None:
         tab = self.tabs.widget(idx)
@@ -87,6 +116,7 @@ class CockpitWindow(QMainWindow):
         if self._closed:
             return
         self._closed = True
+        self.notifications.shutdown()
         self.permissions.shutdown()
         self.workflows.shutdown()
         self.review.shutdown()
@@ -95,6 +125,7 @@ class CockpitWindow(QMainWindow):
         self.library.shutdown()
         self.actions.shutdown()
         self.chat.shutdown()
+        self.center.close()
         self.runtime.stop()
 
     def closeEvent(self, e) -> None:                                            # noqa: N802

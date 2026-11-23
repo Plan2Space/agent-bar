@@ -131,6 +131,9 @@ class ChatView(QWidget):
         self.no_safe_mode = False                                            # agente sem modo que pede permissao: envio bloqueado
         self._modes: dict = {}
         self._draft = ""
+        self._last_turn_text: list[str] = []
+        self.notify_fn: Callable[..., None] | None = None                    # F3: a janela liga ao Notification Center
+        self.visible_fn: Callable[[], bool] = lambda: False
         self._config: list[dict] = []
         self._config_pending = False
         self.client: AcpClient | None = None
@@ -594,6 +597,7 @@ class ChatView(QWidget):
     def _finish_turn(self, stop_reason: str | None, exc: BaseException | None) -> None:
         if self._turn_thought:
             self.chat.add("thought", "".join(self._turn_thought))
+        self._last_turn_text = list(self._turn_text)
         if self._turn_text:
             self.chat.add("agent", "".join(self._turn_text))
         for card in self.cards.values():
@@ -617,6 +621,21 @@ class ChatView(QWidget):
         self._set_busy(False)
         if exc is None:
             self.status.setText(f"pronto · {stop_reason}")
+        self._notify_turn(stop_reason, exc)
+
+    def _notify_turn(self, stop_reason: str | None, exc: BaseException | None) -> None:
+        """Erro sempre vira notificacao; fim de turno so quando o Felipe nao esta olhando o Chat."""
+        if self.notify_fn is None:
+            return
+        who = self.profile().label
+        try:
+            if exc is not None:
+                self.notify_fn("ERROR", f"{who}: o turno falhou", f"{classify(exc)}: {str(exc)[:200]}", self.chat.session_id)
+            elif not self.visible_fn():
+                preview = "".join(self._last_turn_text)[:160]
+                self.notify_fn("AGENT", f"{who} terminou ({stop_reason})", preview, self.chat.session_id)
+        except Exception:                                                     # noqa: BLE001 - notificacao nao derruba o Chat
+            log.exception("notificacao do turno falhou")
 
     def _on_exit(self, gen: int, code: object) -> None:
         if gen != self.gen:
