@@ -254,13 +254,72 @@ class Card:
         return primary_image(self.item) if self.item is not None else None
 
 
+# Câmera da miniatura e da comparação: a que mais se aproxima da referência, em ordem FIXA e declarada (não depende da
+# ordem dos arquivos no manifest). r2_canto é a câmera mais nova, feita para a referência r2; depois perspectiva,
+# frente e cama_3q; o resto em ordem alfabética. Quadro renderizado vem antes da vista crua do SketchUp; entre luzes do
+# mesmo quadro, LIGHTING_PREFERENCE. Nunca inventa câmera: só escolhe entre as imagens conferidas do run.
+CAMERA_PREFERENCE = ("r2_canto", "perspectiva", "frente", "cama_3q")
+LIGHTING_PREFERENCE = ("dia", "entardecer", "noite")
+_FRAME = re.compile(r"^(render_)?(?:(dia|entardecer|noite)_)?(.+)$")
+
+
+def camera_of(key: str) -> tuple[str, str, bool]:
+    """`render_entardecer_close_banco` → ("close_banco", "entardecer", True); `perspectiva` → ("perspectiva", "", False).
+
+    O nome do quadro é câmera + luz; a câmera é o que sobra sem o prefixo de render e de luz."""
+    m = _FRAME.match(key)
+    render, light, camera = (m.group(1), m.group(2), m.group(3)) if m else (None, None, key)
+    return camera, light or "", bool(render or light)
+
+
+def camera_rank(img: GalleryImage) -> tuple:
+    camera, light, rendered = camera_of(img.key)
+    cam = CAMERA_PREFERENCE.index(camera) if camera in CAMERA_PREFERENCE else len(CAMERA_PREFERENCE)
+    lit = LIGHTING_PREFERENCE.index(light) if light in LIGHTING_PREFERENCE else len(LIGHTING_PREFERENCE)
+    return (0 if rendered else 1, cam, camera, lit, img.key)
+
+
+def camera_text(img: GalleryImage | None) -> str:
+    """Rótulo humano do quadro: `câmera perspectiva · luz entardecer` (ou `vista perspectiva` sem render)."""
+    if img is None:
+        return "câmera —"
+    camera, light, rendered = camera_of(img.key)
+    return f"câmera {camera}" + (f" · luz {light}" if light else "") if rendered else f"vista {camera} (sem render)"
+
+
 def primary_image(item: GalleryItem) -> GalleryImage | None:
-    """Imagem do cartão: o quadro de render quando houver (no publicado, `render_*`), senão a primeira conferida."""
-    for prefix in ("render_dia", "render_", "dia_"):
-        hit = next((i for i in item.images if i.key.startswith(prefix)), None)
-        if hit is not None:
-            return hit
-    return item.images[0] if item.images else None
+    """Imagem do cartão e do tile: o quadro de menor `camera_rank` entre as imagens conferidas do run."""
+    return min(item.images, key=camera_rank, default=None)
+
+
+def comparison_pair(a: GalleryItem, b: GalleryItem) -> tuple[GalleryImage | None, GalleryImage | None, str]:
+    """Quadros para comparar `a` com `b` na MESMA câmera, quando os dois a têm.
+
+    Percorre as câmeras de `a` na ordem fixa e pega a primeira que `b` também tem (mesma luz se houver, senão a luz
+    preferida de `b`). Sem câmera em comum, ou com a referência (outra câmera por natureza, VS-R7), cada lado mostra o seu
+    quadro principal e a nota diz isso. A nota é vazia quando o par é a câmera preferida de `a`."""
+    first = primary_image(a)
+    if b.source == REFERENCE or a.source == REFERENCE:
+        return first, primary_image(b), ""
+    by_cam: dict[tuple[str, bool], list[GalleryImage]] = {}
+    for img in b.images:
+        cam, _light, rendered = camera_of(img.key)
+        by_cam.setdefault((cam, rendered), []).append(img)
+    for img in sorted(a.images, key=camera_rank):
+        cam, light, rendered = camera_of(img.key)
+        if rendered != camera_of(first.key)[2]:                               # render só com render
+            continue
+        cands = by_cam.get((cam, rendered))
+        if cands:
+            other = next((c for c in cands if c.key == img.key), min(cands, key=camera_rank))
+            note = "" if img is first else (f"{b.item_id} não tem a câmera {camera_of(first.key)[0]}; "
+                                            f"os dois têm {cam}")
+            return img, other, note
+    other = primary_image(b)
+    if first is None or other is None:
+        return first, other, ""
+    return first, other, (f"sem câmera em comum: {b.item_id} não tem {camera_of(first.key)[0]}; "
+                          f"comparando câmeras diferentes")
 
 
 def caption(item: GalleryItem) -> str:
@@ -525,5 +584,6 @@ def build_gallery(catalog: E.Catalog | None, engine: Path | None = None, library
 
 __all__ = ["ENGINE", "IMPORTED", "NO_EVALUATION", "PUBLISHED", "REFERENCE", "SKP_UNCHECKED", "SOURCES",
            "UNPUBLISHED_BLOCK", "UNPUBLISHED_NOTE", "Card", "Gallery", "GalleryImage", "GalleryItem", "build_gallery",
-           "caption", "cards", "engine_dir", "file_sha256", "latest_render", "library_dir", "load_engine",
+           "CAMERA_PREFERENCE", "LIGHTING_PREFERENCE", "camera_of", "camera_rank", "camera_text",
+           "caption", "cards", "comparison_pair", "engine_dir", "file_sha256", "latest_render", "library_dir", "load_engine",
            "load_references", "primary_image", "reference_item", "trend_text", "visual_text"]
