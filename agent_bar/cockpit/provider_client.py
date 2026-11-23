@@ -110,6 +110,9 @@ class ProviderClient:
         out: cf.Future = cf.Future()
 
         def emit(ev: AgentEvent) -> None:
+            if ev.kind == "usage" and self.on_update is not None:            # F6: snapshot com estado por campo
+                self.on_update(Update("usage_snapshot", sid, {"snapshot": dict(ev.data)}))
+                return
             kind = {"text": "agent_message_chunk", "thought": "agent_thought_chunk"}.get(ev.kind)
             if kind and self.on_update is not None:
                 self.on_update(Update(kind, sid, {"content": {"type": "text", "text": ev.text}}))

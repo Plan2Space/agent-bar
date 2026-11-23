@@ -43,6 +43,7 @@ from agent_bar.platform.adapter import (
 )
 from agent_bar.platform.contracts import all_capabilities, capability
 from agent_bar.platform.discovery import OLLAMA_DEFAULT
+from agent_bar.platform.usage import from_ollama_done
 
 Opener = Callable[..., Any]
 
@@ -293,6 +294,11 @@ class OllamaAdapter(ProviderAdapter):
                     on_event(AgentEvent("text", str(part["content"])))
                 if msg.get("done"):
                     confirmed = msg.get("model")
+                    model = str(confirmed or body.get("model") or "")
+                    max_ctx = ((self._models.get(body.get("model")) or {}).get("limits") or {}).get("context_tokens")
+                    snap = from_ollama_done(msg, provider_id="ollama", model_id=model, model_max_context=max_ctx,
+                                            num_ctx=(body.get("options") or {}).get("num_ctx"))
+                    on_event(AgentEvent("usage", "", snap.to_dict()))           # F6: contadores reais do turno
                     break
         except (OSError, ValueError, AttributeError):
             if not run["cancel"].is_set():

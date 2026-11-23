@@ -128,3 +128,12 @@ def test_no_empty_mode_box_and_one_new_session_notice_per_pause(view):
     notes = [n.text() for n in view.transcript.findChildren(W.Notice) if "sessão nova" in n.text()]
     assert len(notes) == 1
     assert not any("ACP" in n.text() for n in view.transcript.findChildren(W.Notice))
+
+
+def test_usage_line_shows_what_ollama_reported_and_goes_stale_on_model_switch(view):
+    assert view.usage_label.text() == "uso: não informado pelo provedor"
+    turn(view, "diga ok")
+    assert wait(lambda: "turno 13 entrada / 2 saída (medido)" in view.usage_label.text())
+    assert "(estimado), janela não informada" in view.usage_label.text()
+    choose(view, view.model_box, "think-b")
+    assert view.usage_label.text().endswith("configuração trocada: aguardando nova medição")

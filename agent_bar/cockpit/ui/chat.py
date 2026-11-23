@@ -47,6 +47,7 @@ from agent_bar.cockpit.ui.widgets import (
     ToolCard,
     UserBubble,
 )
+from agent_bar.platform.usage import UsageSnapshot, from_acp_usage_update, usage_line
 
 log = logging.getLogger("agent_bar.cockpit.chat")
 
@@ -240,6 +241,13 @@ class ChatView(QWidget):
             cfg.addWidget(w, stretch)
         cfg.addWidget(self.confirmed, 3)
         lay.addLayout(cfg)
+        self.usage: UsageSnapshot | None = None                                # F6: o que o provedor informou, com estado
+        self.usage_label = QLabel(usage_line(None))
+        self.usage_label.setAccessibleName("Uso de contexto e tokens")
+        self.usage_label.setToolTip("Medido = informado pelo provedor · estimado = calculado, não cobrado · "
+                                    "desatualizado = deixou de valer. Nada aparece como zero quando não foi informado.")
+        self.usage_label.setStyleSheet("color:#8f8f98;font-size:11px")
+        lay.addWidget(self.usage_label)
         self.banner = QFrame()
         self.banner.setStyleSheet("QFrame{background:#3a1717;border:1px solid #7a2a2a;border-radius:6px}")
         bl = QHBoxLayout(self.banner)
@@ -400,6 +408,7 @@ class ChatView(QWidget):
             return
         self.gen += 1
         gen = self.gen
+        self._set_usage(None)                                                  # cliente novo: nada medido ainda
         self.no_safe_mode = False
         self._populate_config([])                                            # nada do agente anterior fica nos seletores
         self.ready = False
@@ -583,6 +592,8 @@ class ChatView(QWidget):
                 self._show_error(exc)  # type: ignore[arg-type]
             else:
                 self._populate_config(result if isinstance(result, list) else [])
+                if self.usage is not None:
+                    self._set_usage(self.usage.stale("configuração trocada: aguardando nova medição"))
                 if (getattr(self.client, "config_opens_new_session", False) and self.chat.messages
                         and getattr(self, "_new_session_notice_at", -1) != len(self.chat.messages)):
                     self._new_session_notice_at = len(self.chat.messages)       # um aviso entre dois turnos, nao um por seletor
@@ -793,6 +804,20 @@ class ChatView(QWidget):
         elif u.kind == "current_mode_update" and u.data.get("currentModeId"):
             self.chat.mode = str(u.data["currentModeId"])                     # o agente e a fonte do modo atual
             self._select_mode(self.chat.mode)
+        elif u.kind == "usage_update":                                         # ACP: used/size/cost do agente
+            model = str((find_config(self._config, "model") or {}).get("currentValue") or "")
+            self._set_usage(from_acp_usage_update(u.data, provider_id=self.profile().key, model_id=model))
+        elif u.kind == "usage_snapshot":                                       # provedor da plataforma (Ollama)
+            try:
+                self._set_usage(UsageSnapshot.from_dict(u.data.get("snapshot") or {}))
+            except (KeyError, TypeError, ValueError):
+                log.warning("usage_snapshot invalido descartado")
+
+    def _set_usage(self, snap: UsageSnapshot | None) -> None:
+        if snap is not None and self.usage is not None:
+            snap = self.usage.merged_with(snap)
+        self.usage = snap
+        self.usage_label.setText(usage_line(snap))
 
     def _kick(self) -> None:
         if not self.flush_timer.isActive():

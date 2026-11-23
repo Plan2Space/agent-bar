@@ -237,3 +237,18 @@ def test_images_are_not_resent_in_the_history(adapter, server, tmp_path):
     adapter.send_prompt(sid, "historico", lambda e: None).result(10)
     msgs = [b for p, b in server.requests if p == "/api/chat"][-1]["messages"]
     assert not any(m.get("images") for m in msgs)                          # a imagem foi so naquele turno
+
+
+def test_turn_end_reports_usage_from_the_real_counters(adapter, server):
+    from agent_bar.platform.usage import UsageSnapshot
+    sid = adapter.create_session(SessionRequest(model_id="chat-a"))["session_id"]
+    ev: list[AgentEvent] = []
+    adapter.send_prompt(sid, "diga ok", ev.append).result(10)
+    [u] = [e for e in ev if e.kind == "usage"]
+    s = UsageSnapshot.from_dict(u.data)
+    assert (s.input_tokens.value, s.output_tokens.value, s.context_used.state) == (13, 2, "ESTIMATED")
+    assert s.model_max_context.state == "MEASURED" and s.context_window.state == "UNAVAILABLE"
+    ev.clear()
+    adapter.send_prompt(sid, "semcontagem", ev.append).result(10)
+    s = UsageSnapshot.from_dict(next(e for e in ev if e.kind == "usage").data)
+    assert s.output_tokens.state == "UNAVAILABLE"                                 # nunca zero

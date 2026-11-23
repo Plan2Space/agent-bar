@@ -50,6 +50,7 @@ from agent_bar.platform.adapter import (
     load_images,
 )
 from agent_bar.platform.contracts import STOP_REASONS, all_capabilities, capability
+from agent_bar.platform.usage import from_acp_usage_update
 
 KIND_MAP = {"agent_message_chunk": "text", "agent_thought_chunk": "thought", "tool_call": "tool_call",
             "tool_call_update": "tool_update", "plan": "plan"}
@@ -94,6 +95,10 @@ class AcpAdapter(ProviderAdapter):
             self._config[u.session_id] = list(u.data["configOptions"])
         if sink is not None and kind is not None:
             sink(AgentEvent(kind, u.text, dict(u.data)))
+        elif sink is not None and u.kind == "usage_update":                  # F6: used/size/cost do agente
+            model = str((self._sessions.get(u.session_id) or {}).get("model_accepted") or "")
+            snap = from_acp_usage_update(u.data, provider_id=self.provider_id, model_id=model)
+            sink(AgentEvent("usage", "", snap.to_dict()))
 
     def owned_pids(self) -> list[int]:
         c = self.client
