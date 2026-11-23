@@ -212,8 +212,9 @@ def test_gallery_tab_shows_render4_fail_and_not_eligible(tmp_path):
         rows = gallery_rows(tab)
         assert R4B not in rows
         r4 = rows[R4]
-        assert r4[1] == "PUBLICADO" and r4[4] == "FAIL" and r4[10].startswith("não: ") and "render FAIL" in r4[10]
-        assert all(not r[10].startswith("sim") for r in rows.values())             # sem avaliação: nada elegível
+        assert r4[1] == "PUBLICADO" and r4[4] == "FAIL" and r4[11].startswith("não: ") and "render FAIL" in r4[11]
+        assert r4[10] == "sim"                                                      # verificado, mas FAIL: visível
+        assert all(not r[11].startswith("sim") for r in rows.values())             # sem avaliação: nada elegível
         assert "não publicado, não validado pelo verify.py" in tab.gallery_note.text()
     finally:
         dispose(tab)
@@ -231,6 +232,8 @@ def test_gallery_item_lists_images_by_ident_and_explains_rejections(tmp_path):
         assert "@" in tab.gallery_images.item(0).text()
         assert "imagem recusada: noite_cama_3q: sha256 diverge do manifest" in tab.gallery_detail.text()
         assert "não publicado, não validado pelo verify.py" in tab.gallery_detail.text()
+        assert "VERIFICADO: não: inválido" not in tab.gallery_detail.text()        # imagem recusada não invalida o run
+        assert "ELEGÍVEL: não:" in tab.gallery_detail.text() and "MELHOR: não escolhido" in tab.gallery_detail.text()
         assert not tab.gallery_pane.image.pixmap().isNull()
     finally:
         dispose(tab)
@@ -242,7 +245,7 @@ def test_gallery_still_shows_the_engine_when_the_evidence_is_down(tmp_path):
     try:
         assert tab.catalog is None and tab.room_box.count() == 1
         r4 = gallery_rows(tab)[R4]
-        assert r4[1] == "MOTOR_NAO_PUBLICADO" and r4[4] == "FAIL" and r4[10].startswith("não: ")
+        assert r4[1] == "MOTOR_NAO_PUBLICADO" and r4[4] == "FAIL" and r4[11].startswith("não: ")
         assert "evidence indisponível" in tab.gallery_note.text()
     finally:
         dispose(tab)
@@ -298,7 +301,7 @@ def test_cards_follow_the_evaluation_hook(tmp_path):
     try:
         tab.evaluations_for = lambda item: ["avaliação"] if item.item_id == OK_RENDER else []
         tab._fill_gallery()
-        assert tab.card_views["melhor conhecido"].card.text.startswith("inconclusivo")  # regra: S01C-F1-07
+        assert tab.card_views["melhor conhecido"].card.text.startswith("nenhum render elegível")  # não publicado
         row = next(r for r in history_rows(tab) if r[2] == OK_RENDER)
         assert row[7] == "1 avaliação(ões)"
     finally:

@@ -43,7 +43,7 @@ STATE_KEYS = ("GEOMETRY_PASS", "FUNCTIONAL_PASS", "VISUAL_REVIEW", "HUMAN_APPROV
 HISTORY_COLUMNS = ["Data", "Etapa", "Run", "Fonte", "Situação", "Geometria", "Funcional", "Visual", "Tendência",
                    "Humano"]
 GALLERY_COLUMNS = ["Data", "Fonte", "Tipo", "Run / referência", "Render", "Geometria", "Funcional", "Construção",
-                   "Imagens", "Humano", "Elegível a melhor"]
+                   "Imagens", "Humano", "Verificado", "Elegível a melhor"]
 
 
 class _Bridge(QObject):
@@ -535,13 +535,13 @@ class ReviewTab(QWidget):
         self.gallery_note.setText(
             "Do mais recente para o mais antigo. "
             + " · ".join(f"{G.SOURCE_LABEL[s]}: {n}" for s, n in counts.items() if n)
-            + ". Itens do motor: " + G.UNPUBLISHED_NOTE + ". Elegível = candidato a melhor render (F0 §4); "
-            "não é veredito visual." + errs)
+            + ". Itens do motor: " + G.UNPUBLISHED_NOTE + ". Visível, verificado, elegível e melhor são estados "
+            "separados; elegível = candidato a melhor render (F0 §4), não é veredito visual." + errs)
         for i in items:
-            blockers = i.eligibility()
+            st = i.states()                                                    # VISÍVEL sempre; os outros com motivo
             row = QTreeWidgetItem([i.when(), i.source, i.kind, i.item_id, i.render_verdict or "—",
                                    *(i.build.get(k, "—") for k in G.BUILD_KEYS), str(len(i.images)),
-                                   i.human_approval, "sim" if not blockers else "não: " + "; ".join(blockers)])
+                                   i.human_approval, st["VERIFICADO"], st["ELEGÍVEL"]])
             row.setData(0, Qt.ItemDataRole.UserRole, i.item_id)
             for col in (4, 5, 6, 7):
                 row.setForeground(col, QBrush(QColor(STATE_COLOR.get(row.text(col), "#cfcfd4"))))
@@ -559,7 +559,9 @@ class ReviewTab(QWidget):
             self.gallery_detail.setText("")
             self.gallery_pane.show_image("", None, "selecione um item da galeria")
             return
-        lines = [f"{it.item_id} · fonte {it.source} ({it.source_label})", *it.notes]
+        st = it.states()
+        lines = [f"{it.item_id} · fonte {it.source} ({it.source_label})", *it.notes,
+                 *(f"{k}: {v}" for k, v in st.items())]
         if it.camera_file:
             lines.append(f"câmeras/render spec: {it.camera_file}")
         lines += [f"erro: {e}" for e in it.errors[:4]] + [f"imagem recusada: {r}" for r in it.rejected[:6]]
