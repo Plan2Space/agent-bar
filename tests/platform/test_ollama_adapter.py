@@ -153,6 +153,44 @@ def test_real_local_ollama_passes_the_contract_and_streams():
 
 
 
+def _solid_png(path, rgb, size=64):
+    import struct
+    import zlib
+    row = b"\x00" + bytes(rgb) * size
+    def chunk(kind, data):
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
+    path.write_bytes(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", size, size, 8, 2, 0, 0, 0))
+                     + chunk(b"IDAT", zlib.compress(row * size)) + chunk(b"IEND", b""))
+
+
+@pytest.mark.real_agent
+def test_real_local_vision_model_sees_the_image(tmp_path):
+    """Opt-in (`-m real_agent`): um modelo local com `vision` no /api/show descreve a imagem; modelo sem vision recusa."""
+    png = tmp_path / "vermelho.png"
+    _solid_png(png, (220, 20, 20))
+    a = OllamaAdapter(timeout=30)
+    a.connect()
+    try:
+        models = {m["model_id"]: m["images"] for m in a.list_models()}
+        seeing = [m for m, s in models.items() if s == "SUPPORTED"]
+        if not seeing:
+            pytest.skip("nenhum modelo local anuncia vision no /api/show")
+        sid = a.create_session(SessionRequest(model_id=seeing[0]))["session_id"]
+        ev: list[AgentEvent] = []
+        res = a.send_prompt(sid, "Qual e a cor desta imagem? Responda com uma palavra em portugues.", ev.append,
+                            images=[png]).result(300)
+        text = "".join(e.text for e in ev if e.kind == "text").lower()
+        print(seeing[0], res, repr(text[:80]))
+        assert res.stop_reason == "end_turn" and ("vermelh" in text or "red" in text)
+        blind = [m for m, s in models.items() if s != "SUPPORTED"]
+        if blind:
+            other = a.create_session(SessionRequest(model_id=blind[0]))["session_id"]
+            with pytest.raises(CapabilityUnsupported):
+                a.send_prompt(other, "x", lambda e: None, images=[png])
+    finally:
+        a.disconnect()
+
+
 def test_close_session_stops_a_running_turn_and_forgets_the_session(adapter, server):
     import threading as _t
 
