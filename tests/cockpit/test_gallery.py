@@ -255,3 +255,59 @@ def test_reference_shows_synthetic_provenance_and_usage(tmp_path):
 def test_reference_without_synthetic_flag_says_it_is_undeclared():
     ref = G.GalleryItem(G.REFERENCE, PLANT, ROOM, "r@v1", "reference")
     assert ref.provenance_text().startswith("proveniência sintética não declarada")
+# --------------------------------------------------------------------------------- S01C-F1-04 (lógica dos cartões)
+def test_latest_render_is_the_greatest_started_at_whatever_the_verdict(tmp_path):
+    items = gallery(tmp_path).of(PLANT, ROOM)
+    assert G.latest_render(items).item_id == UNPUB_FAIL
+    older_first = list(reversed(items))                                          # a ordem de entrada não importa
+    assert G.latest_render(older_first).item_id == UNPUB_FAIL
+
+
+def test_latest_render_ignores_builds_and_references(tmp_path):
+    a = G.GalleryItem(G.ENGINE, PLANT, ROOM, "b", "build", started_at="2026-11-24T00:00:00Z", day="2026-11-24")
+    r = G.GalleryItem(G.REFERENCE, PLANT, ROOM, "r", "reference", started_at="2026-11-25T00:00:00Z", day="2026-11-25")
+    x = G.GalleryItem(G.ENGINE, PLANT, ROOM, "x", "render", started_at="2026-11-20T00:00:00Z", day="2026-11-20")
+    assert G.latest_render([a, r, x]) is x and G.latest_render([a, r]) is None
+
+
+def test_without_evaluation_the_best_card_says_so(tmp_path):
+    cards = G.cards(gallery(tmp_path).of(PLANT, ROOM))
+    assert [c.role for c in cards] == ["referência", "último render", "melhor conhecido"]
+    assert cards[2].item is None and cards[2].text == "sem avaliação"
+
+
+def test_evaluation_only_on_a_fail_render_never_makes_it_best(tmp_path):
+    items = gallery(tmp_path).of(PLANT, ROOM)
+    cards = G.cards(items, lambda i: ["avaliação"] if i.item_id == R4 else [])
+    assert cards[2].item is None and cards[2].text.startswith("nenhum render elegível")
+
+
+def test_best_card_never_names_a_winner_before_the_rule_exists(neg):
+    items = neg.of(PLANT, ROOM)
+    cards = G.cards(items, lambda i: ["avaliação"] if i.item_id == PUB_OK else [])   # um elegível de verdade
+    assert cards[2].item is None and "S01C-F1-07" in cards[2].text
+
+
+def test_an_evaluated_unpublished_render_never_becomes_best(tmp_path):
+    items = gallery(tmp_path).of(PLANT, ROOM)
+    cards = G.cards(items, lambda i: ["avaliação"] if i.item_id == OK_RENDER else [])
+    assert cards[2].item is None and cards[2].text.startswith("nenhum render elegível")
+
+
+def test_visual_and_trend_texts():
+    item = G.GalleryItem(G.ENGINE, PLANT, ROOM, "x", "render")
+    assert G.visual_text([]) == "sem avaliação" and G.trend_text(item, []) == "inconclusivo (sem avaliação)"
+    assert G.visual_text(["a", "b"]) == "2 avaliação(ões)"
+
+
+def test_card_image_prefers_the_render_frame(tmp_path):
+    img = lambda k: G.GalleryImage(k, Path(k), "0" * 64, "r", k)                 # noqa: E731
+    item = G.GalleryItem(G.PUBLISHED, PLANT, ROOM, "x", "render", images=[img("cama_3q"), img("render_dia_cama_3q")])
+    assert G.primary_image(item).key == "render_dia_cama_3q"
+
+
+def test_a_single_rejected_frame_makes_the_run_unverified(tmp_path):
+    it = gallery(tmp_path).get(BAD_SHA)                                           # 1 quadro conferido, 1 divergente
+    assert len(it.images) == 1 and len(it.rejected) == 1
+    assert not it.verified
+    assert any("1 quadro(s) recusado(s)" in g for g in it.verification_gaps())
