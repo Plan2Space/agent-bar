@@ -263,6 +263,8 @@ class AcpAdapter(ProviderAdapter):
         self._need()
         if request.model_id is not None and request.model_id not in self._models:
             raise ModelRejected(request.model_id)
+        if request.context_tokens is not None:                                # o ACP nao tem como fixar a janela
+            raise CapabilityUnsupported("context_tokens", "o agente ACP nao aceita fixar a janela de contexto")
         if request.effort is not None:
             levels = self._models.get(request.model_id or next(iter(self._models), ""), {}).get("effort_levels", [])
             if request.effort not in levels:
