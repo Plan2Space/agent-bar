@@ -491,7 +491,11 @@ def test_usage_line_shows_acp_context_and_cost_as_api_equivalent(app, tmp_path):
     try:
         turn(app, view, "usage")
         assert wait(app, lambda: "sessão" in view.usage_label.text())
-        assert view.usage_label.text() == ("contexto 42k/200k (medido) · sessão 1.2k entrada / 340 saída / 40k cache "
-                                           "(medido) · custo equivalente de API US$ 0.03 (estimado, não é fatura)")
+        line = view.usage_label.text()                                      # horario de renovacao: fuso da maquina
+        for piece in ("modelo claude-opus-5-5 · contexto 42k/200k (medido)",
+                      "sessão, modelo principal: 1.2k entrada / 340 saída / 40k cache (medido)",
+                      "fundo 1.2k (claude-haiku-5-5; medido, fora do total acima)", "conta: 5h 16%, renova ",
+                      "7d 42%, renova ", "custo equivalente de API US$ 0.03 (estimado, não é fatura)"):
+            assert piece in line, (piece, line)
     finally:
         dispose(view)
