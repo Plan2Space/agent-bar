@@ -47,7 +47,12 @@ from agent_bar.cockpit.ui.widgets import (
     ToolCard,
     UserBubble,
 )
-from agent_bar.platform.usage import UsageSnapshot, from_acp_usage_update, usage_line
+from agent_bar.platform.usage import (
+    UsageSnapshot,
+    from_acp_prompt_usage,
+    from_acp_usage_update,
+    usage_line,
+)
 
 log = logging.getLogger("agent_bar.cockpit.chat")
 
@@ -807,6 +812,9 @@ class ChatView(QWidget):
         elif u.kind == "usage_update":                                         # ACP: used/size/cost do agente
             model = str((find_config(self._config, "model") or {}).get("currentValue") or "")
             self._set_usage(from_acp_usage_update(u.data, provider_id=self.profile().key, model_id=model))
+        elif u.kind == "prompt_usage":                                         # ACP: totais da sessao na resposta do prompt
+            model = str((find_config(self._config, "model") or {}).get("currentValue") or "")
+            self._set_usage(from_acp_prompt_usage(u.data, provider_id=self.profile().key, model_id=model))
         elif u.kind == "usage_snapshot":                                       # provedor da plataforma (Ollama)
             try:
                 self._set_usage(UsageSnapshot.from_dict(u.data.get("snapshot") or {}))

@@ -549,6 +549,8 @@ class AcpClient:
         t0 = time.monotonic()
         res = await self._request("session/prompt", {"sessionId": sid, "prompt": blocks}, None)
         reason = str((res or {}).get("stopReason", "")) if isinstance(res, dict) else ""
+        if isinstance(res, dict) and isinstance(res.get("usage"), dict):    # F6: totais da sessao informados pelo agente
+            self._emit(Update("prompt_usage", sid, dict(res["usage"])))
         log.info("prompt terminou stopReason=%s em %.1f s", reason, time.monotonic() - t0)
         return reason
 

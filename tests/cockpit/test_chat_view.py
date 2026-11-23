@@ -490,8 +490,8 @@ def test_usage_line_shows_acp_context_and_cost_as_api_equivalent(app, tmp_path):
     view, _ = make_view(app, tmp_path)
     try:
         turn(app, view, "usage")
-        assert wait(app, lambda: "custo" in view.usage_label.text())
-        assert view.usage_label.text() == ("contexto 42k/200k (medido) · custo equivalente de API US$ 0.03 "
-                                           "(estimado, não é fatura)")
+        assert wait(app, lambda: "sessão" in view.usage_label.text())
+        assert view.usage_label.text() == ("contexto 42k/200k (medido) · sessão 1.2k entrada / 340 saída / 40k cache "
+                                           "(medido) · custo equivalente de API US$ 0.03 (estimado, não é fatura)")
     finally:
         dispose(view)

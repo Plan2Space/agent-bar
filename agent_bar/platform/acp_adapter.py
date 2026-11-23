@@ -50,7 +50,7 @@ from agent_bar.platform.adapter import (
     load_images,
 )
 from agent_bar.platform.contracts import STOP_REASONS, all_capabilities, capability
-from agent_bar.platform.usage import from_acp_usage_update
+from agent_bar.platform.usage import from_acp_prompt_usage, from_acp_usage_update
 
 KIND_MAP = {"agent_message_chunk": "text", "agent_thought_chunk": "thought", "tool_call": "tool_call",
             "tool_call_update": "tool_update", "plan": "plan"}
@@ -354,6 +354,10 @@ class AcpAdapter(ProviderAdapter):
             res = f.result()
             reason = str((res or {}).get("stopReason", "")) if isinstance(res, dict) else ""
             model = find_config(self._config.get(session_id, []), "model")
+            if isinstance(res, dict) and isinstance(res.get("usage"), dict):  # F6: totais da sessao
+                snap = from_acp_prompt_usage(res["usage"], provider_id=self.provider_id,
+                                             model_id=str(rec.get("model_accepted") or ""))
+                on_event(AgentEvent("usage", "", snap.to_dict()))
             eff = find_config(self._config.get(session_id, []), "thought_level")
             out.set_result(PromptResult(reason if reason in STOP_REASONS else "error",
                                         str(model.get("currentValue")) if model else None,
