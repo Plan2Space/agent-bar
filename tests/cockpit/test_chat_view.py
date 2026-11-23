@@ -362,3 +362,33 @@ def test_an_agent_that_answers_before_the_callback_is_attached_still_delivers_th
         assert view.chat.messages[1]["text"] == "p0 p1 p2 p3 p4 "
     finally:
         dispose(view)
+
+
+# ------------------------------------------------------------------------------- F4: Permission Inbox no Chat
+def test_every_permission_request_lands_in_the_inbox_with_the_human_decision(app, tmp_path):
+    from agent_bar.cockpit.permission_inbox import PermissionInbox
+    view, _ = make_view(app, tmp_path, ask=lambda req, parent: "allow")
+    try:
+        turn(app, view, "perm")
+        turn(app, view, "perm")
+        hist = view.inbox.history()
+        assert len(hist) == 2 and all(h.status == "ALLOWED" and h.decision == "allow_once" for h in hist)
+        assert hist[0].repeat_of == hist[1].id and "permitir uma vez" in hist[0].repeat_note
+        assert hist[1].result == "completed" and hist[1].policy == "NORMAL" and hist[1].risk == "HIGH"
+        assert any("pedido repetido" in n.text() for n in view.transcript.findChildren(W.Notice))
+        path = tmp_path / "data" / "permissions.sqlite"
+        again = PermissionInbox(path)
+        assert len(again.history()) == 2                                     # sobrevive a outra instancia
+        again.close()
+    finally:
+        dispose(view)
+
+
+def test_closing_the_dialog_is_recorded_as_denied(app, tmp_path):
+    view, _ = make_view(app, tmp_path, ask=lambda req, parent: None)
+    try:
+        turn(app, view, "perm")
+        (h,) = view.inbox.history()
+        assert (h.status, h.decision, h.decided_by) == ("DENIED", "deny", "human")
+    finally:
+        dispose(view)
