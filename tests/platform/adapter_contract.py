@@ -27,6 +27,7 @@ from agent_bar.platform.adapter import (
     AgentEvent,
     CapabilityUnsupported,
     EffortRejected,
+    ImageRejected,
     ModelRejected,
     NotConnected,
     PromptResult,
@@ -225,6 +226,61 @@ def check_close_session(a: ProviderAdapter, ctx: ContractContext) -> None:
     _fail("fechar de novo uma sessao fechada nao levantou SessionNotFound")
 
 
+_PNG = (b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89"
+        b"\x00\x00\x00\rIDATx\x9cc\xf8\xcf\xc0\xf0\x1f\x00\x05\x00\x01\xff\xa5\x9b\x8c\xd5\x00\x00\x00\x00IEND\xaeB`\x82")
+
+
+def check_images(a: ProviderAdapter, ctx: ContractContext) -> None:
+    """Imagem so com `images` SUPPORTED no modelo da sessao; sem isso, CapabilityUnsupported — nunca descartada em
+    silencio. Com suporte: arquivo invalido -> ImageRejected antes de qualquer envio."""
+    import tempfile
+    from pathlib import Path
+    tmp = Path(tempfile.mkdtemp(prefix="p2s-contract-img-"))
+    png = tmp / "pixel.png"
+    png.write_bytes(_PNG)
+    models = a.list_models()
+    seeing = [m["model_id"] for m in models if m["images"] == "SUPPORTED"]
+    blind = [m["model_id"] for m in models if m["images"] != "SUPPORTED"]
+    if _caps(a)["images"] != "SUPPORTED":
+        if seeing:
+            _fail(f"images UNSUPPORTED no provedor, mas modelos dizem que veem: {seeing}")
+        sid = a.create_session(SessionRequest())["session_id"]
+        try:
+            a.send_prompt(sid, ctx.prompt, lambda e: None, images=[png])
+        except CapabilityUnsupported as exc:
+            if exc.capability != "images":
+                _fail(f"recusa com capacidade {exc.capability!r}")
+            return
+        _fail("imagem aceita sem suporte: seria descartada em silencio")
+    if not seeing:
+        _fail("images SUPPORTED no provedor e nenhum modelo ve imagem")
+    sid = a.create_session(SessionRequest(model_id=seeing[0]))["session_id"]
+    res, events = _collect_with_images(a, sid, ctx, [png])
+    _check_result(res, events)
+    try:
+        a.send_prompt(sid, ctx.prompt, lambda e: None, images=[tmp / "nao-existe.png"])
+    except ImageRejected:
+        pass
+    else:
+        _fail("arquivo de imagem inexistente foi aceito")
+    if blind:
+        other = a.create_session(SessionRequest(model_id=blind[0]))["session_id"]
+        try:
+            a.send_prompt(other, ctx.prompt, lambda e: None, images=[png])
+        except CapabilityUnsupported:
+            return
+        _fail(f"{blind[0]} nao ve imagem e mesmo assim aceitou")
+
+
+def _collect_with_images(a, sid, ctx, images):
+    events: list[AgentEvent] = []
+    fut = a.send_prompt(sid, ctx.prompt, events.append, images=images)
+    try:
+        return fut.result(timeout=ctx.prompt_timeout), events
+    except cf.TimeoutError:
+        _fail("prompt com imagem nao terminou")
+
+
 def check_session_record(a: ProviderAdapter, ctx: ContractContext) -> None:
     req = SessionRequest(workspace="C:\\contract\\ws", links={"issue": "Plan2Space/agent-bar#44"})
     rec = a.create_session(req)
@@ -352,6 +408,7 @@ CHECKS: dict[str, Callable[[ProviderAdapter, ContractContext], None]] = {
     "resume": check_resume,
     "disconnect": check_disconnect,
     "close_session": check_close_session,
+    "images": check_images,
     "no_secret_leak": check_no_secret_leak,
 }
 

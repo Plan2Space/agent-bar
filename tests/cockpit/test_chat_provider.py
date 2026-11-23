@@ -76,7 +76,7 @@ def test_ollama_chats_through_the_same_chat_with_streaming(view):
 
 def test_model_box_lists_only_chat_models_and_effort_appears_only_for_thinking(view):
     turn(view, "diga ok")
-    assert [view.model_box.itemData(i) for i in range(view.model_box.count())] == ["chat-a", "think-b"]
+    assert [view.model_box.itemData(i) for i in range(view.model_box.count())] == ["chat-a", "think-b", "vision-d"]
     assert view.effort_box.isHidden()                                        # chat-a nao tem thinking
     choose(view, view.model_box, "think-b")
     assert [view.effort_box.itemData(i) for i in range(view.effort_box.count())] == ["default", "off", "on"]

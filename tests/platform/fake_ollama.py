@@ -17,6 +17,7 @@ MODELS = {
     "think-b": {"capabilities": ["completion", "thinking"], "thinking": {"values": [False, True], "default": True},
                 "model_info": {"qwen3.context_length": 40960}},
     "embed-c": {"capabilities": ["embedding"], "model_info": {"bert.context_length": 2048}},
+    "vision-d": {"capabilities": ["completion", "vision"], "model_info": {"qwen25vl.context_length": 32768}},
 }
 
 
@@ -77,6 +78,13 @@ class FakeOllama:
                         for i in range(2000):
                             line({"model": model, "message": {"role": "assistant", "content": f"{i} "}, "done": False})
                             time.sleep(0.02)
+                    elif body["messages"][-1].get("images"):            # modelo com vision recebeu imagem
+                        if "vision" not in outer.models[model]["capabilities"]:
+                            line({"error": "model does not support images"})
+                            return
+                        imgs = body["messages"][-1]["images"]
+                        line({"model": model, "message": {"role": "assistant",
+                              "content": f"imagens={len(imgs)} bytes={sum(len(i) for i in imgs)}"}, "done": False})
                     elif "historico" in last:
                         n = sum(1 for m in body["messages"] if m["role"] == "user")
                         line({"model": model, "message": {"role": "assistant", "content": f"users={n}"}, "done": False})

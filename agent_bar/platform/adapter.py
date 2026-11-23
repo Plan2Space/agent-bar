@@ -74,6 +74,44 @@ class PromptFailed(AdapterError):
     code = "PROMPT_FAILED"
 
 
+class ImageRejected(AdapterError):
+    """Imagem que nao pode ir ao agente: arquivo ausente, tipo nao suportado ou grande demais."""
+
+    code = "IMAGE_REJECTED"
+
+
+IMAGE_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp", ".gif": "image/gif"}
+IMAGE_LIMIT = 20 * 1024 * 1024
+
+
+@dataclass(frozen=True)
+class ImagePayload:
+    path: str
+    mime: str
+    data: bytes
+    sha256: str
+
+
+def load_images(paths) -> list[ImagePayload]:
+    """Le e valida as imagens antes de qualquer envio (tudo ou nada): ausente, tipo ou tamanho errado -> ImageRejected."""
+    import hashlib
+    from pathlib import Path
+    out = []
+    for raw in paths or ():
+        p = Path(raw)
+        mime = IMAGE_TYPES.get(p.suffix.lower())
+        if mime is None:
+            raise ImageRejected(f"{p.name}: tipo nao suportado (aceita {sorted(IMAGE_TYPES)})")
+        try:
+            data = p.read_bytes()
+        except OSError as exc:
+            raise ImageRejected(f"{p.name}: nao foi possivel ler ({type(exc).__name__})") from None
+        if not data or len(data) > IMAGE_LIMIT:
+            raise ImageRejected(f"{p.name}: {len(data)} bytes (limite {IMAGE_LIMIT})")
+        out.append(ImagePayload(str(p.resolve()), mime, data, hashlib.sha256(data).hexdigest()))
+    return out
+
+
 # ---------------------------------------------------------------------------------------------------------- dados
 @dataclass(frozen=True)
 class AgentEvent:
@@ -149,8 +187,10 @@ class ProviderAdapter(ABC):
         raise CapabilityUnsupported("resume")
 
     @abstractmethod
-    def send_prompt(self, session_id: str, text: str, on_event: EventSink) -> cf.Future:
-        """Future[PromptResult]. Eventos chegam em `on_event` na thread do adaptador (a UI reencaminha)."""
+    def send_prompt(self, session_id: str, text: str, on_event: EventSink, images=()) -> cf.Future:
+        """Future[PromptResult]. Eventos chegam em `on_event` na thread do adaptador (a UI reencaminha).
+        `images` (caminhos): so com a capacidade `images` SUPPORTED para o modelo da sessao; senao
+        CapabilityUnsupported("images") — nunca descartar a imagem em silencio."""
 
     def cancel(self, session_id: str) -> None:
         raise CapabilityUnsupported("cancel")

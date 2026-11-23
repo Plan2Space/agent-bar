@@ -19,6 +19,7 @@ from agent_bar.cockpit.acp import creation_flags, isolated_env
 from agent_bar.platform.adapter import (
     AdapterStatus,
     AgentEvent,
+    CapabilityUnsupported,
     EffortRejected,
     ModelRejected,
     NotConnected,
@@ -26,6 +27,7 @@ from agent_bar.platform.adapter import (
     ProviderAdapter,
     SessionNotFound,
     SessionRequest,
+    load_images,
 )
 from agent_bar.platform.contracts import all_capabilities, capability
 
@@ -55,7 +57,7 @@ class FakeAdapter(ProviderAdapter):
         ev = f"fake {VERSION}"
         return all_capabilities(
             "SUPPORTED", ev, VERSION,
-            images=capability("UNSUPPORTED", ev, VERSION),
+            images=capability("SUPPORTED", f"{ev}: so o fake-think ve imagem", VERSION),
         )
 
     def describe(self) -> dict:
@@ -112,7 +114,8 @@ class FakeAdapter(ProviderAdapter):
     def list_models(self) -> list[dict]:
         return [{
             "schema": "p2s.model.v1", "model_id": mid, "display_name": mid.replace("-", " ").title(), "provider_id": "fake",
-            "transport": "CLI", "availability": "AVAILABLE", "tools": "SUPPORTED", "images": "UNSUPPORTED",
+            "transport": "CLI", "availability": "AVAILABLE", "tools": "SUPPORTED",
+            "images": "SUPPORTED" if mid == "fake-think" else "UNSUPPORTED",
             "effort_levels": list(levels), "limits": {"context_tokens": 8192}, "source": "lista fixa do simulador",
         } for mid, levels in MODELS.items()]
 
@@ -151,10 +154,11 @@ class FakeAdapter(ProviderAdapter):
             raise SessionNotFound(session_id)
         return dict(self._sessions[session_id])
 
-    def send_prompt(self, session_id: str, text: str, on_event) -> cf.Future:
+    def send_prompt(self, session_id: str, text: str, on_event, images=()) -> cf.Future:
         self._need()
         if session_id not in self._sessions:
             raise SessionNotFound(session_id)
+        payloads = self._check_images(session_id, images)
         stop = self._cancel[session_id]
         stop.clear()
         rec = self._sessions[session_id]
@@ -165,11 +169,19 @@ class FakeAdapter(ProviderAdapter):
             for i in range(200 if slow else 2):
                 if stop.is_set():
                     return PromptResult("cancelled")
-                on_event(AgentEvent("text", "ok" if not slow else f"{i + 1}\n"))
+                on_event(AgentEvent("text", ("ok" if not payloads else f"imagens={len(payloads)}") if not slow else f"{i + 1}\n"))
                 if slow:
                     time.sleep(0.05)
             return PromptResult("end_turn", rec["model_accepted"], rec["effort_accepted"])
         return self._pool.submit(work)
+
+    def _check_images(self, session_id: str, images):
+        if not images:
+            return []
+        model = self._sessions[session_id]["model_accepted"]
+        if model != "fake-think":
+            raise CapabilityUnsupported("images", f"{model} nao ve imagem")
+        return load_images(images)
 
     def cancel(self, session_id: str) -> None:
         self._need()
@@ -259,6 +271,28 @@ class CloseLeavesSessionOpen(FakeAdapter):
         self._need()
 
 
+class DropsImagesSilently(FakeAdapter):
+    """Diz que nao ve imagem, mas aceita a imagem e a ignora (o agente nunca a recebe)."""
+
+    def capabilities(self) -> dict:
+        caps = super().capabilities()
+        caps["images"] = capability("UNSUPPORTED", "fake", VERSION)
+        return caps
+
+    def list_models(self) -> list[dict]:
+        return [{**m, "images": "UNSUPPORTED"} for m in super().list_models()]
+
+    def _check_images(self, session_id: str, images):
+        return []
+
+
+class AcceptsAnyImageFile(FakeAdapter):
+    """Diz que ve imagem, mas nao confere o arquivo (manda lixo/nada ao agente)."""
+
+    def _check_images(self, session_id: str, images):
+        return list(images or ())
+
+
 class InvalidProvider(FakeAdapter):
     """Registro de provedor sem `cost_class`."""
 
@@ -296,4 +330,6 @@ DEFECTIVE = {
     WorksAfterDisconnect: "disconnect",
     ClaimsCapabilityItLacks: "unsupported_raise_typed",
     CloseLeavesSessionOpen: "close_session",
+    DropsImagesSilently: "images",
+    AcceptsAnyImageFile: "images",
 }

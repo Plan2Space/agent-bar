@@ -143,3 +143,23 @@ def test_session_manager_recovers_a_claude_like_session_with_context(tmp_path):
         assert m.send(s["id"], "echo 1").result(20).stop_reason == "end_turn"
     finally:
         m.close_all()
+
+
+def test_image_blocks_reach_an_agent_that_announces_prompt_image(tmp_path):
+    png = tmp_path / "a.png"
+    png.write_bytes(bytes.fromhex("89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489"
+                                  "0000000d49444154789c63f8cfc0f01f00050001ffa59b8cd50000000049454e44ae426082"))
+    a = make(tmp_path, {"AGENT_BAR_FAKE_IMAGES": "1"})
+    a.connect()
+    try:
+        assert a.describe()["capabilities"]["images"]["state"] == "SUPPORTED"
+        sid = a.create_session(SessionRequest())["session_id"]
+        ev: list[AgentEvent] = []
+        a.send_prompt(sid, "echo 1", ev.append, images=[png]).result(20)
+        assert any(e.text.startswith("imagens=image/png:") for e in ev)
+    finally:
+        a.disconnect()
+
+
+def test_contract_passes_with_an_agent_that_takes_images(tmp_path):
+    assert run_contract(lambda env: make(tmp_path, {**env, "AGENT_BAR_FAKE_IMAGES": "1"}), CTX, only=("images",)) == {}

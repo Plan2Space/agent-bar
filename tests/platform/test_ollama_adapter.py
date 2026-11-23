@@ -42,7 +42,7 @@ def test_passes_the_common_contract_suite(server):
 
 def test_models_come_from_the_server_and_embedding_models_are_left_out(adapter):
     models = {m["model_id"]: m for m in adapter.list_models()}
-    assert set(models) == {"chat-a", "think-b"}
+    assert set(models) == {"chat-a", "think-b", "vision-d"}
     assert models["chat-a"]["tools"] == "SUPPORTED" and models["think-b"]["tools"] == "UNSUPPORTED"
     assert models["chat-a"]["limits"]["context_tokens"] == 8192
     assert models["chat-a"]["effort_levels"] == [] and models["think-b"]["effort_levels"] == ["off", "on"]
@@ -153,6 +153,44 @@ def test_real_local_ollama_passes_the_contract_and_streams():
 
 
 
+def _solid_png(path, rgb, size=64):
+    import struct
+    import zlib
+    row = b"\x00" + bytes(rgb) * size
+    def chunk(kind, data):
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
+    path.write_bytes(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", size, size, 8, 2, 0, 0, 0))
+                     + chunk(b"IDAT", zlib.compress(row * size)) + chunk(b"IEND", b""))
+
+
+@pytest.mark.real_agent
+def test_real_local_vision_model_sees_the_image(tmp_path):
+    """Opt-in (`-m real_agent`): um modelo local com `vision` no /api/show descreve a imagem; modelo sem vision recusa."""
+    png = tmp_path / "vermelho.png"
+    _solid_png(png, (220, 20, 20))
+    a = OllamaAdapter(timeout=30)
+    a.connect()
+    try:
+        models = {m["model_id"]: m["images"] for m in a.list_models()}
+        seeing = [m for m, s in models.items() if s == "SUPPORTED"]
+        if not seeing:
+            pytest.skip("nenhum modelo local anuncia vision no /api/show")
+        sid = a.create_session(SessionRequest(model_id=seeing[0]))["session_id"]
+        ev: list[AgentEvent] = []
+        res = a.send_prompt(sid, "Qual e a cor desta imagem? Responda com uma palavra em portugues.", ev.append,
+                            images=[png]).result(300)
+        text = "".join(e.text for e in ev if e.kind == "text").lower()
+        print(seeing[0], res, repr(text[:80]))
+        assert res.stop_reason == "end_turn" and ("vermelh" in text or "red" in text)
+        blind = [m for m, s in models.items() if s != "SUPPORTED"]
+        if blind:
+            other = a.create_session(SessionRequest(model_id=blind[0]))["session_id"]
+            with pytest.raises(CapabilityUnsupported):
+                a.send_prompt(other, "x", lambda e: None, images=[png])
+    finally:
+        a.disconnect()
+
+
 def test_close_session_stops_a_running_turn_and_forgets_the_session(adapter, server):
     import threading as _t
 
@@ -165,3 +203,37 @@ def test_close_session_stops_a_running_turn_and_forgets_the_session(adapter, ser
     assert fut.result(5).stop_reason == "cancelled" and sid not in adapter.get_status().sessions
     with pytest.raises(SessionNotFound):
         adapter.send_prompt(sid, "diga ok", lambda e: None)
+
+
+# ------------------------------------------------------------------------------------------------ imagens
+PNG = bytes.fromhex("89504e470d0a1a0a0000000d4948445200000001000000010806000000"
+                    "1f15c4890000000d49444154789c63f8cfc0f01f000500" "01ffa59b8cd50000000049454e44ae426082")
+
+
+def test_images_go_only_to_models_that_announce_vision(adapter, server, tmp_path):
+    from agent_bar.platform.adapter import ImageRejected
+    png = tmp_path / "a.png"
+    png.write_bytes(PNG)
+    assert adapter.describe()["capabilities"]["images"]["state"] == "SUPPORTED"
+    assert {m["model_id"]: m["images"] for m in adapter.list_models()}["vision-d"] == "SUPPORTED"
+    sid = adapter.create_session(SessionRequest(model_id="vision-d"))["session_id"]
+    out: list[AgentEvent] = []
+    assert adapter.send_prompt(sid, "o que ha aqui?", out.append, images=[png]).result(10).stop_reason == "end_turn"
+    import base64
+    sent = [b for p, b in server.requests if p == "/api/chat"][-1]["messages"][-1]
+    assert sent["images"] == [base64.b64encode(PNG).decode()] and "imagens=1" in "".join(e.text for e in out)
+    blind = adapter.create_session(SessionRequest(model_id="chat-a"))["session_id"]
+    with pytest.raises(CapabilityUnsupported):
+        adapter.send_prompt(blind, "x", lambda e: None, images=[png])
+    with pytest.raises(ImageRejected):
+        adapter.send_prompt(sid, "x", lambda e: None, images=[tmp_path / "a.bmp"])
+
+
+def test_images_are_not_resent_in_the_history(adapter, server, tmp_path):
+    png = tmp_path / "a.png"
+    png.write_bytes(PNG)
+    sid = adapter.create_session(SessionRequest(model_id="vision-d"))["session_id"]
+    adapter.send_prompt(sid, "veja", lambda e: None, images=[png]).result(10)
+    adapter.send_prompt(sid, "historico", lambda e: None).result(10)
+    msgs = [b for p, b in server.requests if p == "/api/chat"][-1]["messages"]
+    assert not any(m.get("images") for m in msgs)                          # a imagem foi so naquele turno

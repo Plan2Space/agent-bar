@@ -15,6 +15,7 @@ Permissao de ferramenta vai ao `on_permission` recebido (a UI); sem ele, o pedid
 """
 from __future__ import annotations
 
+import base64
 import concurrent.futures as cf
 import shutil
 import threading
@@ -36,6 +37,7 @@ from agent_bar.cockpit.acp import (
 from agent_bar.platform.adapter import (
     AdapterStatus,
     AgentEvent,
+    CapabilityUnsupported,
     EffortRejected,
     ModelRejected,
     NotConnected,
@@ -45,6 +47,7 @@ from agent_bar.platform.adapter import (
     ProviderUnavailable,
     SessionNotFound,
     SessionRequest,
+    load_images,
 )
 from agent_bar.platform.contracts import STOP_REASONS, all_capabilities, capability
 
@@ -119,7 +122,8 @@ class AcpAdapter(ProviderAdapter):
                 effort_select=capability("SUPPORTED" if any_effort else "UNSUPPORTED",
                                          f"{ev}: configOption thought_level por modelo" if any_effort
                                          else f"{ev}: sem configOption thought_level", v),
-                images=capability("UNSUPPORTED", "o adaptador ainda nao envia imagens", v),
+                images=capability("SUPPORTED" if self._images_supported() else "UNSUPPORTED",
+                                  f"{ev}: agentCapabilities.promptCapabilities.image={self._images_supported()}", v),
             )
         return {
             "schema": "p2s.provider.v1", "provider_id": self.provider_id, "display_name": self.display_name,
@@ -184,7 +188,7 @@ class AcpAdapter(ProviderAdapter):
             out[value] = {
                 "schema": "p2s.model.v1", "model_id": value, "display_name": names.get(value, value),
                 "provider_id": self.provider_id, "transport": "ACP", "availability": "AVAILABLE",
-                "tools": "SUPPORTED", "images": "UNSUPPORTED",
+                "tools": "SUPPORTED", "images": "SUPPORTED" if self._images_supported() else "UNSUPPORTED",
                 "effort_levels": config_values(eff) if eff else [], "limits": {"context_tokens": None},
                 "source": "configOptions (session/new + session/set_config_option)",
             }
@@ -319,11 +323,20 @@ class AcpAdapter(ProviderAdapter):
             self._sessions[session_id] = rec
         return dict(rec)
 
-    def send_prompt(self, session_id: str, text: str, on_event) -> cf.Future:
+    def _images_supported(self) -> bool:
+        return bool(((self._agent.get("agentCapabilities") or {}).get("promptCapabilities") or {}).get("image"))
+
+    def send_prompt(self, session_id: str, text: str, on_event, images=()) -> cf.Future:
         self._need()
         if session_id not in self._sessions:
             raise SessionNotFound(session_id)
         assert self.client is not None
+        blocks: list[dict] = [{"type": "text", "text": text}]
+        if images:                                                           # bloco de imagem ACP, se o agente anuncia
+            if not self._images_supported():
+                raise CapabilityUnsupported("images", "o agente nao anuncia promptCapabilities.image")
+            blocks += [{"type": "image", "mimeType": p.mime, "data": base64.b64encode(p.data).decode("ascii")}
+                       for p in load_images(images)]
         self._sinks[session_id] = on_event
         rec = self._sessions[session_id]
         out: cf.Future = cf.Future()
@@ -340,8 +353,7 @@ class AcpAdapter(ProviderAdapter):
             out.set_result(PromptResult(reason if reason in STOP_REASONS else "error",
                                         str(model.get("currentValue")) if model else None,
                                         (str(eff.get("currentValue")) if eff else None) if rec["effort_accepted"] else None))
-        self.client.call("session/prompt", {"sessionId": session_id, "prompt": [{"type": "text", "text": text}]},
-                         None).add_done_callback(done)
+        self.client.call("session/prompt", {"sessionId": session_id, "prompt": blocks}, None).add_done_callback(done)
         return out
 
     def cancel(self, session_id: str) -> None:
