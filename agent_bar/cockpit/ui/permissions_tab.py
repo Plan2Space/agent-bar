@@ -7,6 +7,7 @@ botao para desativar. So le o banco a cada 2 s (barato); a decisao de um pedido 
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QBrush, QColor
@@ -35,9 +36,13 @@ POLICY_TEXT = {"NORMAL": "pergunta", "PREVIOUSLY_GRANTED": "regra sua", "AUTO_MO
 
 
 class PermissionsTab(QWidget):
-    def __init__(self, inbox: PermissionInbox, refresh_ms: int = 2000) -> None:
+    def __init__(self, inbox: PermissionInbox, refresh_ms: int = 2000,
+                 answer_fn: Callable[[str, str], bool] | None = None,
+                 is_open_fn: Callable[[str], bool] = lambda _id: False) -> None:
         super().__init__()
         self.inbox = inbox
+        self.answer_fn = answer_fn                                           # F4b: responder daqui (via Chat/broker)
+        self.is_open_fn = is_open_fn
         lay = QVBoxLayout(self)
         bar = QHBoxLayout()
         self.summary = QLabel("")
@@ -63,6 +68,18 @@ class PermissionsTab(QWidget):
         split.addWidget(self.details)
         split.setSizes([500, 220])
         lay.addWidget(split, 1)
+        answer = QHBoxLayout()
+        self.allow_btn = QPushButton("Permitir uma vez")
+        self.deny_btn = QPushButton("Negar")
+        self.deny_btn.setStyleSheet("color:#ff9a9b")
+        self.answer_hint = QLabel("")
+        self.answer_hint.setStyleSheet("color:#8f8f98;font-size:11px")
+        answer.addWidget(self.answer_hint, 2)
+        answer.addWidget(self.allow_btn)
+        answer.addWidget(self.deny_btn)
+        lay.addLayout(answer)
+        self.allow_btn.clicked.connect(lambda: self._answer("allow_once"))
+        self.deny_btn.clicked.connect(lambda: self._answer("deny"))
         rules_bar = QHBoxLayout()
         self.rules_label = QLabel("")
         self.rules_box = QComboBox()
@@ -109,8 +126,28 @@ class PermissionsTab(QWidget):
             self.rules_box.addItem(f"{r['kind']} · “{r['title_prefix']}…” · {r['workspace'] or 'qualquer workspace'}", r["id"])
         self.rules_label.setText(f"Regras persistentes: {len(rules)}")
         self.disable_btn.setEnabled(bool(rules))
+        self._update_answer()
+
+    def _selected_id(self) -> str | None:
+        it = self.tree.currentItem()
+        return it.data(0, Qt.ItemDataRole.UserRole) if it is not None else None
+
+    def _update_answer(self) -> None:
+        rid = self._selected_id()
+        can = bool(rid and self.answer_fn is not None and self.is_open_fn(rid))
+        self.allow_btn.setEnabled(can)
+        self.deny_btn.setEnabled(can)
+        self.answer_hint.setText("responda aqui: o agente está esperando" if can else
+                                 ("pedido já respondido ou o agente não espera mais" if rid else ""))
+
+    def _answer(self, choice: str) -> None:
+        rid = self._selected_id()
+        if rid and self.answer_fn is not None:
+            self.answer_fn(rid, choice)
+            self.refresh()
 
     def _show(self, item: QTreeWidgetItem | None) -> None:
+        self._update_answer()
         if item is None:
             self.details.clear()
             return

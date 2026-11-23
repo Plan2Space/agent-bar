@@ -1,6 +1,8 @@
 """widgets.py — pecas visuais do chat: bloco de texto, ToolCard, PlanCard e dialogo de permissao (D9)."""
 from __future__ import annotations
 
+from html import escape
+
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QDialog,
@@ -250,3 +252,57 @@ def ask_permission_dialog(req: PermissionRequest, parent: QWidget | None = None)
     dlg = PermissionDialog(req, parent)
     dlg.exec()
     return dlg.choice
+
+
+class PermissionCard(QFrame):
+    """Pedido de permissao dentro do Chat, sem bloquear a janela (UX F4b). Os botoes sao as opcoes do agente; a
+    decisao pode vir daqui, da aba Permissoes ou das Notificacoes, e o cartao mostra o resultado de onde vier."""
+
+    def __init__(self, req: PermissionRequest, entry, on_choice) -> None:
+        super().__init__()
+        self.entry_id = entry.id
+        self.setStyleSheet("QFrame{background:#2a2414;border:1px solid #6b5520;border-radius:8px}"
+                           "QLabel{border:0;background:transparent}")
+        lay = QVBoxLayout(self)
+        tc = req.tool_call or {}
+        risk_color = {"IRREVERSIBLE": "#ff6b6d", "HIGH": "#ff9a9b", "MEDIUM": "#ffc233", "LOW": "#8f8f98"}.get(entry.risk, "#ccc")
+        head = QLabel(f"<b style='color:#ffc233'>Permissão pedida</b> · <b>{escape(str(tc.get('title', 'ferramenta')))}</b> "
+                      f"<span style='color:#888'>({escape(str(tc.get('kind', 'other')))})</span> · "
+                      f"<span style='color:{risk_color}'>risco {entry.risk}</span>")
+        head.setTextFormat(Qt.TextFormat.RichText)
+        head.setWordWrap(True)
+        lay.addWidget(head)
+        detail = entry.resource if entry.kind in ("edit", "read", "delete", "move") and entry.resource else entry.operation
+        for text, css in ((detail[:300] if detail else "", "color:#cfcfd4;font-family:Consolas,monospace;font-size:11px"),
+                          (f"motivo do agente: {entry.reason[:200]}" if entry.reason else "", "color:#cfcfd4;font-size:11px"),
+                          (f"pedido repetido: {entry.repeat_note}" if entry.repeat_note else "", "color:#ffc233;font-size:11px")):
+            if text:
+                lbl = QLabel(text)
+                lbl.setTextFormat(Qt.TextFormat.PlainText)                   # texto do agente: nunca interpretado
+                lbl.setWordWrap(True)
+                lbl.setStyleSheet(css)
+                lay.addWidget(lbl)
+        row = QHBoxLayout()
+        self.buttons: dict[str, QPushButton] = {}
+        for opt in req.options:
+            oid = str(opt.get("optionId"))
+            b = QPushButton(str(opt.get("name", oid)))
+            kind = str(opt.get("kind", ""))
+            if kind.startswith("reject"):
+                b.setStyleSheet("color:#ff9a9b")
+            elif kind == "allow_always":
+                b.setStyleSheet("color:#ffc233")
+            b.clicked.connect(lambda _=False, o=oid: on_choice(o))
+            self.buttons[oid] = b
+            row.addWidget(b)
+        row.addStretch(1)
+        lay.addLayout(row)
+        self.result = QLabel("aguardando sua resposta — também dá para responder na aba Permissões ou nas Notificações")
+        self.result.setStyleSheet("color:#8f8f98;font-size:11px")
+        lay.addWidget(self.result)
+
+    def set_resolved(self, text: str, ok: bool) -> None:
+        for b in self.buttons.values():
+            b.setEnabled(False)
+        self.result.setText(text)
+        self.result.setStyleSheet(f"color:{'#3ddc84' if ok else '#ff9a9b'};font-size:11px")

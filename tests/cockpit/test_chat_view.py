@@ -392,3 +392,95 @@ def test_closing_the_dialog_is_recorded_as_denied(app, tmp_path):
         assert (h.status, h.decision, h.decided_by) == ("DENIED", "deny", "human")
     finally:
         dispose(view)
+
+
+# ------------------------------------------------------------------- F4b: permissao sem dialogo modal (broker)
+def last_agent(view):
+    return next(m["text"] for m in reversed(view.chat.messages) if m["role"] == "agent")
+
+
+def _non_modal(app, tmp_path, confirm=lambda req, parent: True):
+    view, factory = make_view(app, tmp_path, ask=None)
+    view.confirm_irreversible = confirm
+    return view, factory
+
+
+def _wait_card(app, view):
+    assert wait(app, lambda: bool(view._perm_cards))
+    return next(iter(view._perm_cards.values()))
+
+
+def test_a_permission_shows_as_a_card_and_the_window_keeps_working(app, tmp_path):
+    view, _ = _non_modal(app, tmp_path)
+    try:
+        view.send("perm")
+        card = _wait_card(app, view)
+        assert view.busy and view.broker.is_open(card.entry_id)
+        view.input.setPlainText("rascunho enquanto espera")                  # a janela nao esta bloqueada
+        card.buttons["allow"].click()
+        assert wait(app, lambda: not view.busy)
+        assert last_agent(view) == "outcome=selected:allow"
+        assert not card.buttons["allow"].isEnabled() and "permitido" in card.result.text()
+        assert view.inbox.get(card.entry_id).decided_by == "human"
+    finally:
+        dispose(view)
+
+
+def test_answering_from_another_surface_updates_the_card_and_the_agent_once(app, tmp_path):
+    view, _ = _non_modal(app, tmp_path)
+    try:
+        view.send("perm")
+        card = _wait_card(app, view)
+        assert view.answer_permission(card.entry_id, "deny") is True         # ex.: aba Permissoes
+        assert wait(app, lambda: not view.busy)
+        assert last_agent(view) == "outcome=selected:reject"
+        assert "negado" in card.result.text()
+        assert view.answer_permission(card.entry_id, "allow_once") is False  # ja respondido: nada vai ao agente
+    finally:
+        dispose(view)
+
+
+def test_irreversible_from_the_card_still_needs_the_code(app, tmp_path):
+    asked = []
+    view, _ = _non_modal(app, tmp_path, confirm=lambda req, parent: asked.append(req) or False)
+    try:
+        view.send("permrm")
+        card = _wait_card(app, view)
+        assert view.inbox.get(card.entry_id).policy == "IRREVERSIBLE"
+        card.buttons["allow"].click()
+        assert len(asked) == 1 and view.broker.is_open(card.entry_id)        # sem o codigo: continua aberto
+        view.confirm_irreversible = lambda req, parent: True
+        card.buttons["allow"].click()
+        assert wait(app, lambda: not view.busy) and last_agent(view) == "outcome=selected:allow"
+    finally:
+        dispose(view)
+
+
+def test_an_unanswered_card_expires_and_the_agent_is_told_no(app, tmp_path):
+    view, _ = _non_modal(app, tmp_path)
+    try:
+        view.inbox.ttl_s = 0.0
+        view.send("perm")
+        card = _wait_card(app, view)
+        view.broker.expire()
+        assert wait(app, lambda: not view.busy)
+        assert last_agent(view) == "outcome=cancelled"
+        assert view.inbox.get(card.entry_id).status == "EXPIRED" and "sem resposta" in card.result.text()
+    finally:
+        dispose(view)
+
+
+def test_the_card_shows_agent_text_literally_and_never_as_html(app, tmp_path):
+    from agent_bar.cockpit.acp import PermissionRequest
+    view, _ = _non_modal(app, tmp_path)
+    try:
+        tc = {"toolCallId": "x", "title": "Run <b>x</b>", "kind": "execute",
+              "rawInput": {"command": 'echo "<img src=x>"', "description": "a & b"}}
+        entry = view.inbox.record(tc, provider="p", session_id="s")
+        card = W.PermissionCard(PermissionRequest("s", tc, ()), entry, lambda o: None)
+        texts = [lbl.text() for lbl in card.findChildren(W.QLabel)]
+        assert 'echo "<img src=x>"' in texts and "motivo do agente: a & b" in texts
+        assert not any("&quot;" in t or "&amp;" in t for t in texts)
+        card.deleteLater()
+    finally:
+        dispose(view)
