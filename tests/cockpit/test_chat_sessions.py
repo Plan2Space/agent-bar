@@ -146,3 +146,72 @@ def test_closing_the_studio_with_turns_in_flight_leaves_no_exception(tmp_path, n
         wait(lambda: False, timeout=0.3)
         s.deleteLater()
     assert no_exception_in_qt_slots == []
+
+
+# ------------------------------------------------------------- orfaos no app (F5): so os do proprio Studio
+def _registry_with(tmp_path, pid, created, studio_pid=999999, studio_created=1.0):
+    import json
+    p = tmp_path / "agent-processes.json"
+    p.write_text(json.dumps({"schema": "p2s.agent-registry.v1", "studio": {"pid": studio_pid, "created": studio_created},
+                             "agents": [{"pid": pid, "created": created, "profile": "claude"}]}), encoding="utf-8")
+    return p
+
+
+def test_agents_left_by_a_crashed_studio_show_a_banner_and_only_those_are_ended(tmp_path):
+    import subprocess
+
+    from agent_bar.cockpit.agent_registry import AgentRegistry
+    from agent_bar.platform.proc import creation_time
+    leftover = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    try:
+        reg = AgentRegistry(_registry_with(tmp_path, leftover.pid, creation_time(leftover.pid)))
+        s = ChatSessions(store=ChatStore(tmp_path / "data"), registry=reg, limits={"stub": 2},
+                         profiles_fn=lambda: [AgentProfile("stub", "Stub", (sys.executable, STUB))],
+                         workspaces_fn=lambda: [tmp_path / "ws"])
+        assert s.orphan_bar.isVisibleTo(s) and str(leftover.pid) in s.orphan_label.text()
+        assert s.end_orphans() == [leftover.pid]
+        assert wait(lambda: leftover.poll() is not None, 10) and not s.orphan_bar.isVisibleTo(s)
+        s.shutdown()
+        s.deleteLater()
+    finally:
+        if leftover.poll() is None:
+            leftover.kill()
+
+
+def test_a_reused_pid_or_a_live_studio_never_shows_as_an_orphan(tmp_path):
+    import subprocess
+
+    from agent_bar.cockpit.agent_registry import AgentRegistry
+    from agent_bar.platform.proc import creation_time
+    other = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    try:
+        stale = AgentRegistry(_registry_with(tmp_path, other.pid, creation_time(other.pid) - 5))   # outro processo no PID
+        assert stale.previous_orphans() == []
+        alive_studio = AgentRegistry(_registry_with(tmp_path, other.pid, creation_time(other.pid),
+                                                    studio_pid=other.pid, studio_created=creation_time(other.pid)))
+        assert alive_studio.previous_orphans() == []                         # quem gravou ainda roda
+        assert other.poll() is None
+    finally:
+        other.kill()
+        other.wait(10)
+
+
+def test_the_registry_follows_live_agents_and_is_cleared_on_a_clean_exit(tmp_path):
+    import json
+
+    from agent_bar.cockpit.agent_registry import AgentRegistry
+    path = tmp_path / "agent-processes.json"
+    (tmp_path / "ws").mkdir(exist_ok=True)
+    s = ChatSessions(store=ChatStore(tmp_path / "data"), registry=AgentRegistry(path), limits={"stub": 2},
+                     profiles_fn=lambda: [AgentProfile("stub", "Stub", (sys.executable, STUB))],
+                     workspaces_fn=lambda: [tmp_path / "ws"])
+    v = s.current()
+    v.send("echo 1")
+    assert wait(lambda: not v.busy)
+    s._tick()
+    data = json.loads(path.read_text(encoding="utf-8"))
+    assert [a["pid"] for a in data["agents"]] == [v.client.pid] and data["agents"][0]["created"]
+    assert v.client.contained                                                # no Windows: dentro do Job Object
+    s.shutdown()
+    assert json.loads(path.read_text(encoding="utf-8"))["agents"] == []
+    s.deleteLater()
