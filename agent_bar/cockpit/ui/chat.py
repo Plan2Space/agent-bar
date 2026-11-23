@@ -10,15 +10,14 @@ from collections.abc import Callable
 from pathlib import Path
 
 from PySide6.QtCore import QObject, Qt, QTimer, Signal
-from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QFileDialog,
     QFrame,
     QHBoxLayout,
     QLabel,
     QMessageBox,
-    QPlainTextEdit,
     QPushButton,
     QScrollArea,
     QVBoxLayout,
@@ -37,6 +36,7 @@ from agent_bar.cockpit.acp import (
 )
 from agent_bar.cockpit.library import compose_prompt
 from agent_bar.cockpit.store import Chat, ChatStore, data_dir
+from agent_bar.cockpit.ui.composer import Composer, load_enter_sends, save_enter_sends
 from agent_bar.cockpit.ui.widgets import (
     Notice,
     PlanCard,
@@ -125,6 +125,7 @@ class ChatView(QWidget):
         self.confirm_mode = confirm_mode
         self.no_safe_mode = False                                            # agente sem modo que pede permissao: envio bloqueado
         self._modes: dict = {}
+        self._draft = ""
         self._config: list[dict] = []
         self._config_pending = False
         self.client: AcpClient | None = None
@@ -233,26 +234,33 @@ class ChatView(QWidget):
         self.tlay.addStretch(1)
         self.scroll.setWidget(self.transcript)
         lay.addWidget(self.scroll, 1)
-        self.empty = Notice("Converse com um agente de código no workspace escolhido. Ctrl+Enter envia. "
+        self.empty = Notice("Converse com um agente de código no workspace escolhido. Enter envia, Shift+Enter quebra linha. "
                             "Toda ferramenta que pedir permissão abre um diálogo; fechar o diálogo recusa.")
         self._add(self.empty)
         bottom = QHBoxLayout()
-        self.input = QPlainTextEdit()
-        self.input.setPlaceholderText("Escreva para o agente… (Ctrl+Enter envia)")
+        self.prefs_path = data_dir() / "preferences.json"
+        self.input = Composer(enter_sends=load_enter_sends(self.prefs_path))
         self.input.setFixedHeight(84)
         self.input.setStyleSheet("QPlainTextEdit{background:#1e1e23;color:#e6e6e6;border:1px solid #3a3a44;"
                                  "border-radius:6px;font-size:13px}")
         self.send_btn = QPushButton("Enviar")
         self.send_btn.setStyleSheet(BTN_CSS)
+        self.enter_box = QCheckBox("Enter envia")
+        self.enter_box.setToolTip("Desligado: Enter quebra linha e Ctrl+Enter envia")
+        self.enter_box.setChecked(self.input.enter_sends)
+        self.enter_box.setStyleSheet("color:#8f8f98;font-size:11px")
+        side = QVBoxLayout()
+        side.addWidget(self.send_btn)
+        side.addWidget(self.enter_box)
         bottom.addWidget(self.input, 1)
-        bottom.addWidget(self.send_btn)
+        bottom.addLayout(side)
         lay.addLayout(bottom)
         self.status = QLabel("desconectado")
         self.status.setStyleSheet("color:#8f8f98;font-size:11px")
         lay.addWidget(self.status)
         self.send_btn.clicked.connect(self._send_or_stop)
-        QShortcut(QKeySequence("Ctrl+Return"), self.input, activated=self._send_or_stop)
-        QShortcut(QKeySequence("Ctrl+Enter"), self.input, activated=self._send_or_stop)
+        self.input.submit.connect(self._submit_from_keyboard)                 # Enter / Ctrl+Enter (F2 da UX v1)
+        self.enter_box.toggled.connect(self._enter_pref_changed)
         self.new_btn.clicked.connect(self.new_chat)
         self.reconnect_btn.clicked.connect(self.reconnect)
         self.agent_box.currentIndexChanged.connect(lambda _i: self._restart("agente trocado"))
@@ -465,6 +473,7 @@ class ChatView(QWidget):
         if self.no_safe_mode:
             self._add(Notice("envio bloqueado: o agente não anuncia um modo que peça permissão", "#ff6b6b"))
             return
+        self._draft = text                                                   # volta para a caixa se o envio falhar
         self.input.clear()
         self.empty.setVisible(False)
         self._add(UserBubble(text))
@@ -506,6 +515,7 @@ class ChatView(QWidget):
                 self.client = None
                 self._set_busy(False)
                 self.pending_prompt = None
+                self._restore_draft()
                 self._show_error(exc)  # type: ignore[arg-type]
                 return
             info = result if isinstance(result, dict) else {}
@@ -555,6 +565,27 @@ class ChatView(QWidget):
             self.flush()
             self._finish_turn(None if exc else str(result), exc)  # type: ignore[arg-type]
 
+    def _submit_from_keyboard(self) -> None:
+        """Enter nunca para o agente: com turno em curso, o texto fica na caixa como rascunho (so o botao Parar para)."""
+        if self.busy:
+            self.status.setText("agente trabalhando… o rascunho fica na caixa (Parar interrompe o turno)")
+            return
+        self.send(self.input.toPlainText())
+
+    def _restore_draft(self) -> None:
+        if self._draft and not self.input.toPlainText().strip():
+            self.input.setPlainText(self._draft)
+            cursor = self.input.textCursor()
+            cursor.movePosition(cursor.MoveOperation.End)
+            self.input.setTextCursor(cursor)
+
+    def _enter_pref_changed(self, on: bool) -> None:
+        self.input.set_enter_sends(on)
+        try:
+            save_enter_sends(self.prefs_path, on)
+        except OSError:
+            log.warning("preferencia do Enter nao foi salva")
+
     def _finish_turn(self, stop_reason: str | None, exc: BaseException | None) -> None:
         if self._turn_thought:
             self.chat.add("thought", "".join(self._turn_thought))
@@ -569,6 +600,8 @@ class ChatView(QWidget):
         if exc is not None:
             self._show_error(exc)
             self.chat.add("notice", f"erro: {classify(exc)}")
+            if not self._turn_text:                                          # o agente nao respondeu nada: rascunho de volta
+                self._restore_draft()
         elif stop_reason and stop_reason != "end_turn":
             self._add(Notice(f"— turno terminou: {stop_reason} —", "#ffc233"))
             self.chat.add("notice", f"turno terminou: {stop_reason}")
