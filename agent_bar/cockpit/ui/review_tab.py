@@ -32,6 +32,7 @@ from PySide6.QtWidgets import (
 )
 
 from agent_bar.cockpit import evidence as E
+from agent_bar.cockpit import gallery as G
 from agent_bar.cockpit.ui.diff_panel import DiffPanel
 from agent_bar.cockpit.ui.github_tabs import BTN_CSS, COMBO_CSS, TEXT_CSS, TREE_CSS
 from agent_bar.cockpit.ui.human_panel import HumanPanel
@@ -39,10 +40,13 @@ from agent_bar.cockpit.ui.packages_panel import PackagesPanel
 
 STATE_COLOR = {"PASS": "#3ddc84", "APPROVED": "#3ddc84", "FAIL": "#ff6b6d", "CHANGES_REQUESTED": "#ff6b6d", "BLOCKED": "#ffc233"}
 STATE_KEYS = ("GEOMETRY_PASS", "FUNCTIONAL_PASS", "VISUAL_REVIEW", "HUMAN_APPROVAL")
+GALLERY_COLUMNS = ["Data", "Fonte", "Tipo", "Run / referência", "Render", "Geometria", "Funcional", "Construção",
+                   "Imagens", "Humano", "Elegível a melhor"]
 
 
 class _Bridge(QObject):
     loaded = Signal(int, object)
+    gallery = Signal(int, object)
 
 
 class ImagePane(QWidget):
@@ -97,8 +101,12 @@ class ReviewTab(QWidget):
 
     def __init__(self, root_fn: Callable[[], Path] = E.evidence_dir,
                  load_fn: Callable[[Path], E.Catalog] = E.load_catalog,
-                 executor: ThreadPoolExecutor | None = None, report_store=None, package_writer=None) -> None:
+                 executor: ThreadPoolExecutor | None = None, report_store=None, package_writer=None,
+                 gallery_fn: Callable[[E.Catalog | None], G.Gallery] | None = G.build_gallery) -> None:
         super().__init__()
+        self.gallery_fn = gallery_fn
+        self.gallery: G.Gallery | None = None
+        self.gallery_error = ""
         self.report_store = report_store
         self.package_writer = package_writer
         self.root_fn = root_fn
@@ -110,6 +118,7 @@ class ReviewTab(QWidget):
         self.req = 0
         self.bridge = _Bridge()
         self.bridge.loaded.connect(self._loaded)
+        self.bridge.gallery.connect(self._gallery_loaded)
         self._build()
 
     # ------------------------------------------------------------------------------------------------- layout
@@ -180,7 +189,9 @@ class ReviewTab(QWidget):
         self.packages.report_fn = lambda: self.diff.report
         self.human = HumanPanel(lambda: self.catalog.root if self.catalog else self.root_fn())
         self.human.report_fn = lambda: self.diff.report
-        for w, title in ((self.states, "Estados (separados)"), (self.reports, "Relatórios técnicos"),
+        self.gallery_view = self._build_gallery()
+        for w, title in ((self.gallery_view, "Galeria (todas as fontes)"), (self.states, "Estados (separados)"),
+                         (self.reports, "Relatórios técnicos"),
                          (self.history, "Histórico do cômodo"), (self.absent, "Evidências ausentes"),
                          (self.diff, "Relatório de diferenças"), (self.packages, "Pacotes (Claude / GPT)"),
                          (self.human, "Revisão humana")):
@@ -193,6 +204,44 @@ class ReviewTab(QWidget):
         self.a_box.activated.connect(lambda _i: self._compare())
         self.b_box.activated.connect(lambda _i: self._compare())
         self.cams.currentItemChanged.connect(lambda cur, _p: self._show_camera(cur))
+
+    def _build_gallery(self) -> QWidget:
+        """Galeria multi-fonte (S01C-F1-03): todo item com a fonte; imagem só com sha256 conferido (VS-R2)."""
+        box = QWidget()
+        lay = QVBoxLayout(box)
+        lay.setContentsMargins(0, 0, 0, 0)
+        self.gallery_note = QLabel("")
+        self.gallery_note.setWordWrap(True)
+        self.gallery_note.setStyleSheet("color:#8f8f98;font-size:11px")
+        lay.addWidget(self.gallery_note)
+        split = QSplitter(Qt.Orientation.Horizontal)
+        self.gallery_tree = QTreeWidget()
+        self.gallery_tree.setStyleSheet(TREE_CSS)
+        self.gallery_tree.setHeaderLabels(GALLERY_COLUMNS)
+        self.gallery_tree.setRootIsDecorated(False)
+        self.gallery_tree.setColumnWidth(0, 150)
+        self.gallery_tree.setColumnWidth(1, 150)
+        self.gallery_tree.setColumnWidth(3, 300)
+        split.addWidget(self.gallery_tree)
+        right = QWidget()
+        rl = QVBoxLayout(right)
+        rl.setContentsMargins(0, 0, 0, 0)
+        self.gallery_detail = QLabel("")
+        self.gallery_detail.setWordWrap(True)
+        self.gallery_detail.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.gallery_detail.setStyleSheet("color:#bdbdc4;font-size:11px")
+        self.gallery_images = QListWidget()
+        self.gallery_images.setStyleSheet("QListWidget{background:#17171a;color:#cfcfd4;border:1px solid #2a2a30;font-size:11px}")
+        self.gallery_pane = ImagePane()
+        rl.addWidget(self.gallery_detail)
+        rl.addWidget(self.gallery_images, 1)
+        rl.addWidget(self.gallery_pane, 2)
+        split.addWidget(right)
+        split.setSizes([700, 420])
+        lay.addWidget(split, 1)
+        self.gallery_tree.currentItemChanged.connect(lambda cur, _p: self._show_gallery_item(cur))
+        self.gallery_images.currentItemChanged.connect(lambda cur, _p: self._show_gallery_image(cur))
+        return box
 
     # ------------------------------------------------------------------------------------------------- carga
     def reload(self) -> None:
@@ -214,7 +263,9 @@ class ReviewTab(QWidget):
                 box.clear()
             self.history.clear()
             self._clear_pair()                                                # nada do par anterior fica na tela (F0 #43)
+            self._load_gallery(rid, None)                                     # o motor e a design-library ainda valem
             return
+        self._load_gallery(rid, result)  # type: ignore[arg-type]
         self.catalog, self.error = result, ""  # type: ignore[assignment]
         self.source.setTextFormat(Qt.TextFormat.PlainText)
         n_ok = sum(1 for r in self.catalog.runs if r.valid)
@@ -240,6 +291,7 @@ class ReviewTab(QWidget):
             self.a_box.setCurrentIndex(valid[-2])
             self.b_box.setCurrentIndex(valid[-1])
         self._history(runs)
+        self._fill_gallery()
         self._compare()
 
     def run(self, box: QComboBox) -> E.Run | None:
@@ -384,6 +436,88 @@ class ReviewTab(QWidget):
             out.append(f"<h4>{e(r.label)}</h4>" + ("<ul>" + "".join(f"<li>{e(x)}</li>" for x in items) + "</ul>"
                                                    if items else "<p>nada ausente</p>"))
         self.absent.setHtml("".join(out))
+
+    # ------------------------------------------------------------------------------------------------- galeria
+    def _load_gallery(self, rid: int, catalog: E.Catalog | None) -> None:
+        if self.gallery_fn is None:
+            return
+        self.gallery_note.setText("lendo o motor e a design-library (somente leitura)…")
+        fut = self.pool.submit(self.gallery_fn, catalog)
+        fut.add_done_callback(lambda f, r=rid: self.bridge.gallery.emit(r, f.exception() or f.result()))
+
+    def _gallery_loaded(self, rid: int, result: object) -> None:
+        if rid != self.req:
+            return
+        if isinstance(result, BaseException):
+            self.gallery, self.gallery_error = None, f"{type(result).__name__}: {result}"
+        else:
+            self.gallery, self.gallery_error = result, ""  # type: ignore[assignment]
+        if self.catalog is None and self.gallery is not None and self.room_box.count() == 0:
+            for plant, room in sorted({(i.plant, i.room) for i in self.gallery.items}):
+                self.room_box.addItem(f"{plant} / {room}", (plant, room))
+        self._fill_gallery()
+
+    def gallery_items(self) -> list[G.GalleryItem]:
+        if self.gallery is None or self.room_box.currentData() is None:
+            return []
+        return self.gallery.of(*self.room_box.currentData())
+
+    def _fill_gallery(self) -> None:
+        from PySide6.QtGui import QBrush, QColor
+        self.gallery_tree.clear()
+        self._show_gallery_item(None)
+        if self.gallery is None:
+            self.gallery_note.setText(f"galeria indisponível: {self.gallery_error}" if self.gallery_error else "")
+            return
+        items = self.gallery_items()
+        counts = {s: sum(1 for i in items if i.source == s) for s in G.SOURCES}
+        errs = (f" · {len(self.gallery.errors)} aviso(s): " + "; ".join(self.gallery.errors[:3])
+                if self.gallery.errors else "")
+        self.gallery_note.setText(
+            "Do mais recente para o mais antigo. "
+            + " · ".join(f"{G.SOURCE_LABEL[s]}: {n}" for s, n in counts.items() if n)
+            + ". Itens do motor: " + G.UNPUBLISHED_NOTE + ". Elegível = candidato a melhor render (F0 §4); "
+            "não é veredito visual." + errs)
+        for i in items:
+            blockers = i.eligibility()
+            row = QTreeWidgetItem([i.when(), i.source, i.kind, i.item_id, i.render_verdict or "—",
+                                   *(i.build.get(k, "—") for k in G.BUILD_KEYS), str(len(i.images)),
+                                   i.human_approval, "sim" if not blockers else "não: " + "; ".join(blockers)])
+            row.setData(0, Qt.ItemDataRole.UserRole, i.item_id)
+            for col in (4, 5, 6, 7):
+                row.setForeground(col, QBrush(QColor(STATE_COLOR.get(row.text(col), "#cfcfd4"))))
+            self.gallery_tree.addTopLevelItem(row)
+
+    def _gallery_item(self, row: QTreeWidgetItem | None) -> G.GalleryItem | None:
+        if row is None or self.gallery is None:
+            return None
+        return self.gallery.get(row.data(0, Qt.ItemDataRole.UserRole))
+
+    def _show_gallery_item(self, row: QTreeWidgetItem | None) -> None:
+        self.gallery_images.clear()
+        it = self._gallery_item(row)
+        if it is None:
+            self.gallery_detail.setText("")
+            self.gallery_pane.show_image("", None, "selecione um item da galeria")
+            return
+        lines = [f"{it.item_id} · fonte {it.source} ({it.source_label})", *it.notes]
+        if it.camera_file:
+            lines.append(f"câmeras/render spec: {it.camera_file}")
+        lines += [f"erro: {e}" for e in it.errors[:4]] + [f"imagem recusada: {r}" for r in it.rejected[:6]]
+        self.gallery_detail.setText("\n".join(lines))
+        for img in it.images:
+            li = QListWidgetItem(f"{img.key} — {img.ident}")
+            li.setData(Qt.ItemDataRole.UserRole, str(img.path))
+            self.gallery_images.addItem(li)
+        if self.gallery_images.count():
+            self.gallery_images.setCurrentRow(0)
+        else:
+            self.gallery_pane.show_image(it.item_id, None, "nenhuma imagem com sha256 conferido")
+
+    def _show_gallery_image(self, li: QListWidgetItem | None) -> None:
+        if li is None:
+            return
+        self.gallery_pane.show_image(li.text(), Path(li.data(Qt.ItemDataRole.UserRole)))
 
     def shutdown(self) -> None:
         if self._own_pool:
