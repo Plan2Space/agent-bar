@@ -35,16 +35,17 @@ from agent_bar.cockpit.acp import (
     mode_is_safe,
 )
 from agent_bar.cockpit.library import compose_prompt
+from agent_bar.cockpit.permission_broker import PermissionBroker
 from agent_bar.cockpit.permission_inbox import PermissionInbox
 from agent_bar.cockpit.store import Chat, ChatStore, data_dir
 from agent_bar.cockpit.ui.composer import Composer, load_enter_sends, save_enter_sends
 from agent_bar.cockpit.ui.widgets import (
     Notice,
+    PermissionCard,
     PlanCard,
     TextBlock,
     ToolCard,
     UserBubble,
-    ask_permission_dialog,
 )
 
 log = logging.getLogger("agent_bar.cockpit.chat")
@@ -82,6 +83,14 @@ def _default_provider_client(profile, workspace: str, **kw):
     return ProviderClient(OllamaAdapter(endpoint, timeout=30), **kw)
 
 
+def _confirm_irreversible_dialog(req: PermissionRequest, parent: QWidget) -> bool:
+    from agent_bar.cockpit.devmode import irreversible_request
+    from agent_bar.cockpit.ui.widgets import IrreversibleDialog
+    gate = IrreversibleDialog(req, irreversible_request(req.tool_call or {}) or "operação irreversível", parent)
+    gate.exec()
+    return bool(gate.confirmed)
+
+
 RISKY_SUFFIX = " (decide sem pedir permissão)"
 
 
@@ -109,7 +118,8 @@ class _Bridge(QObject):
 class ChatView(QWidget):
     def __init__(self, store: ChatStore | None = None, runtime: AsyncRuntime | None = None, *,
                  client_factory: Callable[..., AcpClient] = AcpClient,
-                 ask_permission: Callable[[PermissionRequest, QWidget], str | None] = ask_permission_dialog,
+                 ask_permission: Callable[[PermissionRequest, QWidget], str | None] | None = None,
+                 confirm_irreversible: Callable[[PermissionRequest, QWidget], bool] | None = None,
                  confirm_mode: Callable[[str, QWidget], bool] = confirm_risky_mode,
                  profiles_fn: Callable[[], list[prof.AgentProfile]] = prof.profiles,
                  workspaces_fn: Callable[[], list[Path]] = prof.workspaces,
@@ -125,6 +135,13 @@ class ChatView(QWidget):
         self.provider_factory = provider_factory or _default_provider_client
         self.inbox = inbox if inbox is not None else PermissionInbox(data_dir() / "permissions.sqlite")
         self._own_inbox = inbox is None
+        self.broker = PermissionBroker(self.inbox, on_change=self._permission_changed)
+        self.confirm_irreversible = confirm_irreversible or _confirm_irreversible_dialog
+        self._perm_cards: dict[str, PermissionCard] = {}
+        self.permission_listeners: list[Callable[[str], None]] = []          # abas que mostram o mesmo pedido
+        self._expire_timer = QTimer(self)
+        self._expire_timer.timeout.connect(self.broker.expire)               # vencido = recusa ao agente, nunca pendurado
+        self._expire_timer.start(2000)
         self.inbox.cancel_open("o Studio foi reiniciado: o agente que pediu nao espera mais a resposta")
         self.ask_permission = ask_permission
         self.confirm_mode = confirm_mode
@@ -573,6 +590,43 @@ class ChatView(QWidget):
             self.flush()
             self._finish_turn(None if exc else str(result), exc)  # type: ignore[arg-type]
 
+    # ---------------------------------------------------------------------------------------------- permissoes
+    def answer_permission(self, entry_id: str, choice: str) -> bool:
+        """Resposta de qualquer superficie (cartao, aba Permissoes, Notificacoes). Irreversivel so depois do codigo."""
+        req = self.broker.request(entry_id)
+        if req is None:
+            return False
+        entry = self.inbox.get(entry_id)
+        allowing = choice != "deny" and not str(next((o.get("kind") for o in req.options
+                                                      if str(o.get("optionId")) == choice), choice)).startswith("reject")
+        if allowing and entry.policy == "IRREVERSIBLE" and not self.confirm_irreversible(req, self):
+            return False                                                     # sem o codigo: continua aberto
+        try:
+            self.broker.answer(entry_id, choice, by="human")
+        except Exception as exc:                                             # noqa: BLE001 - mostra e segue
+            self._show_error(None, f"permissão não registrada: {exc}")
+            return False
+        return True
+
+    def _permission_changed(self, entry_id: str) -> None:
+        card = self._perm_cards.get(entry_id)
+        try:
+            entry = self.inbox.get(entry_id)
+        except KeyError:
+            return
+        if card is not None and entry.status != "PENDING":
+            text = {"ALLOWED": f"permitido ({entry.decision}) por {entry.decided_by}",
+                    "DENIED": f"negado por {entry.decided_by}",
+                    "EXPIRED": "sem resposta no prazo: recusado ao agente",
+                    "CANCELLED": f"cancelado: {entry.result or ''}"}.get(entry.status, entry.status)
+            card.set_resolved(text, entry.status == "ALLOWED")
+            self.status.setText(f"permissão “{entry.title}”: {text}")
+        for fn in list(self.permission_listeners):
+            try:
+                fn(entry_id)
+            except Exception:                                                 # noqa: BLE001
+                log.exception("ouvinte de permissao falhou")
+
     def _submit_from_keyboard(self) -> None:
         """Enter nunca para o agente: com turno em curso, o texto fica na caixa como rascunho (so o botao Parar para)."""
         if self.busy:
@@ -663,6 +717,13 @@ class ChatView(QWidget):
             respond(choice)
             self._add(Notice(f"permissão para “{entry.title}”: {entry.status.lower()} por {entry.decided_by}",
                              "#3ddc84" if choice else "#ff9a9b"))
+            return
+        if self.ask_permission is None:                                     # padrao: cartao nao modal (UX F4b)
+            self.broker.register(entry.id, req, respond)
+            card = PermissionCard(req, entry, lambda option, eid=entry.id: self.answer_permission(eid, option))
+            self._perm_cards[entry.id] = card
+            self._add(card)
+            self.status.setText("o agente espera sua permissão (cartão abaixo, aba Permissões ou Notificações)")
             return
         choice = self.ask_permission(req, self)
         kind = next((str(o.get("kind")) for o in req.options if str(o.get("optionId")) == str(choice)), None)
@@ -829,6 +890,8 @@ class ChatView(QWidget):
                 log.exception("falha ao encerrar o cliente ACP")
         self._closing = []
         self.client = None
+        self._expire_timer.stop()
+        self.broker.cancel_all("a aba do Chat foi fechada")
         if self._own_inbox:
             self.inbox.cancel_open("a aba do Chat foi fechada")
             self.inbox.close()

@@ -113,8 +113,10 @@ def handle_prompt(rid: int, params: dict) -> None:
         chunk(sid, json.dumps(sorted(os.environ)))
     elif word == "caps":
         chunk(sid, json.dumps(_caps, sort_keys=True))
-    elif word == "perm":
+    elif word in ("perm", "permrm"):
         tc = {"toolCallId": "t1", "title": "Run rm", "kind": "execute", "status": "pending"}
+        if word == "permrm":                                 # pedido irreversivel de verdade (rm -rf)
+            tc["rawInput"] = {"command": "rm -rf build"}
         update(sid, {"sessionUpdate": "tool_call", **tc})
         res = ask("session/request_permission", {"sessionId": sid, "toolCall": tc, "options": [
             {"optionId": "allow", "name": "Allow", "kind": "allow_once"},

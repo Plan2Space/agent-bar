@@ -122,3 +122,37 @@ def test_window_wires_bell_chat_and_links(tmp_path):
     finally:
         win.shutdown()
         win.deleteLater()
+
+
+def test_a_pending_permission_is_answered_from_the_notifications_panel(tmp_path):
+    import sys
+
+    from agent_bar.cockpit.profiles import AgentProfile
+    from agent_bar.cockpit.ui.window import CockpitWindow
+    os.environ["AGENT_BAR_COCKPIT_DATA"] = str(tmp_path / "data")
+    (tmp_path / "ws").mkdir()
+    stub = os.path.join(os.path.dirname(__file__), "fake_acp_agent.py")
+    win = CockpitWindow(repos=["o/r"], profiles_fn=lambda: [AgentProfile("stub", "Stub", (sys.executable, stub))],
+                        workspaces_fn=lambda: [tmp_path / "ws"])                # sem ask_permission: cartao nao modal
+    try:
+        win.chat.send("perm")
+        end = time.monotonic() + 15
+        while time.monotonic() < end and not win.chat._perm_cards:
+            _APP.processEvents()
+            time.sleep(0.01)
+        nt = win.notifications
+        nt.refresh()
+        nt.tree.setCurrentItem(nt.tree.topLevelItem(0))
+        assert nt.allow_btn.isVisibleTo(nt) and nt.tree.topLevelItem(0).text(2) == "pede ação"
+        nt.allow_btn.click()
+        while time.monotonic() < end and win.chat.busy:
+            _APP.processEvents()
+            time.sleep(0.01)
+        assert not win.chat.busy
+        assert any(m["text"] == "outcome=selected:allow" for m in win.chat.chat.messages)
+        assert nt.bell.text() in ("🔔", "🔔 1")                               # a acao pendente sumiu do contador
+        card = next(iter(win.chat._perm_cards.values()))
+        assert "permitido" in card.result.text()
+    finally:
+        win.shutdown()
+        win.deleteLater()

@@ -56,8 +56,12 @@ class NotificationsTab(QWidget):
     open_link = Signal(str)
 
     def __init__(self, center: NotificationCenter, inbox=None, refresh_ms: int = 2000,
-                 native_notify: Callable[[str, str], None] | None = None) -> None:
+                 native_notify: Callable[[str, str], None] | None = None,
+                 answer_fn: Callable[[str, str], bool] | None = None,
+                 is_open_fn: Callable[[str], bool] = lambda _id: False) -> None:
         super().__init__()
+        self.answer_fn = answer_fn                                           # F4b: acoes rapidas de permissao
+        self.is_open_fn = is_open_fn
         self.center = center
         self.inbox = inbox
         self.native_notify = native_notify
@@ -97,8 +101,11 @@ class NotificationsTab(QWidget):
         self.open_btn = QPushButton("Abrir origem")
         self.read_btn = QPushButton("Marcar como lida")
         self.all_read_btn = QPushButton("Marcar todas como lidas")
+        self.allow_btn = QPushButton("Permitir uma vez")
+        self.deny_btn = QPushButton("Negar")
+        self.deny_btn.setStyleSheet("color:#ff9a9b")
         actions.addWidget(self.summary, 2)
-        for b in (self.open_btn, self.read_btn, self.all_read_btn):
+        for b in (self.allow_btn, self.deny_btn, self.open_btn, self.read_btn, self.all_read_btn):
             actions.addWidget(b)
         lay.addLayout(actions)
         for box in (self.category_box, self.state_box, self.period_box):
@@ -109,6 +116,9 @@ class NotificationsTab(QWidget):
         self.read_btn.clicked.connect(self._read)
         self.all_read_btn.clicked.connect(lambda: (self.center.mark_all_read(), self.refresh()))
         self.tree.itemDoubleClicked.connect(lambda _it, _c: self._open())
+        self.tree.currentItemChanged.connect(lambda _c, _p: self._update_actions())
+        self.allow_btn.clicked.connect(lambda: self._answer("allow_once"))
+        self.deny_btn.clicked.connect(lambda: self._answer("deny"))
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.refresh)
         self.timer.start(refresh_ms)
@@ -149,6 +159,7 @@ class NotificationsTab(QWidget):
         c = self.center.counts()
         self.bell.set_count(self.center.badge(), c["ACTION_REQUIRED"])
         self.summary.setText(f"{c['ACTION_REQUIRED']} pedem ação · {c['NEW']} novas · {len(items)} na lista")
+        self._update_actions()
 
     def _native_for_new_actions(self) -> None:
         """Opcional: avisa no Windows quando surge acao pendente nova (a linha ja existe no banco)."""
@@ -161,6 +172,25 @@ class NotificationsTab(QWidget):
                     self.native_notify(n.title, n.body)
                 except Exception:                                             # noqa: BLE001 - nativo e opcional
                     pass
+
+    def _permission_id(self) -> str | None:
+        nid = self._current_id()
+        if not nid:
+            return None
+        n = self.center.get(nid)
+        return n.source.split(":", 1)[1] if n.source.startswith("permission:") else None
+
+    def _update_actions(self) -> None:
+        rid = self._permission_id()
+        can = bool(rid and self.answer_fn is not None and self.is_open_fn(rid))
+        self.allow_btn.setVisible(can)
+        self.deny_btn.setVisible(can)
+
+    def _answer(self, choice: str) -> None:
+        rid = self._permission_id()
+        if rid and self.answer_fn is not None:
+            self.answer_fn(rid, choice)
+            self.refresh()
 
     def _current_id(self) -> str | None:
         it = self.tree.currentItem()

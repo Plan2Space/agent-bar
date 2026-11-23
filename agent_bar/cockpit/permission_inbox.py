@@ -239,6 +239,11 @@ class PermissionInbox:
                 args.append(session_id)
             return self._db.execute(q, args).rowcount
 
+    def cancel_one(self, rid: str, why: str) -> None:
+        with self._lock:
+            self._db.execute("UPDATE requests SET status='CANCELLED', result=?, decided_at=? WHERE id=? AND status='PENDING'",
+                             (why[:80], self.clock(), rid))
+
     def expire_due(self) -> int:
         with self._lock:
             return self._db.execute(

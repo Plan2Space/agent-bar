@@ -52,10 +52,13 @@ class CockpitWindow(QMainWindow):
         self.tabs.addTab(self.actions, "Actions")
         self.dev = DevTab(use_workspace=self._use_sandbox, **(dev_kwargs or {}))
         self.tabs.addTab(self.dev, "Dev")
-        self.permissions = PermissionsTab(self.chat.inbox)                    # F4: o mesmo inbox que o Chat grava
+        self.permissions = PermissionsTab(self.chat.inbox, answer_fn=self.chat.answer_permission,
+                                          is_open_fn=self.chat.broker.is_open)  # F4/F4b: o mesmo inbox e broker do Chat
         self.tabs.insertTab(1, self.permissions, "Permissões")
         self.center = NotificationCenter(self.chat.inbox.path)              # F3: mesmo SQLite do Inbox
-        self.notifications = NotificationsTab(self.center, inbox=self.chat.inbox)
+        self.notifications = NotificationsTab(self.center, inbox=self.chat.inbox, answer_fn=self.chat.answer_permission,
+                                              is_open_fn=self.chat.broker.is_open)
+        self.chat.permission_listeners += [lambda _id: self.permissions.refresh(), lambda _id: self.notifications.refresh()]
         self.tabs.insertTab(2, self.notifications, "Notificações")
         self.tabs.setCornerWidget(self.notifications.bell, Qt.Corner.TopRightCorner)
         self.notifications.bell.show()
