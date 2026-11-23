@@ -34,8 +34,9 @@ def dispose(w):
     QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
 
 
-def make(root: Path, expected=None) -> ReviewTab:
-    tab = ReviewTab(root_fn=lambda: root, load_fn=lambda r: E.load_catalog(r, expected=expected or {}))
+def make(root: Path, expected=None, gallery_fn=None) -> ReviewTab:
+    tab = ReviewTab(root_fn=lambda: root, load_fn=lambda r: E.load_catalog(r, expected=expected or {}),
+                    gallery_fn=gallery_fn)                                      # None: sem ler o motor real do disco
     tab.resize(1200, 800)
     tab.reload()
     assert wait(lambda: tab.catalog is not None or tab.error)
@@ -181,5 +182,70 @@ def test_a_failed_reload_never_keeps_showing_the_previous_pair(tmp_path):
         assert tab.reports.toPlainText() == "" and tab.absent.toPlainText() == "" and tab.cams.count() == 0
         assert tab.selected_runs() == (None, None)
         assert tab.pane_a.image.pixmap().isNull() and tab.pane_b.image.pixmap().isNull()
+    finally:
+        dispose(tab)
+
+
+# ----------------------------------------------------------------------------------- S01C-F1-03: galeria multi-fonte
+def _gallery_tab(tmp_path, *, evidence_ok=True):
+    from agent_bar.cockpit import gallery as G
+    from tests.cockpit.gallery_fixture import build_all
+    ev, engine, dl = build_all(tmp_path)
+    root = ev if evidence_ok else tmp_path / "nao-existe"
+    tab = make(root, gallery_fn=lambda cat: G.build_gallery(cat, engine, dl, rooms=[("planta_x", "quarto")]))
+    assert wait(lambda: tab.gallery is not None or tab.gallery_error)
+    assert wait(lambda: tab.gallery_tree.topLevelItemCount() > 0)
+    return tab
+
+
+def gallery_rows(tab):
+    t = tab.gallery_tree
+    return {t.topLevelItem(i).text(3): [t.topLevelItem(i).text(c) for c in range(t.columnCount())]
+            for i in range(t.topLevelItemCount())}
+
+
+def test_gallery_tab_shows_render4_fail_and_not_eligible(tmp_path):
+    from tests.cockpit.gallery_fixture import R4, R4B
+    tab = _gallery_tab(tmp_path)
+    try:
+        assert tab.details.tabText(0) == "Galeria (todas as fontes)"
+        rows = gallery_rows(tab)
+        assert R4B not in rows
+        r4 = rows[R4]
+        assert r4[1] == "PUBLICADO" and r4[4] == "FAIL" and r4[11].startswith("não: ") and "render FAIL" in r4[11]
+        assert r4[10] == "sim"                                                      # verificado, mas FAIL: visível
+        assert all(not r[11].startswith("sim") for r in rows.values())             # sem avaliação: nada elegível
+        assert "não publicado, não validado pelo verify.py" in tab.gallery_note.text()
+    finally:
+        dispose(tab)
+
+
+def test_gallery_item_lists_images_by_ident_and_explains_rejections(tmp_path):
+    from tests.cockpit.gallery_fixture import BAD_SHA
+    tab = _gallery_tab(tmp_path)
+    try:
+        t = tab.gallery_tree
+        row = next(t.topLevelItem(i) for i in range(t.topLevelItemCount()) if t.topLevelItem(i).text(3) == BAD_SHA)
+        t.setCurrentItem(row)
+        assert tab.gallery_images.count() == 1
+        assert "Plan2Space/sketchup-mcp-next:artifacts/planta_x_quarto/" in tab.gallery_images.item(0).text()
+        assert "@" in tab.gallery_images.item(0).text()
+        assert "imagem recusada: noite_cama_3q: sha256 diverge do manifest" in tab.gallery_detail.text()
+        assert "não publicado, não validado pelo verify.py" in tab.gallery_detail.text()
+        assert "VERIFICADO: não: inválido" not in tab.gallery_detail.text()        # imagem recusada não invalida o run
+        assert "ELEGÍVEL: não:" in tab.gallery_detail.text() and "MELHOR: não escolhido" in tab.gallery_detail.text()
+        assert not tab.gallery_pane.image.pixmap().isNull()
+    finally:
+        dispose(tab)
+
+
+def test_gallery_still_shows_the_engine_when_the_evidence_is_down(tmp_path):
+    from tests.cockpit.gallery_fixture import R4
+    tab = _gallery_tab(tmp_path, evidence_ok=False)
+    try:
+        assert tab.catalog is None and tab.room_box.count() == 1
+        r4 = gallery_rows(tab)[R4]
+        assert r4[1] == "MOTOR_NAO_PUBLICADO" and r4[4] == "FAIL" and r4[11].startswith("não: ")
+        assert "evidence indisponível" in tab.gallery_note.text()
     finally:
         dispose(tab)
