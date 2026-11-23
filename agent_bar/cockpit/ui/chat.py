@@ -36,6 +36,7 @@ from agent_bar.cockpit.acp import (
     mode_is_safe,
 )
 from agent_bar.cockpit.library import compose_prompt
+from agent_bar.cockpit.permission_inbox import PermissionInbox
 from agent_bar.cockpit.store import Chat, ChatStore, data_dir
 from agent_bar.cockpit.ui.widgets import (
     Notice,
@@ -113,7 +114,8 @@ class ChatView(QWidget):
                  profiles_fn: Callable[[], list[prof.AgentProfile]] = prof.profiles,
                  workspaces_fn: Callable[[], list[Path]] = prof.workspaces,
                  context_provider: Callable[[], str] | None = None,
-                 provider_factory: Callable[..., object] | None = None) -> None:
+                 provider_factory: Callable[..., object] | None = None,
+                 inbox: PermissionInbox | None = None) -> None:
         super().__init__()
         self.context_provider = context_provider                          # F4: biblioteca (texto exato do preview)
         self.store = store or ChatStore()
@@ -121,6 +123,9 @@ class ChatView(QWidget):
         self._own_rt = runtime is None
         self.client_factory = client_factory
         self.provider_factory = provider_factory or _default_provider_client
+        self.inbox = inbox if inbox is not None else PermissionInbox(data_dir() / "permissions.sqlite")
+        self._own_inbox = inbox is None
+        self.inbox.cancel_open("o Studio foi reiniciado: o agente que pediu nao espera mais a resposta")
         self.ask_permission = ask_permission
         self.confirm_mode = confirm_mode
         self.no_safe_mode = False                                            # agente sem modo que pede permissao: envio bloqueado
@@ -595,7 +600,24 @@ class ChatView(QWidget):
             respond(None)
             return
         self.flush()
+        entry = self.inbox.record(req.tool_call or {}, provider=self.profile().key, session_id=req.session_id,
+                                  workspace=self.workspace(),
+                                  mode_decides_alone=bool(self._modes.get("availableModes"))
+                                  and not mode_is_safe(self.chat.mode, self._modes))
+        if entry.repeat_note:                                                # explica pedido repetido antes do dialogo
+            self._add(Notice(f"pedido repetido: {entry.repeat_note}", "#ffc233"))
+        if entry.status != "PENDING":                                        # politica ja decidiu (proibido ou regra)
+            choice = None if entry.status == "DENIED" else req.strongest_once()
+            respond(choice)
+            self._add(Notice(f"permissão para “{entry.title}”: {entry.status.lower()} por {entry.decided_by}",
+                             "#3ddc84" if choice else "#ff9a9b"))
+            return
         choice = self.ask_permission(req, self)
+        kind = next((str(o.get("kind")) for o in req.options if str(o.get("optionId")) == str(choice)), None)
+        try:
+            self.inbox.decide(entry.id, kind or choice, by="human")
+        except Exception:                                                     # noqa: BLE001 - a resposta ao agente vem primeiro
+            log.exception("decisao nao gravada no inbox")
         respond(choice)
         title = (req.tool_call or {}).get("title", "ferramenta")
         self._add(Notice(f"permissão para “{title}”: {choice or 'recusada (diálogo fechado)'}",
@@ -615,6 +637,8 @@ class ChatView(QWidget):
         elif u.kind in ("tool_call", "tool_call_update"):
             self.flush()
             tid = str(u.data.get("toolCallId", ""))
+            if u.data.get("status") in ("completed", "failed"):             # resultado da execucao no inbox
+                self.inbox.finish_tool_call(u.session_id, tid, str(u.data["status"]))
             card = self.cards.get(tid)
             if card is None:
                 card = ToolCard(tid)
@@ -753,5 +777,8 @@ class ChatView(QWidget):
                 log.exception("falha ao encerrar o cliente ACP")
         self._closing = []
         self.client = None
+        if self._own_inbox:
+            self.inbox.cancel_open("a aba do Chat foi fechada")
+            self.inbox.close()
         if self._own_rt:
             self.rt.stop()

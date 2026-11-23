@@ -1,4 +1,4 @@
-"""window.py — janela do cockpit ACP (D2): QMainWindow redimensionavel com abas Chat, Fluxos, Revisão visual, Biblioteca, PRs, Actions e Dev."""
+"""window.py — janela do cockpit ACP (D2): QMainWindow redimensionavel com abas Chat, Permissões, Fluxos, Revisão visual, Biblioteca, PRs, Actions e Dev."""
 from __future__ import annotations
 
 from PySide6.QtWidgets import QMainWindow, QTabWidget
@@ -9,6 +9,7 @@ from agent_bar.cockpit.ui.chat import ChatView
 from agent_bar.cockpit.ui.dev_tab import DevTab
 from agent_bar.cockpit.ui.github_tabs import ActionsTab, PrsTab
 from agent_bar.cockpit.ui.library_tab import LibraryTab
+from agent_bar.cockpit.ui.permissions_tab import PermissionsTab
 from agent_bar.cockpit.ui.review_tab import ReviewTab
 from agent_bar.cockpit.ui.workflows_tab import WorkflowsTab
 from agent_bar.targets import load_targets
@@ -48,6 +49,8 @@ class CockpitWindow(QMainWindow):
         self.tabs.addTab(self.actions, "Actions")
         self.dev = DevTab(use_workspace=self._use_sandbox, **(dev_kwargs or {}))
         self.tabs.addTab(self.dev, "Dev")
+        self.permissions = PermissionsTab(self.chat.inbox)                    # F4: o mesmo inbox que o Chat grava
+        self.tabs.insertTab(1, self.permissions, "Permissões")
         self.prs.review_requested.connect(self.open_review)
         self.tabs.currentChanged.connect(self._tab_changed)
         self.setCentralWidget(self.tabs)
@@ -84,6 +87,7 @@ class CockpitWindow(QMainWindow):
         if self._closed:
             return
         self._closed = True
+        self.permissions.shutdown()
         self.workflows.shutdown()
         self.review.shutdown()
         self.dev.shutdown()
