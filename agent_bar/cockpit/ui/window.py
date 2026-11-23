@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import QMainWindow, QTabWidget
 
+from agent_bar.cockpit import window_state as WS
 from agent_bar.cockpit.acp import AsyncRuntime
 from agent_bar.cockpit.github import GhClient, configured_repos
 from agent_bar.cockpit.notifications import NotificationCenter, image_notification
@@ -28,10 +30,13 @@ TAB_CSS = ("QTabWidget::pane{border:0;background:#16161a}QTabBar::tab{background
 
 class CockpitWindow(QMainWindow):
     def __init__(self, gh: GhClient | None = None, repos: list[str] | None = None, discover_fn=None, specs_root=None,
-                 dev_kwargs: dict | None = None, review_kwargs: dict | None = None, **chat_kwargs) -> None:
+                 dev_kwargs: dict | None = None, review_kwargs: dict | None = None,
+                 window_store: WS.WindowStateStore | None = None, **chat_kwargs) -> None:
         super().__init__()
         self.setWindowTitle("P2S Studio — Cockpit")
-        self.resize(980, 720)
+        self.setMinimumSize(WS.MIN_W, WS.MIN_H)                                 # UX-04: nada essencial some em tela menor
+        self.window_store = window_store or WS.WindowStateStore()
+        self.restore_window()
         self.runtime = AsyncRuntime("cockpit")
         self.tabs = QTabWidget()
         self.tabs.setStyleSheet(TAB_CSS)
@@ -154,9 +159,70 @@ class CockpitWindow(QMainWindow):
         self.image_ledger.close()
         self.center.close()
 
+    # ------------------------------------------------------------------------------------------------ janela (UX-04)
+    def restore_window(self) -> WS.WindowState:
+        """Reabre onde estava; monitor que sumiu → monitor visível; nunca maior que a área útil."""
+        st = WS.restore(self.window_store.load(), screen_rects())
+        self.resize(st.w, st.h)
+        self.move(st.x, st.y)
+        self._normal, self._prev_normal = (st.x, st.y, st.w, st.h), None        # o tamanho normal, mesmo se maximizada
+        if st.maximized:
+            self.setWindowState(self.windowState() | Qt.WindowState.WindowMaximized)
+        return st
+
+    def _remember_normal(self) -> None:
+        """Posição da MOLDURA e tamanho do conteúdo enquanto a janela está normal: é o que volta ao sair do maximizado.
+        (normalGeometry() dá o canto do conteúdo, não da moldura: salvar dele desceria a janela uma barra de título a
+        cada ciclo maximizar/reabrir.)"""
+        if self.windowState() == Qt.WindowState.WindowNoState and self.isVisible():
+            now = (self.pos().x(), self.pos().y(), self.width(), self.height())
+            if now != getattr(self, "_normal", None):
+                self._prev_normal, self._normal = getattr(self, "_normal", None), now
+
+    def changeEvent(self, e) -> None:                                           # noqa: N802
+        """O Windows entrega o resize do maximizar ANTES de o estado virar maximizado: o último "normal" registrado é
+        o tamanho maximizado; volta para o anterior."""
+        super().changeEvent(e)
+        from PySide6.QtCore import QEvent
+        if e.type() == QEvent.Type.WindowStateChange and self.isMaximized():
+            last = getattr(self, "_normal", None)
+            if last and (last[2], last[3]) == (self.width(), self.height()) and getattr(self, "_prev_normal", None):
+                self._normal = self._prev_normal
+
+    def moveEvent(self, e) -> None:                                             # noqa: N802
+        super().moveEvent(e)
+        self._remember_normal()
+
+    def resizeEvent(self, e) -> None:                                           # noqa: N802
+        super().resizeEvent(e)
+        self._remember_normal()
+
+    def save_window(self) -> WS.WindowState:
+        self._remember_normal()
+        x, y, w, h = getattr(self, "_normal", None) or (self.pos().x(), self.pos().y(), self.width(), self.height())
+        st = WS.WindowState(x, y, w, h, self.isMaximized())
+        try:
+            self.window_store.save(st)
+        except OSError:                                                        # salvar a janela nunca impede fechar
+            pass
+        return st
+
     def closeEvent(self, e) -> None:                                            # noqa: N802
+        if not self._closed:
+            self.save_window()
         self.shutdown()
         super().closeEvent(e)
+
+
+def screen_rects() -> list[WS.Rect]:
+    """Áreas úteis dos monitores (lógicas), o principal primeiro."""
+    primary = QGuiApplication.primaryScreen()
+    screens = [primary] + [s for s in QGuiApplication.screens() if s is not primary]
+    out = []
+    for sc in screens:
+        g = sc.availableGeometry()
+        out.append(WS.Rect(g.x(), g.y(), g.width(), g.height()))
+    return out
 
 
 def _ollama_adapter(*_workspace):
