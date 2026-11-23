@@ -96,6 +96,9 @@ def ask(method: str, params: dict) -> dict:
 def handle_prompt(rid: int, params: dict) -> None:
     sid = params["sessionId"]
     text = " ".join(b.get("text", "") for b in params.get("prompt", []) if b.get("type") == "text").strip()
+    pics = [b for b in params.get("prompt", []) if b.get("type") == "image"]
+    if pics:                                                 # recebeu bloco de imagem ACP: diz o que chegou
+        chunk(sid, "imagens=" + ",".join(f"{b.get('mimeType')}:{len(b.get('data', ''))}" for b in pics))
     word, _, rest = text.partition(" ")
     reason = "end_turn"
     for kw, w in (("STUB-SLEEP", "sleep"), ("STUB-SLOW", "slow"), ("STUB-PERM", "perm"), ("STUB-PERMRM", "permrm"),
@@ -182,7 +185,8 @@ def main() -> None:
         elif method == "initialize":
             _caps.update(params.get("clientCapabilities") or {})
             send({"jsonrpc": "2.0", "id": rid, "result": {"protocolVersion": 1,
-                                                          "agentCapabilities": {"loadSession": True, "sessionCapabilities": {"close": {}}}, "authMethods": []}})
+                                                          "agentCapabilities": {"loadSession": True, "sessionCapabilities": {"close": {}},
+                                                          "promptCapabilities": {"image": bool(os.environ.get("AGENT_BAR_FAKE_IMAGES"))}}, "authMethods": []}})
         elif method == "session/new":
             # AGENT_BAR_FAKE_START_MODE simula o claude-agent-acp 0.109, que abre a sessao em "auto"
             available = [{"id": "default", "name": "Ask"}, {"id": "acceptEdits", "name": "Accept edits"},

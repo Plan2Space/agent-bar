@@ -15,6 +15,7 @@ UNSUPPORTED aqui: o adaptador ainda nao executa tool calls (anunciar seria menti
 """
 from __future__ import annotations
 
+import base64
 import concurrent.futures as cf
 import itertools
 import json
@@ -28,6 +29,7 @@ from typing import Any
 from agent_bar.platform.adapter import (
     AdapterStatus,
     AgentEvent,
+    CapabilityUnsupported,
     EffortRejected,
     ModelRejected,
     NotConnected,
@@ -37,6 +39,7 @@ from agent_bar.platform.adapter import (
     ProviderUnavailable,
     SessionNotFound,
     SessionRequest,
+    load_images,
 )
 from agent_bar.platform.contracts import all_capabilities, capability
 from agent_bar.platform.discovery import OLLAMA_DEFAULT
@@ -115,7 +118,8 @@ class OllamaAdapter(ProviderAdapter):
             effort_select=capability("SUPPORTED" if thinking else "UNSUPPORTED",
                                      f"{ev}: thinking.values do /api/show" if thinking else
                                      f"{ev}: nenhum modelo local anuncia thinking", v),
-            images=capability("UNSUPPORTED", "o adaptador ainda nao envia imagens", v),
+            images=capability("SUPPORTED" if any(m["images"] == "SUPPORTED" for m in self._models.values()) else "UNSUPPORTED",
+                              f"{ev}: capabilities.vision do /api/show (imagem em base64 no /api/chat)", v),
         )
         if not self._connected and not self.version:
             caps = all_capabilities(method="nao verificado: desconectado")
@@ -222,8 +226,16 @@ class OllamaAdapter(ProviderAdapter):
             self._history[sid] = []
         return dict(rec)
 
-    def send_prompt(self, session_id: str, text: str, on_event) -> cf.Future:
+    def send_prompt(self, session_id: str, text: str, on_event, images=()) -> cf.Future:
         self._need()
+        payloads = []
+        if images:                                                           # antes de reservar o turno: recusa limpa
+            if session_id not in self._sessions:
+                raise SessionNotFound(session_id)
+            model = self._sessions[session_id]["model_accepted"]
+            if self._models.get(model, {}).get("images") != "SUPPORTED":
+                raise CapabilityUnsupported("images", f"{model} nao anuncia vision no /api/show")
+            payloads = load_images(images)
         with self._lock:
             if session_id not in self._sessions:
                 raise SessionNotFound(session_id)
@@ -232,8 +244,10 @@ class OllamaAdapter(ProviderAdapter):
             run = {"resp": None, "cancel": threading.Event()}
             self._running[session_id] = run
         rec = self._sessions[session_id]
-        messages = [*self._history[session_id], {"role": "user", "content": text}]
-        body: dict = {"model": rec["model_accepted"], "messages": messages, "stream": True}
+        messages = [*self._history[session_id], {"role": "user", "content": text}]   # historico: so o texto
+        sent = [*messages[:-1], {**messages[-1], "images": [base64.b64encode(p.data).decode("ascii") for p in payloads]}] \
+            if payloads else messages                                        # a imagem vai so neste turno
+        body: dict = {"model": rec["model_accepted"], "messages": sent, "stream": True}
         think = think_param(rec["effort_accepted"])
         if think is not None:
             body["think"] = think
