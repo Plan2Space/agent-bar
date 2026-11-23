@@ -70,6 +70,7 @@ class CockpitWindow(QMainWindow):
         self.sessions.notify_fn = self._notify
         self.sessions.visible_fn = lambda: self.isActiveWindow() and self.tabs.currentWidget() is self.sessions
         self.workflows.notify_fn = self._notify
+        self.workflows.inbox = self.sessions.inbox                           # pedidos dos Fluxos no mesmo Inbox
         self.prs.review_requested.connect(self.open_review)
         self.tabs.currentChanged.connect(self._tab_changed)
         self.setCentralWidget(self.tabs)

@@ -98,7 +98,8 @@ def handle_prompt(rid: int, params: dict) -> None:
     text = " ".join(b.get("text", "") for b in params.get("prompt", []) if b.get("type") == "text").strip()
     word, _, rest = text.partition(" ")
     reason = "end_turn"
-    for kw, w in (("STUB-SLEEP", "sleep"), ("STUB-SLOW", "slow"), ("STUB-PERM", "perm"), ("STUB-FAIL", "die")):
+    for kw, w in (("STUB-SLEEP", "sleep"), ("STUB-SLOW", "slow"), ("STUB-PERM", "perm"), ("STUB-PERMRM", "permrm"),
+                   ("STUB-FAIL", "die")):
         if kw in text:                                       # gatilhos em qualquer lugar do prompt (etapas de fluxo)
             word = w
     if "ECHO-PROMPT" in text:                                # devolve o texto EXATO recebido (teste da biblioteca)
