@@ -122,10 +122,10 @@ def test_missing_render_and_human_verdict_are_listed_explicitly(tmp_path):
 def test_history_lists_every_stage_including_unpublished(tmp_path):
     tab = make(build(tmp_path / "ev"), expected={("planta_x", "quarto"): ("A", "B", "R1")})
     try:
-        stages = [tab.history.topLevelItem(i).text(0) for i in range(tab.history.topLevelItemCount())]
+        stages = [tab.history.topLevelItem(i).text(1) for i in range(tab.history.topLevelItemCount())]
         assert stages == ["A", "B", "C", "R1"]
         r1 = tab.history.topLevelItem(3)
-        assert r1.text(2) == "ausente (não publicado)" and r1.text(6) == "PENDING_HUMAN"
+        assert r1.text(4) == "ausente (não publicado)" and r1.text(9) == "PENDING_HUMAN"
     finally:
         dispose(tab)
 
@@ -244,5 +244,62 @@ def test_gallery_still_shows_the_engine_when_the_evidence_is_down(tmp_path):
         r4 = gallery_rows(tab)[R4]
         assert r4[1] == "MOTOR_NAO_PUBLICADO" and r4[4] == "FAIL" and r4[10].startswith("não: ")
         assert "evidence indisponível" in tab.gallery_note.text()
+    finally:
+        dispose(tab)
+
+
+# ------------------------------------------------------------------- S01C-F1-04: 3 cartões e colunas do histórico
+def history_rows(tab):
+    h = tab.history
+    return [[h.topLevelItem(i).text(c) for c in range(h.columnCount())] for i in range(h.topLevelItemCount())]
+
+
+def test_three_cards_reference_latest_render_and_best_without_evaluation(tmp_path):
+    from tests.cockpit.gallery_fixture import UNPUB_FAIL
+    tab = _gallery_tab(tmp_path)
+    try:
+        cv = tab.card_views
+        assert list(cv) == ["referência", "último render", "melhor conhecido"]
+        assert cv["referência"].card.item.item_id == "ref-quarto-r2@v1"           # a com sha conferido
+        assert not cv["referência"].pane.image.pixmap().isNull()
+        last = cv["último render"].card
+        assert last.item.item_id == UNPUB_FAIL                                    # maior started_at, mesmo FAIL
+        assert "render FAIL" in last.text and "motor, não publicado" in last.text
+        best = cv["melhor conhecido"]
+        assert best.card.item is None and best.card.text == "sem avaliação"
+        assert best.pane.path is None and best.pane.image.text() == "sem avaliação"
+    finally:
+        dispose(tab)
+
+
+def test_history_is_newest_first_with_source_visual_and_trend_columns(tmp_path):
+    from tests.cockpit.gallery_fixture import R4, R4B, UNPUB_FAIL
+    tab = _gallery_tab(tmp_path)
+    try:
+        assert [tab.history.headerItem().text(c) for c in range(tab.history.columnCount())] == [
+            "Data", "Etapa", "Run", "Fonte", "Situação", "Geometria", "Funcional", "Visual", "Tendência", "Humano"]
+        rows = history_rows(tab)
+        assert rows[0][2] == UNPUB_FAIL and rows[0][0] == "23/11 06:16 UTC" and rows[0][3] == "motor, não publicado"
+        r4 = next(r for r in rows if r[2] == R4)
+        assert r4[1] == "R4-render" and r4[3] == "publicado" and r4[4] == "render FAIL"
+        assert all(r[2] != R4B for r in rows)                                    # uma vez, como publicado (VS-R4)
+        renders = [r for r in rows if r[4].startswith("render")]
+        assert renders and all(r[7] == "sem avaliação" and r[8] == "inconclusivo (sem avaliação)" for r in renders)
+        assert all(r[9] == "PENDING_HUMAN" for r in rows)
+        dated = [r[0] for r in rows if r[0] not in ("—", "sem data")]
+        assert dated == sorted(dated, key=lambda d: (d[3:5], d[0:2], d[6:]), reverse=True)
+    finally:
+        dispose(tab)
+
+
+def test_cards_follow_the_evaluation_hook(tmp_path):
+    from tests.cockpit.gallery_fixture import OK_RENDER
+    tab = _gallery_tab(tmp_path)
+    try:
+        tab.evaluations_for = lambda item: ["avaliação"] if item.item_id == OK_RENDER else []
+        tab._fill_gallery()
+        assert tab.card_views["melhor conhecido"].card.text.startswith("inconclusivo")  # regra: S01C-F1-07
+        row = next(r for r in history_rows(tab) if r[2] == OK_RENDER)
+        assert row[7] == "1 avaliação(ões)"
     finally:
         dispose(tab)

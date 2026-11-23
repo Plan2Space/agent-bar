@@ -156,3 +156,48 @@ def test_real_sources_show_render4_fail_and_never_eligible():
     assert len(r4) == 1 and r4[0].render_verdict == "FAIL" and not r4[0].eligible(evaluations=["x"])
     assert not any(i.item_id == "20261122-planta_74_suite_01-render4b" for i in items)
     assert all(not i.eligible() for i in items)                                  # sem avaliação, nada é "melhor"
+
+
+# --------------------------------------------------------------------------------- S01C-F1-04 (lógica dos cartões)
+def test_latest_render_is_the_greatest_started_at_whatever_the_verdict(tmp_path):
+    items = gallery(tmp_path).of(PLANT, ROOM)
+    assert G.latest_render(items).item_id == UNPUB_FAIL
+    older_first = list(reversed(items))                                          # a ordem de entrada não importa
+    assert G.latest_render(older_first).item_id == UNPUB_FAIL
+
+
+def test_latest_render_ignores_builds_and_references(tmp_path):
+    a = G.GalleryItem(G.ENGINE, PLANT, ROOM, "b", "build", started_at="2026-11-24T00:00:00Z", day="2026-11-24")
+    r = G.GalleryItem(G.REFERENCE, PLANT, ROOM, "r", "reference", started_at="2026-11-25T00:00:00Z", day="2026-11-25")
+    x = G.GalleryItem(G.ENGINE, PLANT, ROOM, "x", "render", started_at="2026-11-20T00:00:00Z", day="2026-11-20")
+    assert G.latest_render([a, r, x]) is x and G.latest_render([a, r]) is None
+
+
+def test_without_evaluation_the_best_card_says_so(tmp_path):
+    cards = G.cards(gallery(tmp_path).of(PLANT, ROOM))
+    assert [c.role for c in cards] == ["referência", "último render", "melhor conhecido"]
+    assert cards[2].item is None and cards[2].text == "sem avaliação"
+
+
+def test_evaluation_only_on_a_fail_render_never_makes_it_best(tmp_path):
+    items = gallery(tmp_path).of(PLANT, ROOM)
+    cards = G.cards(items, lambda i: ["avaliação"] if i.item_id == R4 else [])
+    assert cards[2].item is None and cards[2].text.startswith("nenhum render elegível")
+
+
+def test_best_card_never_names_a_winner_before_the_rule_exists(tmp_path):
+    items = gallery(tmp_path).of(PLANT, ROOM)
+    cards = G.cards(items, lambda i: ["avaliação"] if i.item_id == OK_RENDER else [])
+    assert cards[2].item is None and "S01C-F1-07" in cards[2].text
+
+
+def test_visual_and_trend_texts():
+    item = G.GalleryItem(G.ENGINE, PLANT, ROOM, "x", "render")
+    assert G.visual_text([]) == "sem avaliação" and G.trend_text(item, []) == "inconclusivo (sem avaliação)"
+    assert G.visual_text(["a", "b"]) == "2 avaliação(ões)"
+
+
+def test_card_image_prefers_the_render_frame(tmp_path):
+    img = lambda k: G.GalleryImage(k, Path(k), "0" * 64, "r", k)                 # noqa: E731
+    item = G.GalleryItem(G.PUBLISHED, PLANT, ROOM, "x", "render", images=[img("cama_3q"), img("render_dia_cama_3q")])
+    assert G.primary_image(item).key == "render_dia_cama_3q"

@@ -188,6 +188,75 @@ class Gallery:
         return next((i for i in self.items if i.item_id == item_id), None)
 
 
+# ------------------------------------------------------------------------------- cartões e histórico (S01C-F1-04)
+NO_EVALUATION = "sem avaliação"
+BEST_RULE_PENDING = "inconclusivo: regra de melhor render ainda não implementada (S01C-F1-07)"
+
+
+@dataclass(frozen=True)
+class Card:
+    role: str                    # referência | último render | melhor conhecido
+    item: GalleryItem | None
+    text: str                    # legenda do item, ou o motivo de não haver item
+
+    @property
+    def image(self) -> GalleryImage | None:
+        return primary_image(self.item) if self.item is not None else None
+
+
+def primary_image(item: GalleryItem) -> GalleryImage | None:
+    """Imagem do cartão: o quadro de render quando houver (no publicado, `render_*`), senão a primeira conferida."""
+    for prefix in ("render_dia", "render_", "dia_"):
+        hit = next((i for i in item.images if i.key.startswith(prefix)), None)
+        if hit is not None:
+            return hit
+    return item.images[0] if item.images else None
+
+
+def caption(item: GalleryItem) -> str:
+    extra = f" · render {item.render_verdict}" if item.kind == "render" else ""
+    return f"{item.item_id} · {item.when()} · {item.source_label}{extra}"
+
+
+def latest_render(items: Iterable[GalleryItem]) -> GalleryItem | None:
+    """"Último render" = o run de render de maior `started_at` (VS-R3), seja qual for o veredito."""
+    renders = [i for i in items if i.kind == "render" and (i.started_at or i.day)]
+    return max(renders, key=GalleryItem.sort_key, default=None)
+
+
+def reference_item(items: Iterable[GalleryItem]) -> GalleryItem | None:
+    refs = sorted((i for i in items if i.source == REFERENCE), key=GalleryItem.sort_key, reverse=True)
+    return next((i for i in refs if i.images), refs[0] if refs else None)
+
+
+def visual_text(evaluations: Sequence[object]) -> str:
+    return f"{len(evaluations)} avaliação(ões)" if evaluations else NO_EVALUATION
+
+
+def trend_text(item: GalleryItem, evaluations: Sequence[object]) -> str:
+    """Tendência por pares na mesma câmera é do S01C-F1-07; até lá, nunca um número inventado."""
+    if item.kind != "render":
+        return "—"
+    return f"inconclusivo ({NO_EVALUATION})" if not evaluations else "inconclusivo (S01C-F1-07)"
+
+
+def cards(items: Sequence[GalleryItem], evaluations_for=lambda _item: ()) -> list[Card]:
+    """Faixa de 3 cartões: referência, último render e melhor conhecido (S01C-R7). Sem avaliação válida não há
+    "melhor": o cartão diz `sem avaliação`. Nada aqui é veredito visual."""
+    ref = reference_item(items)
+    last = latest_render(items)
+    out = [Card("referência", ref, caption(ref) if ref else "sem referência registrada para o cômodo"),
+           Card("último render", last, caption(last) if last else "nenhum render")]
+    renders = [i for i in items if i.kind == "render"]
+    if not any(evaluations_for(i) for i in renders):
+        out.append(Card("melhor conhecido", None, NO_EVALUATION))
+    elif not any(i.eligible(evaluations_for(i)) for i in renders):
+        out.append(Card("melhor conhecido", None, "nenhum render elegível (FAIL, build incompleto ou sem avaliação)"))
+    else:
+        out.append(Card("melhor conhecido", None, BEST_RULE_PENDING))
+    return out
+
+
 def _day_of(run_id: str) -> str:
     m = _DAY.match(run_id)
     return f"{m.group(1)}-{m.group(2)}-{m.group(3)}" if m else ""
@@ -385,5 +454,7 @@ def build_gallery(catalog: E.Catalog | None, engine: Path | None = None, library
     return g
 
 
-__all__ = ["ENGINE", "IMPORTED", "PUBLISHED", "REFERENCE", "SOURCES", "UNPUBLISHED_NOTE", "Gallery", "GalleryImage",
-           "GalleryItem", "build_gallery", "engine_dir", "file_sha256", "library_dir", "load_engine", "load_references"]
+__all__ = ["ENGINE", "IMPORTED", "NO_EVALUATION", "PUBLISHED", "REFERENCE", "SOURCES", "UNPUBLISHED_NOTE", "Card",
+           "Gallery", "GalleryImage", "GalleryItem", "build_gallery", "caption", "cards", "engine_dir", "file_sha256",
+           "latest_render", "library_dir", "load_engine", "load_references", "primary_image", "reference_item",
+           "trend_text", "visual_text"]
