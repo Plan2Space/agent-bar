@@ -125,7 +125,8 @@ class ChatView(QWidget):
                  workspaces_fn: Callable[[], list[Path]] = prof.workspaces,
                  context_provider: Callable[[], str] | None = None,
                  provider_factory: Callable[..., object] | None = None,
-                 inbox: PermissionInbox | None = None) -> None:
+                 inbox: PermissionInbox | None = None, broker: PermissionBroker | None = None,
+                 session_gate: Callable[[prof.AgentProfile], str | None] | None = None) -> None:
         super().__init__()
         self.context_provider = context_provider                          # F4: biblioteca (texto exato do preview)
         self.store = store or ChatStore()
@@ -135,13 +136,16 @@ class ChatView(QWidget):
         self.provider_factory = provider_factory or _default_provider_client
         self.inbox = inbox if inbox is not None else PermissionInbox(data_dir() / "permissions.sqlite")
         self._own_inbox = inbox is None
-        self.broker = PermissionBroker(self.inbox, on_change=self._permission_changed)
+        self._own_broker = broker is None                                    # abas de sessao compartilham um broker
+        self.broker = broker if broker is not None else PermissionBroker(self.inbox, on_change=self._permission_changed)
+        self.session_gate = session_gate                                     # limite de sessoes do provedor (F5)
         self.confirm_irreversible = confirm_irreversible or _confirm_irreversible_dialog
         self._perm_cards: dict[str, PermissionCard] = {}
         self.permission_listeners: list[Callable[[str], None]] = []          # abas que mostram o mesmo pedido
         self._expire_timer = QTimer(self)
         self._expire_timer.timeout.connect(self.broker.expire)               # vencido = recusa ao agente, nunca pendurado
-        self._expire_timer.start(2000)
+        if self._own_broker:                                                 # broker compartilhado: o container vigia
+            self._expire_timer.start(2000)
         self.inbox.cancel_open("o Studio foi reiniciado: o agente que pediu nao espera mais a resposta")
         self.ask_permission = ask_permission
         self.confirm_mode = confirm_mode
@@ -386,6 +390,13 @@ class ChatView(QWidget):
         ws = self.workspace()
         if not ws:
             self._show_error(None, "escolha um workspace")
+            return
+        refusal = self.session_gate(self.profile()) if self.session_gate is not None else None
+        if refusal:                                                          # limite medido do provedor (F5)
+            self._set_busy(False)
+            self.pending_prompt = None
+            self._restore_draft()
+            self._show_error(None, refusal)
             return
         self.gen += 1
         gen = self.gen
@@ -891,7 +902,11 @@ class ChatView(QWidget):
         self._closing = []
         self.client = None
         self._expire_timer.stop()
-        self.broker.cancel_all("a aba do Chat foi fechada")
+        if self._own_broker:
+            self.broker.cancel_all("a aba do Chat foi fechada")
+        else:                                                                # so os pedidos DESTA conversa
+            mine = set(self._perm_cards)                                     # por id do pedido: ids de sessao ACP se repetem
+            self.broker.cancel_where(lambda eid, _req: eid in mine, "a aba da sessão foi fechada")
         if self._own_inbox:
             self.inbox.cancel_open("a aba do Chat foi fechada")
             self.inbox.close()

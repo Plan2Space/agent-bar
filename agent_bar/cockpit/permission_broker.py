@@ -112,6 +112,18 @@ class PermissionBroker:
             self._changed(eid)
         return len(items)
 
+    def cancel_where(self, pred: Callable[[str, PermissionRequest], bool], why: str) -> int:
+        """Cancela so os pedidos abertos que `pred(entry_id, req)` escolhe (ex.: os que uma aba registrou)."""
+        with self._lock:
+            items = [(eid, o) for eid, o in self._open.items() if pred(eid, o.req)]
+            for eid, _ in items:
+                del self._open[eid]
+        for eid, o in items:
+            self.inbox.cancel_one(eid, why)
+            o.respond(None)
+            self._changed(eid)
+        return len(items)
+
     def _changed(self, entry_id: str) -> None:
         if self.on_change is not None:
             try:

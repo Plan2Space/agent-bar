@@ -8,6 +8,7 @@ from agent_bar.cockpit.acp import AsyncRuntime
 from agent_bar.cockpit.github import GhClient, configured_repos
 from agent_bar.cockpit.notifications import NotificationCenter
 from agent_bar.cockpit.ui.chat import ChatView
+from agent_bar.cockpit.ui.chat_sessions import ChatSessions
 from agent_bar.cockpit.ui.dev_tab import DevTab
 from agent_bar.cockpit.ui.github_tabs import ActionsTab, PrsTab
 from agent_bar.cockpit.ui.library_tab import LibraryTab
@@ -32,13 +33,15 @@ class CockpitWindow(QMainWindow):
         self.tabs = QTabWidget()
         self.tabs.setStyleSheet(TAB_CSS)
         self.library: LibraryTab | None = None
-        self.chat = ChatView(runtime=self.runtime, context_provider=lambda: self.library.context() if self.library else "",
-                             **chat_kwargs)
-        self.library = LibraryTab(self.chat.workspace, **({"discover_fn": discover_fn} if discover_fn else {}))
+        inbox = chat_kwargs.pop("inbox", None)
+        self.sessions = ChatSessions(runtime=self.runtime, inbox=inbox,              # F5: abas de sessao no Chat
+                                     context_provider=lambda: self.library.context() if self.library else "",
+                                     **chat_kwargs)
+        self.library = LibraryTab(lambda: self.chat.workspace(), **({"discover_fn": discover_fn} if discover_fn else {}))
         wf_kwargs = {k: chat_kwargs[k] for k in ("profiles_fn", "ask_permission") if k in chat_kwargs}
-        self.workflows = WorkflowsTab(self.runtime, self.chat.workspace, context_fn=self.library.context,
+        self.workflows = WorkflowsTab(self.runtime, lambda: self.chat.workspace(), context_fn=self.library.context,
                                       specs_root=specs_root, **wf_kwargs)
-        self.tabs.addTab(self.chat, "Chat")
+        self.tabs.addTab(self.sessions, "Chat")
         self.tabs.addTab(self.workflows, "Fluxos")
         self.review = ReviewTab(**(review_kwargs or {}))
         self.tabs.addTab(self.review, "Revisão visual")
@@ -52,20 +55,20 @@ class CockpitWindow(QMainWindow):
         self.tabs.addTab(self.actions, "Actions")
         self.dev = DevTab(use_workspace=self._use_sandbox, **(dev_kwargs or {}))
         self.tabs.addTab(self.dev, "Dev")
-        self.permissions = PermissionsTab(self.chat.inbox, answer_fn=self.chat.answer_permission,
-                                          is_open_fn=self.chat.broker.is_open)  # F4/F4b: o mesmo inbox e broker do Chat
+        self.permissions = PermissionsTab(self.sessions.inbox, answer_fn=self.sessions.answer_permission,
+                                          is_open_fn=self.sessions.broker.is_open)  # um inbox e um broker para todas as abas
         self.tabs.insertTab(1, self.permissions, "Permissões")
-        self.center = NotificationCenter(self.chat.inbox.path)              # F3: mesmo SQLite do Inbox
-        self.notifications = NotificationsTab(self.center, inbox=self.chat.inbox, answer_fn=self.chat.answer_permission,
-                                              is_open_fn=self.chat.broker.is_open)
-        self.chat.permission_listeners += [lambda _id: self.permissions.refresh(), lambda _id: self.notifications.refresh()]
+        self.center = NotificationCenter(self.sessions.inbox.path)          # F3: mesmo SQLite do Inbox
+        self.notifications = NotificationsTab(self.center, inbox=self.sessions.inbox, answer_fn=self.sessions.answer_permission,
+                                              is_open_fn=self.sessions.broker.is_open)
+        self.sessions.permission_listeners += [lambda _id: self.permissions.refresh(), lambda _id: self.notifications.refresh()]
         self.tabs.insertTab(2, self.notifications, "Notificações")
         self.tabs.setCornerWidget(self.notifications.bell, Qt.Corner.TopRightCorner)
         self.notifications.bell.show()
         self.notifications.bell.clicked.connect(lambda: self.tabs.setCurrentWidget(self.notifications))
         self.notifications.open_link.connect(self.open_link)
-        self.chat.notify_fn = self._notify
-        self.chat.visible_fn = lambda: self.isActiveWindow() and self.tabs.currentWidget() is self.chat
+        self.sessions.notify_fn = self._notify
+        self.sessions.visible_fn = lambda: self.isActiveWindow() and self.tabs.currentWidget() is self.sessions
         self.workflows.notify_fn = self._notify
         self.prs.review_requested.connect(self.open_review)
         self.tabs.currentChanged.connect(self._tab_changed)
@@ -82,12 +85,17 @@ class CockpitWindow(QMainWindow):
     def open_link(self, link: str) -> None:
         """Leva a origem de uma notificacao: `permissions:<id>`, `chat`, `workflows`."""
         kind, _, ref = link.partition(":")
-        target = {"permissions": self.permissions, "chat": self.chat, "workflows": self.workflows}.get(kind)
+        target = {"permissions": self.permissions, "chat": self.sessions, "workflows": self.workflows}.get(kind)
         if target is None:
             return
         self.tabs.setCurrentWidget(target)
         if target is self.permissions and ref:
             self.permissions.select(ref)
+
+    @property
+    def chat(self) -> ChatView:
+        """A conversa da aba de sessao atual (compatibilidade: o resto da janela fala com "o Chat")."""
+        return self.sessions.current()
 
     def _tab_changed(self, idx: int) -> None:
         tab = self.tabs.widget(idx)
@@ -104,7 +112,7 @@ class CockpitWindow(QMainWindow):
 
     def open_correction(self, workspace: str, text: str) -> None:
         """F7.4: o pedido de correção vai para o Chat preenchido (no checkout do motor, se existir); o envio é manual."""
-        self.tabs.setCurrentWidget(self.chat)
+        self.tabs.setCurrentWidget(self.sessions)
         if workspace:
             self.chat.prefill(workspace, text)
         else:
@@ -112,7 +120,7 @@ class CockpitWindow(QMainWindow):
 
     def open_review(self, workspace: str, prompt: str) -> None:
         """Revisao assistida (R21): conversa nova no checkout do repo com o prompt pronto. Enviar e com o Felipe."""
-        self.tabs.setCurrentWidget(self.chat)
+        self.tabs.setCurrentWidget(self.sessions)
         self.chat.prefill(workspace, prompt)
 
     def shutdown(self) -> None:
@@ -127,7 +135,7 @@ class CockpitWindow(QMainWindow):
         self.prs.shutdown()
         self.library.shutdown()
         self.actions.shutdown()
-        self.chat.shutdown()
+        self.sessions.shutdown()
         self.center.close()
         self.runtime.stop()
 

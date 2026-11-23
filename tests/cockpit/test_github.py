@@ -231,7 +231,7 @@ def test_window_review_opens_prefilled_chat_without_sending(gh, tmp_path, monkey
     try:
         assert [win.tabs.tabText(i) for i in range(win.tabs.count())] == ["Chat", "Permissões", "Notificações", "Fluxos", "Revisão visual", "Biblioteca", "PRs", "Actions", "Dev"]
         win.open_review(str(ws), "Revise o PR X#1")
-        assert win.tabs.currentWidget() is win.chat
+        assert win.tabs.currentWidget() is win.sessions
         assert win.chat.workspace() == str(ws)
         assert win.chat.input.toPlainText() == "Revise o PR X#1"
         assert win.chat.chat.messages == []                                     # nada foi enviado

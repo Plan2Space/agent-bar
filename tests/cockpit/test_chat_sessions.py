@@ -1,0 +1,99 @@
+"""F5 (UX): abas de sessao no Chat — conversas simultaneas, limite medido por provedor, fechamento obrigatorio,
+um inbox/broker para todas as abas, sempre uma aba aberta."""
+from __future__ import annotations
+
+import os
+import sys
+import time
+
+import pytest
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+QtWidgets = pytest.importorskip("PySide6.QtWidgets")
+
+from agent_bar.cockpit.profiles import AgentProfile  # noqa: E402
+from agent_bar.cockpit.store import ChatStore  # noqa: E402
+from agent_bar.cockpit.ui.chat_sessions import ChatSessions  # noqa: E402
+from tests.support.process import pid_alive  # noqa: E402
+
+_APP = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+STUB = os.path.join(os.path.dirname(__file__), "fake_acp_agent.py")
+
+
+def wait(cond, timeout=15.0):
+    end = time.monotonic() + timeout
+    while time.monotonic() < end:
+        _APP.processEvents()
+        if cond():
+            return True
+        time.sleep(0.01)
+    return False
+
+
+@pytest.fixture
+def sessions(tmp_path):
+    os.environ["AGENT_BAR_COCKPIT_DATA"] = str(tmp_path / "data")
+    (tmp_path / "ws").mkdir()
+    s = ChatSessions(store=ChatStore(tmp_path / "data"), profiles_fn=lambda: [AgentProfile("stub", "Stub", (sys.executable, STUB))],
+                     workspaces_fn=lambda: [tmp_path / "ws"], limits={"stub": 2})
+    yield s
+    s.shutdown()
+    s.deleteLater()
+    from PySide6.QtCore import QCoreApplication, QEvent
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+
+
+def agent_texts(view):
+    return [m["text"] for m in view.chat.messages if m["role"] == "agent"]
+
+
+def test_two_conversations_run_at_the_same_time_each_with_its_own_agent(sessions):
+    a = sessions.current()
+    b = sessions.add_session()
+    a.send("slow")
+    b.send("echo 2")
+    assert wait(lambda: not b.busy)
+    assert a.busy and agent_texts(b) == ["c0 c1 "]                          # b terminou com a ainda trabalhando
+    assert a.client.pid != b.client.pid
+    sessions._tick()
+    assert sessions.tabs.tabText(0).startswith("●") and sessions.tabs.tabText(1).startswith("○")
+    a.stop()
+    assert wait(lambda: not a.busy)
+
+
+def test_opening_past_the_measured_limit_is_refused_before_a_process_starts(sessions):
+    first, second = sessions.current(), sessions.add_session()
+    for v in (first, second):
+        v.send("echo 1")
+        assert wait(lambda v=v: not v.busy)
+    third = sessions.add_session()
+    third.input.setPlainText("terceira")
+    third.send("terceira")
+    assert third.client is None and not third.busy
+    assert "limite medido" in third.banner_label.text() and third.input.toPlainText() == "terceira"
+    sessions.close_session(sessions.tabs.indexOf(first))
+    third.send(third.input.toPlainText())
+    assert wait(lambda: not third.busy) and third.client is not None
+
+
+def test_closing_a_tab_ends_its_agent_and_cancels_only_its_permission_requests(sessions):
+    a = sessions.current()
+    b = sessions.add_session()
+    a.send("perm")
+    b.send("perm")
+    assert wait(lambda: a._perm_cards and b._perm_cards)
+    pid = a.client.pid
+    ea, eb = next(iter(a._perm_cards)), next(iter(b._perm_cards))
+    sessions.close_session(sessions.tabs.indexOf(a))
+    assert wait(lambda: not pid_alive(pid), 10)
+    got = sessions.inbox.get(ea)
+    assert got.status == "CANCELLED" and "aba da sessão" in got.result
+    assert sessions.broker.is_open(eb) and sessions.inbox.get(eb).status == "PENDING"
+    assert sessions.answer_permission(eb, "allow_once")                      # pela aba Permissoes/Notificacoes
+    assert wait(lambda: not b.busy) and agent_texts(b)[-1] == "outcome=selected:allow"
+    assert "permitido" in b._perm_cards[eb].result.text()
+
+
+def test_there_is_always_one_conversation(sessions):
+    sessions.close_session(0)
+    assert sessions.tabs.count() == 1 and len(sessions.views) == 1

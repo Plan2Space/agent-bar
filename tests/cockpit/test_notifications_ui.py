@@ -118,7 +118,7 @@ def test_window_wires_bell_chat_and_links(tmp_path):
         win.notifications.bell.click()
         assert win.tabs.currentWidget() is win.notifications
         win.open_link("chat")
-        assert win.tabs.currentWidget() is win.chat
+        assert win.tabs.currentWidget() is win.sessions
     finally:
         win.shutdown()
         win.deleteLater()
