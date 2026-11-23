@@ -130,7 +130,7 @@ def test_session_manager_recovers_a_claude_like_session_with_context(tmp_path):
     m = SessionManager({"fake-acp": lambda: make(tmp_path)})
     try:
         s = m.open("fake-acp")
-        adapter = m._adapters["fake-acp"]
+        adapter = m._adapters[("fake-acp", "")]
         subprocess.run(["taskkill", "/PID", str(adapter.owned_pids()[0]), "/T", "/F"], capture_output=True)
         end = time.monotonic() + 10
         while time.monotonic() < end and adapter.owned_pids():
