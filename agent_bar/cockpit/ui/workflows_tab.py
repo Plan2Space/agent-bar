@@ -59,10 +59,12 @@ class WorkflowsTab(QWidget):
                  profiles_fn: Callable[[], list[prof.AgentProfile]] = prof.profiles,
                  specs_root: Path | None = None,
                  ask_permission: Callable[[PermissionRequest, QWidget], str | None] = ask_permission_dialog,
-                 confirm_modes: Callable[[list[tuple[str, str]], QWidget], bool] | None = None) -> None:
+                 confirm_modes: Callable[[list[tuple[str, str]], QWidget], bool] | None = None,
+                 inbox=None) -> None:
         super().__init__()
         self.confirm_modes = confirm_modes or confirm_risky_stage_modes
         self.notify_fn: Callable[..., None] | None = None
+        self.inbox = inbox                                                   # o mesmo Permission Inbox do Chat
         self.rt = runtime
         self.workspace_fn = workspace_fn
         self.context_fn = context_fn
@@ -281,7 +283,7 @@ class WorkflowsTab(QWidget):
         self.runner = W.WorkflowRunner(self.wf, runtime=self.rt, argv_for=self._argv_for, spec_text=spec_text,
                                        context_for=lambda st: context, on_event=self.bridge.event.emit,
                                        on_permission=lambda i, req, respond: self.bridge.permission.emit(i, req, respond),
-                                       stderr_dir=data_dir() / "logs", confirmed_modes=risky)
+                                       stderr_dir=data_dir() / "logs", confirmed_modes=risky, inbox=self.inbox)
         self.run_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
         self.run_future = self.runner.start()
