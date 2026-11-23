@@ -25,6 +25,7 @@ from agent_bar.cockpit.acp import (
 )
 from agent_bar.cockpit.devmode import irreversible_request
 from agent_bar.cockpit.library import git_sha
+from agent_bar.cockpit.permission_inbox import AlreadyDecided, InboxClosed, PermissionInbox
 from agent_bar.cockpit.store import atomic_write_json, data_dir
 
 SPEC_LIMIT = 60_000
@@ -178,9 +179,10 @@ class WorkflowRunner:
                  on_event: Callable[[Event], None] = lambda e: None,
                  on_permission: Callable[[int, PermissionRequest, Callable[[str | None], None]], None] | None = None,
                  client_factory: ClientFactory = AcpClient, stderr_dir: Path | None = None,
-                 confirmed_modes: Collection[tuple[str, str]] = ()) -> None:
+                 confirmed_modes: Collection[tuple[str, str]] = (), inbox: PermissionInbox | None = None) -> None:
         self.wf = wf
         self.confirmed_modes = {(str(n), str(m)) for n, m in confirmed_modes}   # (etapa, modo) que o Felipe aceitou
+        self.inbox = inbox                                                   # todo pedido dos Fluxos tambem vai ao Inbox
         self.rt = runtime
         self.argv_for = argv_for
         self.spec_text = spec_text
@@ -257,9 +259,23 @@ class WorkflowRunner:
         """Decide cada pedido de permissao da etapa: irreversivel nunca e aprovado sozinho (R31); auto_approve so
         escolhe allow_once (R27); sem auto_approve, vai ao callback da UI (ou e recusado)."""
 
-        def on_perm(req: PermissionRequest, respond: Callable[[str | None], None]) -> None:
+        def on_perm(req: PermissionRequest, raw_respond: Callable[[str | None], None]) -> None:
             title = (req.tool_call or {}).get("title", "ferramenta")
             danger = irreversible_request(req.tool_call or {})
+            entry = self._record(st, req)
+            if entry is False:                                                # Inbox fechado: Studio encerrando
+                raw_respond(None)
+                return
+            if entry is not None and entry.status != "PENDING":               # politica ja decidiu (proibido/regra)
+                choice = None if entry.status == "DENIED" else req.strongest_once()
+                st.add_log(f"permissão {entry.status.lower()} por {entry.decided_by}: {title}")
+                self._emit(type="log", stage=i, line=st.log[-1])
+                raw_respond(choice)
+                return
+
+            def respond(choice: str | None, by: str = "human") -> None:      # grava a decisao antes de responder
+                self._decide(entry, req, choice, by)
+                raw_respond(choice)
             if self.wf.auto_approve and danger:
                 st.add_log(f"permissão automática RECUSADA (irreversível: {danger}): {title}")
                 self._emit(type="log", stage=i, line=st.log[-1])
@@ -271,13 +287,34 @@ class WorkflowRunner:
                 choice = req.strongest_once()
                 st.add_log(f"permissão automática ({'allow_once' if choice else 'sem allow_once: recusada'}): {title}")
                 self._emit(type="log", stage=i, line=st.log[-1])
-                respond(choice)
+                respond(choice, "fluxo:auto_approve")
             elif self.on_permission is not None:
                 self.on_permission(i, req, respond)
             else:
-                respond(None)
+                respond(None, "fluxo: ninguem para responder")
 
         return on_perm
+
+    def _record(self, st: Stage, req: PermissionRequest):
+        """Entrada do Inbox (None = sem Inbox; False = Inbox fechado)."""
+        if self.inbox is None:
+            return None
+        try:
+            return self.inbox.record(req.tool_call or {}, provider=f"fluxo:{self.wf.title}:{st.name}",
+                                     session_id=req.session_id, workspace=self.wf.workspace,
+                                     mode_decides_alone=bool(st.mode) and st.mode not in ("default", "plan"),
+                                     auto_mode=self.wf.auto_approve)
+        except InboxClosed:
+            return False
+
+    def _decide(self, entry, req: PermissionRequest, choice: str | None, by: str) -> None:
+        if not entry:
+            return
+        kind = next((str(o.get("kind")) for o in req.options if str(o.get("optionId")) == str(choice)), None)
+        try:
+            self.inbox.decide(entry.id, (kind or choice) if choice else None, by=by)
+        except (InboxClosed, AlreadyDecided, PermissionError):
+            pass                                                             # a resposta ao agente vem primeiro
 
     async def _stage(self, i: int) -> str:
         st = self.wf.stages[i]
@@ -294,6 +331,11 @@ class WorkflowRunner:
                 if u.data.get("title"):
                     titles[tid] = str(u.data["title"])
                 line = f"[{u.data.get('status', '')}] {titles.get(tid, tid)}"
+                if self.inbox is not None and u.data.get("status") in ("completed", "failed"):
+                    try:
+                        self.inbox.finish_tool_call(u.session_id, tid, str(u.data["status"]))
+                    except InboxClosed:
+                        pass
                 st.add_log(line)
                 self._emit(type="log", stage=i, line=line)
 

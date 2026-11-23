@@ -343,3 +343,60 @@ def test_tab_does_not_start_a_flow_whose_risky_stage_mode_was_declined(tmp_path,
         assert tab.wf.stages[0].status == "done"
     finally:
         _dispose(tab)
+
+
+# ------------------------------------------------------------------------- Permission Inbox nos Fluxos
+def _inbox(tmp_path):
+    from agent_bar.cockpit.permission_inbox import PermissionInbox
+    return PermissionInbox(tmp_path / "permissions.sqlite")
+
+
+def test_auto_approve_answers_are_recorded_as_auto_mode_with_the_result(tmp_path, rt):
+    inbox = _inbox(tmp_path)
+    wf = make_wf(tmp_path, {"spec": "STUB-PERM"}, auto=True)
+    runner, _ = run(wf, rt, inbox=inbox)
+    assert runner.start().result(T) == "done"
+    (e,) = inbox.history()
+    assert (e.policy, e.status, e.decision, e.decided_by) == ("AUTO_MODE", "ALLOWED", "allow_once", "fluxo:auto_approve")
+    assert e.result == "completed" and e.provider.startswith("fluxo:Teste:spec")
+    inbox.close()
+
+
+def test_a_manual_answer_from_the_tab_is_recorded_as_human(tmp_path, rt):
+    inbox = _inbox(tmp_path)
+    wf = make_wf(tmp_path, {"spec": "STUB-PERM"})
+    runner, _ = run(wf, rt, inbox=inbox, on_permission=lambda i, req, respond: respond("allow"))
+    assert runner.start().result(T) == "done"
+    (e,) = inbox.history()
+    assert (e.policy, e.status, e.decided_by) == ("NORMAL", "ALLOWED", "human")
+    inbox.close()
+
+
+def test_nobody_to_answer_is_recorded_as_denied(tmp_path, rt):
+    inbox = _inbox(tmp_path)
+    wf = make_wf(tmp_path, {"spec": "STUB-PERM"})
+    runner, _ = run(wf, rt, inbox=inbox)
+    runner.start().result(T)
+    (e,) = inbox.history()
+    assert (e.status, e.decided_by) == ("DENIED", "fluxo: ninguem para responder")
+    inbox.close()
+
+
+def test_irreversible_under_auto_approve_still_goes_to_a_human_and_is_recorded(tmp_path, rt):
+    inbox = _inbox(tmp_path)
+    asked = []
+    wf = make_wf(tmp_path, {"spec": "STUB-PERMRM"}, auto=True)
+    runner, _ = run(wf, rt, inbox=inbox, on_permission=lambda i, req, respond: (asked.append(req), respond(None)))
+    runner.start().result(T)
+    (e,) = inbox.history()
+    assert len(asked) == 1 and (e.policy, e.status, e.decided_by) == ("IRREVERSIBLE", "DENIED", "human")
+    inbox.close()
+
+
+def test_a_closed_inbox_never_leaves_the_agent_waiting(tmp_path, rt):
+    inbox = _inbox(tmp_path)
+    inbox.close()
+    wf = make_wf(tmp_path, {"spec": "STUB-PERM"}, auto=True)
+    runner, _ = run(wf, rt, inbox=inbox)
+    assert runner.start().result(T) == "done"
+    assert wf.stages[0].summary == "outcome=cancelled"

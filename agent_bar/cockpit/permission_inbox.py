@@ -159,11 +159,13 @@ class PermissionInbox:
 
     # ------------------------------------------------------------------------------------------------ registro
     def record(self, tool_call: dict, *, provider: str, session_id: str, workspace: str = "",
-               mode_decides_alone: bool = False) -> Entry:
+               mode_decides_alone: bool = False, auto_mode: bool = False) -> Entry:
         """Grava o pedido (PENDING) antes de qualquer decisao. Regra persistente aplicavel decide na hora
         (PREVIOUSLY_GRANTED), exceto para irreversivel; FORBIDDEN e negado na hora."""
         tc = tool_call or {}
         risk, policy = classify(tc, mode_decides_alone)
+        if auto_mode and policy == "NORMAL":                                 # fluxo com auto_approve (so allow_once)
+            policy = "AUTO_MODE"
         op, resource, reason = describe(tc)
         fp = fingerprint(tc)
         now = self.clock()
