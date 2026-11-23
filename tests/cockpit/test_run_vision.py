@@ -349,7 +349,7 @@ def test_rubric_click_records_the_scores_only_with_a_confirmed_delivery_and_show
     d = tab.design
     tile = next(d.history.item(i).text() for i in range(d.history.count())
                 if d.history.item(i).data(Qt.ItemDataRole.UserRole) == OK_RENDER)
-    assert "visual: vision-d: Fidelidade 3/5 · Cama 2/5 · Materiais 3/5 · Iluminação 4/5 · Mobiliário 3/5" in tile
+    assert "visual: vision-d (câmera cama_3q · luz dia): Fidelidade 3/5 · Cama 2/5 · Materiais 3/5 · Iluminação 4/5 · Mobiliário 3/5" in tile
     assert d.cards["melhor"].item is None                                         # F1-07 decide; avaliação não escolhe
     assert V.LABEL in tab.vision_status.text()
 
@@ -392,3 +392,77 @@ def test_rubric_without_the_model_digest_records_nothing(studio):
     click_rubric_and_wait(tab)
     assert "avaliação NÃO gravada" in tab.evaluation_error and "sem digest do modelo" in tab.evaluation_error
     assert tab.evaluation_store.for_item(tab.gallery.get(OK_RENDER)) == ([], [])
+
+
+# ----------------------------------------------------- revisão do #97: só quadro renderizado, nomeado antes de enviar
+def _with_raw_first(tab, tmp, *, only_raw=False):
+    """Põe uma vista crua (sem render) como 1ª imagem do run, como o cama_3q do rc5-render real."""
+    import hashlib
+    import shutil
+    item = tab.gallery.get(OK_RENDER)
+    raw_path = tmp / "cama_3q_cru.png"
+    shutil.copyfile(item.images[0].path, raw_path)
+    raw_path.write_bytes(raw_path.read_bytes() + b"cru")
+    raw = G.GalleryImage("cama_3q", raw_path, hashlib.sha256(raw_path.read_bytes()).hexdigest(), "r", "views/cama_3q.png")
+    item.images[:] = [raw] if only_raw else [raw, *item.images]
+    return item, raw
+
+
+def _select_run_and_model(win, model):
+    tab = win.review
+    t = tab.gallery_tree
+    t.setCurrentItem(None)
+    t.setCurrentItem(next(t.topLevelItem(i) for i in range(t.topLevelItemCount())
+                          if t.topLevelItem(i).text(3) == OK_RENDER))                # a lista de imagens não é tocada
+    tab.vision_models_btn.click()
+    assert wait(lambda: tab.vision_model_box.count() > 0)
+    tab.vision_model_box.setCurrentIndex(tab.vision_model_box.findData(model))
+
+
+def test_rubric_with_a_raw_first_image_sends_the_preferred_rendered_frame_and_names_it(studio, tmp_path):
+    from PySide6.QtCore import Qt
+
+    win, srv = studio
+    tab = win.review
+    srv.image_reply = _rubric_json()
+    item, raw = _with_raw_first(tab, tmp_path)
+    _select_run_and_model(win, "vision-d")
+    cur = tab.gallery_images.currentItem().data(Qt.ItemDataRole.UserRole)        # a lista abre no quadro preferido
+    assert Path(cur).name == next(i for i in item.images if i.key == "dia_cama_3q").path.name
+    tab.rubric_btn.click()
+    status = tab.vision_status.text()                                             # antes do envio
+    assert "câmera cama_3q · luz dia (sha " in status and "vista" not in status.split("fora da rubrica")[0]
+    assert tab.vision_sending == ["dia_cama_3q"]
+    assert wait(lambda: tab.vision_result is not None or tab.vision_error, timeout=30)
+    sent = images_sent(srv)[0]
+    assert base64.b64encode(raw.path.read_bytes()).decode() not in sent               # a vista crua nunca vai
+    assert sent[1] == b64(next(i for i in item.images if i.key == "dia_cama_3q").path)
+    [ev], _ = tab.evaluation_store.for_item(item)
+    assert ev["camera"] == "dia_cama_3q"
+
+
+def test_rubric_on_a_run_without_rendered_frames_is_refused_and_nothing_is_sent(studio, tmp_path):
+    win, srv = studio
+    tab = win.review
+    srv.image_reply = _rubric_json()
+    _with_raw_first(tab, tmp_path, only_raw=True)
+    _select_run_and_model(win, "vision-d")
+    tab.rubric_btn.click()
+    _APP.processEvents()
+    assert tab.vision_error.startswith("recusado, nada enviado") and "não tem quadro renderizado" in tab.vision_error
+    assert win.image_ledger.list() == [] and not [p for p, _ in srv.requests if p == "/api/chat"]
+
+
+def test_rubric_when_only_the_raw_view_is_selected_uses_the_preferred_rendered_frame_and_says_so(studio, tmp_path):
+    win, srv = studio
+    tab = win.review
+    srv.image_reply = _rubric_json()
+    item, raw = _with_raw_first(tab, tmp_path)
+    _select_run_and_model(win, "vision-d")
+    tab.gallery_images.clearSelection()
+    tab.gallery_images.item(0).setSelected(True)                                 # Felipe marcou só a vista crua
+    assert tab.selected_image_keys() == ["cama_3q"]
+    tab.rubric_btn.click()
+    assert tab.vision_sending == ["dia_cama_3q"]                                   # dia antes de noite (ordem fixa)
+    assert "vista crua fora da rubrica: cama_3q" in tab.vision_status.text()
+    assert wait(lambda: tab.vision_result is not None or tab.vision_error, timeout=30)

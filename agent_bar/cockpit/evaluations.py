@@ -25,7 +25,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from agent_bar.cockpit.evidence import ensure_outside
-from agent_bar.cockpit.gallery import GalleryItem
+from agent_bar.cockpit.gallery import GalleryItem, camera_of
 from agent_bar.cockpit.store import atomic_write_json, data_dir
 
 SCHEMA = "p2s.visual-evaluation.v1"
@@ -33,6 +33,13 @@ LABEL = "opinião do avaliador (consultiva); não é veredito nem aprovação"
 LOW_CONFIDENCE_PREFIXES = ("qwen2.5vl",)                    # D-S01C-2: até a calibração S01C-F1-06 aprovada
 LOW_CONFIDENCE_NOTE = "confiança baixa: modelo local sem calibração aprovada (D-S01C-2, S01C-F1-06)"
 _SHA64 = re.compile(r"^[0-9a-f]{64}$")
+# Formato do prompt só com marcadores: nota e justificativa de exemplo ancoravam o modelo (review do #97).
+SCORE_SLOT = "<inteiro de 1 a 5>"
+JUSTIFICATION_SLOT = "<na referência: um elemento visto; no render: um elemento visto>"
+NO_DETAIL = "sem detalhe verificável"
+MIN_JUSTIFICATION_WORDS = 4                                 # menos que isso é trivial ("...", "ok", "similar")
+_WORD = re.compile(r"[^\W\d_]{2,}")                         # palavra = 2+ letras (inclui acentuadas)
+UNCHECKED_NOTE = "justificativas não conferidas contra as imagens (conferência é do S01C-F1-06)"
 _FORBIDDEN_KEY = re.compile(r"0_?100|total|soma|sum|media|m[eé]dia|average|weighted|ponderad|similar|percent|"
                             r"verdict|veredito|human_approval|aprova", re.I)
 
@@ -169,8 +176,9 @@ def check(d: Mapping, item: GalleryItem | None = None) -> list[str]:
             v = s.get("score")
             if isinstance(v, bool) or not isinstance(v, int) or not 1 <= v <= 5:
                 errs.append(f"{c.key}: nota precisa ser inteira de 1 a 5 (veio {v!r})")
-            if not str(s.get("justification") or "").strip():
-                errs.append(f"{c.key}: sem justificativa")
+            why = trivial_justification(s.get("justification"))
+            if why:
+                errs.append(f"{c.key}: {why}")
     imgs = d.get("images") or []
     if not imgs:
         errs.append("nenhuma imagem citada")
@@ -180,10 +188,12 @@ def check(d: Mapping, item: GalleryItem | None = None) -> list[str]:
     if item is not None:
         if (item.plant, item.room, item.item_id) != (d.get("plant"), d.get("room"), d.get("run_id")):
             errs.append("avaliação não é deste run")
-        known = {i.sha256 for i in item.images}
+        known = {i.sha256: i for i in item.images}
         for im in imgs:
             if (im or {}).get("sha256") and im["sha256"] not in known:
                 errs.append(f"imagem fora do run (sha256 não conferido pela galeria): {im.get('ident') or im['sha256']}")
+            elif (im or {}).get("sha256") and not camera_of(known[im["sha256"]].key)[2]:
+                errs.append(f"vista crua sem render não entra na rubrica: {known[im['sha256']].key}")
         if item.kind != "render":
             errs.append("só run de render é avaliado")
     if not isinstance(d.get("limitations"), list):
@@ -251,13 +261,32 @@ def new_evaluation(item: GalleryItem, evaluator: Evaluator, *, reference: Galler
 def rubric_prompt(rubric: Rubric = CURRENT_RUBRIC) -> str:
     """Pedido ao modelo: nota inteira de 1 a 5 por critério, com justificativa, só em JSON. Sem total nem 0–100."""
     lines = ["Avalie o render (imagens depois da 1ª) comparando com a referência (1ª imagem), critério a critério.",
-             "Dê para cada critério uma nota inteira de 1 a 5 (1 = muito longe da referência, 5 = igual) e uma "
-             "justificativa curta citando o que se vê.", "Critérios:"]
+             "Para cada critério, dê uma nota inteira de 1 a 5 (1 = muito longe da referência, 5 = igual) decidida "
+             "pelo que você vê, e uma justificativa que cite UM elemento concreto visto na referência e UM visto no "
+             f"render. Se não houver detalhe verificável numa das imagens, escreva \"{NO_DETAIL}\" nessa parte.",
+             "Critérios:"]
     lines += [f"- {c.key}: {c.label}" for c in rubric.criteria]
-    example = ", ".join(f'"{c.key}": {{"score": 3, "justification": "..."}}' for c in rubric.criteria)
-    lines += ["Responda SOMENTE com um objeto JSON neste formato, sem texto antes ou depois:", "{" + example + "}",
+    # formato só com marcadores (nenhuma nota nem justificativa de exemplo, para não ancorar): o parser recusa
+    example = ", ".join(f'"{c.key}": {{"score": {SCORE_SLOT}, "justification": "{JUSTIFICATION_SLOT}"}}'
+                        for c in rubric.criteria)
+    lines += ["Responda SOMENTE com um objeto JSON neste formato, trocando cada marcador <...> pelo valor, sem texto "
+              "antes ou depois:", "{" + example + "}",
               "Não dê nota total, média, porcentagem nem nota de 0 a 100. Não dê veredito nem aprovação."]
     return "\n".join(lines)
+
+
+def trivial_justification(text: str) -> str:
+    """Motivo de a justificativa não valer (vazia, só pontuação/reticências, marcador do formato, menos de
+    MIN_JUSTIFICATION_WORDS palavras), ou "" se vale. Não confere a justificativa contra a imagem (isso é do F1-06)."""
+    t = str(text or "").strip()
+    if not t:
+        return "sem justificativa"
+    if "<" in t and ">" in t:
+        return "justificativa é o marcador do formato, não uma justificativa"
+    words = _WORD.findall(t)
+    if len(words) < MIN_JUSTIFICATION_WORDS:
+        return f"justificativa trivial ({len(words)} palavra(s); mínimo {MIN_JUSTIFICATION_WORDS})"
+    return ""
 
 
 _JSON = re.compile(r"\{.*\}", re.S)
@@ -302,6 +331,8 @@ def from_vision(result, item: GalleryItem, reference: GalleryItem, evaluator: Ev
     ref_rows = [d for d in rows if d.role == "reference"]
     keys = {i.sha256: i.key for i in item.images}
     scores, notes = parse_scores(result.text, rubric)
+    notes = notes + [UNCHECKED_NOTE] + [f"{k}: {NO_DETAIL}" for k, (_s, j) in scores.items()
+                                         if NO_DETAIL in str(j).lower()]
     delivery = {"batch_id": rows[0].batch_id if rows else "", "session_id": result.session_id,
                 "status": sorted({d.status for d in rows}), "confirmed": True, "confirmation": confirmation,
                 "images": [{"role": d.role, "sha256": d.sha256} for d in rows],
@@ -317,9 +348,13 @@ def summary(ev: Mapping, rubric: Rubric = CURRENT_RUBRIC) -> str:
     """Uma linha para a tela principal: modelo, confiança e a nota de cada critério (sem soma nem média)."""
     who = (ev.get("evaluator") or {}).get("model", "?")
     conf = ", confiança baixa" if ev.get("confidence") == "baixa" else ""
+    cams = []
+    for key in str(ev.get("camera") or "").split(", "):
+        cam, light, _r = camera_of(key) if key else ("?", "", False)
+        cams.append(cam + (f" · luz {light}" if light else ""))
     parts = [f"{c.short or c.label} {ev['scores'][c.key]['score']}/5" for c in rubric.criteria
              if c.key in (ev.get("scores") or {})]
-    return f"{who}{conf}: " + " · ".join(parts)
+    return f"{who}{conf} (câmera {', '.join(cams)}): " + " · ".join(parts)
 
 
 class EvaluationStore:

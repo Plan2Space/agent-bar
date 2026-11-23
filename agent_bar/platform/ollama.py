@@ -94,8 +94,8 @@ class OllamaAdapter(ProviderAdapter):
         self._models: dict[str, dict] = {}
         self._sessions: dict[str, dict] = {}
         self._history: dict[str, list[dict]] = {}
-        self._num_ctx: dict[str, int] = {}
-        self._digests: dict[str, str] = {}                                    # model_id -> digest do /api/tags                                    # sid -> options.num_ctx pedido
+        self._num_ctx: dict[str, int] = {}                                    # sid -> options.num_ctx pedido
+        self._digests: dict[str, str] = {}                                    # model_id -> digest do /api/tags
         self._running: dict[str, dict] = {}                                   # sid -> {"resp": ..., "cancel": Event}
         self._ids = itertools.count(1)
         self._lock = threading.Lock()

@@ -122,6 +122,7 @@ class ReviewTab(QWidget):
         self.gallery_fn = gallery_fn
         self.evaluation_store = evaluation_store
         self.evaluation_error = ""
+        self.vision_sending: list[str] = []                                   # quadros do último pedido (nomeados)
         self.last_evaluation: V.Evaluation | None = None
         self._rubric_ctx: dict | None = None
         self.evaluations_for: Callable[[G.GalleryItem], list] = (
@@ -617,8 +618,9 @@ class ReviewTab(QWidget):
             li = QListWidgetItem(f"{img.key} — {img.ident}")
             li.setData(Qt.ItemDataRole.UserRole, str(img.path))
             self.gallery_images.addItem(li)
-        if self.gallery_images.count():
-            self.gallery_images.setCurrentRow(0)
+        if self.gallery_images.count():                                       # o quadro preferido (#95), não a 1ª linha
+            best = G.primary_image(it)
+            self.gallery_images.setCurrentRow(next((n for n, img in enumerate(it.images) if img is best), 0))
         else:
             self.gallery_pane.show_image(it.item_id, None, "nenhuma imagem com sha256 conferido")
 
@@ -764,11 +766,28 @@ class ReviewTab(QWidget):
             self.vision_status.setText(self.vision_error)
             return
         model, keys = self.vision_model_box.currentData(), self.selected_image_keys()
+        dropped: list[str] = []
+        if rubric:                                                            # só quadro renderizado entra na rubrica
+            dropped = [k for k in keys if not G.camera_of(k)[2]]
+            keys = [k for k in keys if G.camera_of(k)[2]]
+            if not keys:                                                      # o preferido pela ordem do #95
+                frames = [i for i in item.images if G.camera_of(i.key)[2]]
+                keys = [min(frames, key=G.camera_rank).key] if frames else []
+            if not keys:
+                self.vision_error = (f"recusado, nada enviado: {item.item_id} não tem quadro renderizado "
+                                     "(vista crua não entra na rubrica)")
+                self.vision_status.setText(self.vision_error)
+                return
         prompt = V.rubric_prompt() if rubric else self.vision_prompt.toPlainText()
         ref = G.reference_item(self.gallery_items())
-        n = len(keys) + 1
-        self.vision_status.setText(f"enviando a referência e {len(keys)} imagem(ns) de {item.item_id} para {model}; "
-                                   f"depois mede o custo de cada imagem ({n + 1} chamadas extras)…")
+        by_key = {i.key: i for i in item.images}
+        ref_img = G.primary_image(ref) if ref is not None else None
+        named = "; ".join(f"{G.camera_text(by_key.get(k))} (sha {by_key[k].sha256[:8]}…)" for k in keys if k in by_key)
+        ref_txt = f"a referência {ref_img.key} (sha {ref_img.sha256[:8]}…)" if ref_img else "a referência"
+        skip = f" · vista crua fora da rubrica: {', '.join(dropped)}" if dropped else ""
+        self.vision_status.setText(f"enviando {ref_txt} e {named or 'nenhuma imagem'} de {item.item_id} para {model}; "
+                                   f"depois mede o custo de cada imagem ({len(keys) + 2} chamadas extras){skip}…")
+        self.vision_sending = list(keys)
         self._vision_enable(busy=True)
         vision = self.vision
 
@@ -782,7 +801,7 @@ class ReviewTab(QWidget):
             except Exception:                                                 # noqa: BLE001 - sem digest: recusada
                 digest = ""
             self._rubric_ctx = {"item": item, "reference": ref, "evaluator": V.Evaluator(
-                "agent", vision.provider_id, model, digest, res.usage.model_reported if res.usage else "",
+                "agent", vision.provider_id, model, digest, vision.provider_version(),
                 str(info.get("images") or "UNKNOWN"),
                 f"images={info.get('images')} em {info.get('source') or vision.provider_id}; entrega medida pelo "
                 "provedor (caminho do #94)")}

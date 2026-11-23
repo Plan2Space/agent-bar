@@ -181,6 +181,11 @@ class RunVision:
     def models(self) -> list[dict]:
         return self.sessions.models(self.provider_id)
 
+    def provider_version(self) -> str:
+        """Versão do provedor como ele informa (Ollama: GET /api/version), ou "" se não informa."""
+        v = self.sessions.provider_version(self.provider_id)
+        return f"{self.provider_id} {v}" if v else ""
+
     def digest(self, model_id: str) -> str:
         """Digest do modelo instalado (para o registro da avaliação); CapabilityUnsupported sem fonte."""
         return self.sessions.model_digest(self.provider_id, model_id)

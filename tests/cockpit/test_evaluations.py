@@ -296,7 +296,7 @@ def test_summary_line_lists_each_criterion_without_a_total(src):
     g, ref, _ = src
     _, ev = evaluate(g, ref, evaluator=QWEN)
     line = V.summary(ev.to_dict())
-    assert line == ("qwen2.5vl:7b, confiança baixa: Fidelidade 3/5 · Cama 2/5 · Materiais 3/5 · Iluminação 4/5 · "
+    assert line == ("qwen2.5vl:7b, confiança baixa (câmera cama_3q · luz dia): Fidelidade 3/5 · Cama 2/5 · Materiais 3/5 · Iluminação 4/5 · "
                     "Mobiliário 3/5")
     assert "/100" not in line and "total" not in line
 
@@ -307,3 +307,79 @@ def test_a_score_outside_one_to_five_is_kept_as_given_so_the_record_refuses_it()
     bad["iluminacao"]["score"] = 7
     scores, _ = V.parse_scores(_json.dumps(bad))
     assert scores["iluminacao"] == (7, SCORES["iluminacao"][1])                 # nunca "corrigido" para 5
+
+
+# --------------------------------------------------------------------------- revisão do #97 @ 7332319
+def test_rubric_prompt_has_no_anchor_score_and_its_format_line_is_refused():
+    import re as _re
+    p = V.rubric_prompt()
+    assert not _re.search(r'"score":\s*\d', p)                                   # nenhuma nota de exemplo
+    assert '"justification": "..."' not in p
+    assert "UM elemento concreto visto na referência e UM visto no render" in p and V.NO_DETAIL in p
+    line = next(x for x in p.splitlines() if x.startswith("{"))
+    with pytest.raises(V.EvaluationRejected):                                     # o exemplo nunca vira avaliação
+        V.parse_scores(line)
+
+
+@pytest.mark.parametrize("j,why", [("...", "justificativa trivial"), ("ok", "justificativa trivial"),
+                                   ("similar ao render", "justificativa trivial"),
+                                   (V.JUSTIFICATION_SLOT, "justificativa é o marcador do formato"), ("   ", "sem justificativa")])
+def test_trivial_justification_is_refused(src, j, why):
+    g, ref, _ = src
+    with pytest.raises(V.EvaluationRejected) as e:
+        evaluate(g, ref, scores={**SCORES, "iluminacao": (4, j)})
+    assert any(r.startswith("iluminacao: " + why) for r in e.value.reasons), e.value.reasons
+
+
+def test_an_evaluation_of_another_run_in_this_runs_folder_is_refused(src, tmp_path):
+    import json as _json
+    g, ref, roots = src
+    a, ev = evaluate(g, ref, run=OK_RENDER)
+    b = next(i for i in g.of(PLANT, ROOM) if i.kind == "render" and i.item_id != OK_RENDER and i.images)
+    store = V.EvaluationStore(tmp_path / "data", protected=roots)
+    d = store.root / b.plant / b.room / b.item_id
+    d.mkdir(parents=True)
+    (d / "copiada.json").write_text(_json.dumps(ev.to_dict()), encoding="utf-8")   # arquivo de A na pasta de B
+    ok, bad = store.for_item(b)
+    assert ok == [] and any("avaliação não é deste run" in x for x in bad)
+
+
+def test_save_refuses_an_evaluation_edited_after_it_was_built(src, tmp_path):
+    g, ref, roots = src
+    item, ev = evaluate(g, ref)
+    ev.scores["iluminacao"]["score"] = 0
+    with pytest.raises(V.EvaluationRejected) as e:
+        V.EvaluationStore(tmp_path / "data", protected=roots).save(ev, item)
+    assert "iluminacao: nota precisa ser inteira de 1 a 5 (veio 0)" in e.value.reasons
+
+
+def test_a_raw_sketchup_view_is_never_a_rubric_image(src):
+    g, ref, _ = src
+    item = g.get(OK_RENDER)
+    raw = G.GalleryImage("cama_3q", item.images[0].path, "e" * 64, "r", "views/cama_3q.png")
+    item.images.append(raw)
+    with pytest.raises(V.EvaluationRejected) as e:
+        evaluate(g, ref, shas=[raw.sha256])
+    assert "vista crua sem render não entra na rubrica: cama_3q" in e.value.reasons
+
+
+def test_no_detail_answers_are_kept_and_marked_as_limitations(src):
+    g, ref, _ = src
+
+    class Confirmed:
+        session_id, usage = "s", None
+
+        def __init__(self, item, refimg):
+            from types import SimpleNamespace as NS
+            self.deliveries = [NS(role="reference", sha256=refimg.sha256, batch_id="b" * 32, status="SENT"),
+                               NS(role="render", sha256=item.images[0].sha256, batch_id="b" * 32, status="SENT")]
+            js = {k: {"score": s, "justification": j} for k, (s, j) in SCORES.items()}
+            js["iluminacao"]["justification"] = f"na referência: sanca quente; no render: {V.NO_DETAIL}"
+            self.text = _json.dumps(js)
+
+        def confirmation(self):
+            return True, "o provedor contou … o acréscimo só fecha com as 2 imagens"
+    import json as _json
+    item = g.get(OK_RENDER)
+    ev = V.from_vision(Confirmed(item, ref.images[0]), item, ref, QWEN)
+    assert f"iluminacao: {V.NO_DETAIL}" in ev.limitations and V.UNCHECKED_NOTE in ev.limitations
