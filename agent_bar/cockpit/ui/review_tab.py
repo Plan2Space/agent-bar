@@ -33,6 +33,7 @@ from PySide6.QtWidgets import (
 
 from agent_bar.cockpit import evidence as E
 from agent_bar.cockpit import gallery as G
+from agent_bar.cockpit.ui.design_view import DesignView
 from agent_bar.cockpit.ui.diff_panel import DiffPanel
 from agent_bar.cockpit.ui.github_tabs import BTN_CSS, COMBO_CSS, TEXT_CSS, TREE_CSS
 from agent_bar.cockpit.ui.human_panel import HumanPanel
@@ -40,6 +41,8 @@ from agent_bar.cockpit.ui.packages_panel import PackagesPanel
 
 STATE_COLOR = {"PASS": "#3ddc84", "APPROVED": "#3ddc84", "FAIL": "#ff6b6d", "CHANGES_REQUESTED": "#ff6b6d", "BLOCKED": "#ffc233"}
 STATE_KEYS = ("GEOMETRY_PASS", "FUNCTIONAL_PASS", "VISUAL_REVIEW", "HUMAN_APPROVAL")
+HISTORY_COLUMNS = ["Data", "Etapa", "Run", "Fonte", "Situação", "Geometria", "Funcional", "Visual", "Tendência",
+                   "Humano"]
 GALLERY_COLUMNS = ["Data", "Fonte", "Tipo", "Run / referência", "Render", "Geometria", "Funcional", "Construção",
                    "Imagens", "Humano", "Verificado", "Elegível a melhor"]
 
@@ -105,6 +108,7 @@ class ReviewTab(QWidget):
                  gallery_fn: Callable[[E.Catalog | None], G.Gallery] | None = G.build_gallery) -> None:
         super().__init__()
         self.gallery_fn = gallery_fn
+        self.evaluations_for: Callable[[G.GalleryItem], list] = lambda _item: []   # S01C-F1-05 preenche
         self.gallery: G.Gallery | None = None
         self.gallery_error = ""
         self.report_store = report_store
@@ -131,17 +135,33 @@ class ReviewTab(QWidget):
             w.setStyleSheet(COMBO_CSS)
         self.reload_btn = QPushButton("Recarregar")
         self.reload_btn.setStyleSheet(BTN_CSS)
-        for cap, w, s in (("Cômodo", self.room_box, 2), ("Run A", self.a_box, 3), ("Run B", self.b_box, 3)):
-            lb = QLabel(cap)
-            lb.setStyleSheet("color:#8f8f98;font-size:11px")
-            head.addWidget(lb)
-            head.addWidget(w, s)
+        lb = QLabel("Cômodo")
+        lb.setStyleSheet("color:#8f8f98;font-size:12px")
+        head.addWidget(lb)
+        head.addWidget(self.room_box, 3)
+        head.addStretch(4)
         head.addWidget(self.reload_btn)
         lay.addLayout(head)
+        # S01C-F1-04: a tela principal é a Galeria de design; o resto fica em Detalhes técnicos
+        self.pages = QTabWidget()
+        self.design = DesignView()
+        self.pages.addTab(self.design, "Galeria de design")
+        tech = QWidget()
+        lay_tech = QVBoxLayout(tech)
+        lay_tech.setContentsMargins(0, 4, 0, 0)
+        self.pages.addTab(tech, "Detalhes técnicos")
+        lay.addWidget(self.pages, 1)
+        pair = QHBoxLayout()
+        for cap, w in (("Run A", self.a_box), ("Run B", self.b_box)):
+            lbl = QLabel(cap)
+            lbl.setStyleSheet("color:#8f8f98;font-size:11px")
+            pair.addWidget(lbl)
+            pair.addWidget(w, 1)
+        lay_tech.addLayout(pair)
         self.source = QLabel("")
         self.source.setWordWrap(True)
         self.source.setStyleSheet("color:#8f8f98;font-size:11px")
-        lay.addWidget(self.source)
+        lay_tech.addWidget(self.source)
         split = QSplitter(Qt.Orientation.Horizontal)
         left = QWidget()
         ll = QVBoxLayout(left)
@@ -178,10 +198,11 @@ class ReviewTab(QWidget):
         self.reports.setStyleSheet(TEXT_CSS)
         self.history = QTreeWidget()
         self.history.setStyleSheet(TREE_CSS)
-        self.history.setHeaderLabels(["Etapa", "Run", "Situação", "Geometria", "Funcional", "Revisão LLM", "Humano"])
+        self.history.setHeaderLabels(HISTORY_COLUMNS)
         self.history.setRootIsDecorated(False)
-        self.history.setColumnWidth(1, 280)
-        self.history.setColumnWidth(2, 180)
+        self.history.setColumnWidth(0, 150)
+        self.history.setColumnWidth(2, 300)
+        self.history.setColumnWidth(4, 160)
         self.absent = QTextBrowser()
         self.absent.setStyleSheet(TEXT_CSS)
         self.diff = DiffPanel(self.report_store)
@@ -198,7 +219,8 @@ class ReviewTab(QWidget):
             self.details.addTab(w, title)
         vsplit.addWidget(self.details)
         vsplit.setSizes([470, 230])
-        lay.addWidget(vsplit, 1)
+        lay_tech.addWidget(vsplit, 1)
+        self.design.open_technical.connect(self.show_technical)
         self.reload_btn.clicked.connect(self.reload)
         self.room_box.activated.connect(lambda _i: self._fill_runs())
         self.a_box.activated.connect(lambda _i: self._compare())
@@ -290,7 +312,6 @@ class ReviewTab(QWidget):
         if len(valid) >= 2:                                                     # padrão: os dois últimos runs válidos
             self.a_box.setCurrentIndex(valid[-2])
             self.b_box.setCurrentIndex(valid[-1])
-        self._history(runs)
         self._fill_gallery()
         self._compare()
 
@@ -421,12 +442,42 @@ class ReviewTab(QWidget):
     def _reports(self, a: E.Run, b: E.Run) -> None:
         self.reports.setHtml(self._verdict_html(a) + "<hr>" + self._verdict_html(b))
 
-    def _history(self, runs: list[E.Run]) -> None:
+    def _cards(self) -> None:
+        self.design.set_items(self.gallery_items(), self.evaluations_for)
+
+    def show_technical(self, item_id: str) -> None:
+        """Do item da galeria de design para os Detalhes técnicos dele (relatórios, manifest, hashes)."""
+        self.pages.setCurrentIndex(1)
+        self.details.setCurrentWidget(self.gallery_view)
+        t = self.gallery_tree
+        row = next((t.topLevelItem(i) for i in range(t.topLevelItemCount())
+                    if t.topLevelItem(i).data(0, Qt.ItemDataRole.UserRole) == item_id), None)
+        if row is not None:
+            t.setCurrentItem(row)
+            t.scrollToItem(row)
+
+    def _history(self) -> None:
+        """Histórico do cômodo, mais recente primeiro: runs da galeria (todas as fontes) e, depois, as etapas do evidence
+        que não têm run publicado (ausências ditas, nunca omitidas)."""
         self.history.clear()
+        room = self.room_box.currentData()
+        runs = self.catalog.runs_of(*room) if self.catalog is not None and room is not None else []
+        items = [i for i in self.gallery_items() if i.kind != "reference"]
+        shown = {i.item_id for i in items}
+        for i in items:
+            evals = self.evaluations_for(i)
+            status = (f"inválido: {len(i.errors)} divergência(s)" if i.errors
+                      else f"render {i.render_verdict or 'sem veredito'}" if i.kind == "render" else "build")
+            self.history.addTopLevelItem(QTreeWidgetItem([
+                i.when(), i.stage or "—", i.item_id, i.source_label, status, i.build.get("geometria", "—"),
+                i.build.get("funcional", "—"), G.visual_text(evals), G.trend_text(i, evals), i.human_approval]))
         for r in runs:
+            if r.run_id and r.run_id in shown:
+                continue
             s = r.states()
-            self.history.addTopLevelItem(QTreeWidgetItem([r.stage, r.run_id or "—", r.status(), s["GEOMETRY_PASS"],
-                                                          s["FUNCTIONAL_PASS"], s["VISUAL_REVIEW"], s["HUMAN_APPROVAL"]]))
+            self.history.addTopLevelItem(QTreeWidgetItem([
+                "—", r.stage, r.run_id or "—", "publicado" if r.published else "—", r.status(), s["GEOMETRY_PASS"],
+                s["FUNCTIONAL_PASS"], G.NO_EVALUATION, "—", s["HUMAN_APPROVAL"]]))
 
     def _absent(self, a: E.Run, b: E.Run) -> None:
         e = html.escape
@@ -466,6 +517,8 @@ class ReviewTab(QWidget):
         from PySide6.QtGui import QBrush, QColor
         self.gallery_tree.clear()
         self._show_gallery_item(None)
+        self._history()
+        self._cards()
         if self.gallery is None:
             self.gallery_note.setText(f"galeria indisponível: {self.gallery_error}" if self.gallery_error else "")
             return
@@ -522,5 +575,6 @@ class ReviewTab(QWidget):
         self.gallery_pane.show_image(li.text(), Path(li.data(Qt.ItemDataRole.UserRole)))
 
     def shutdown(self) -> None:
+        self.design.shutdown()
         if self._own_pool:
             self.pool.shutdown(wait=True, cancel_futures=True)
