@@ -39,8 +39,23 @@ from agent_bar.platform.adapter import (
 from agent_bar.platform.proc import creation_time, kill_tree, same_process
 
 SCHEMA = "p2s.session-manager.v1"
-DEFAULT_LIMITS = {"claude-acp": 16}
+# Limite medido, nao chutado (F5-B, E:\Claude\data\runs\p2s-f-studio-platform\f5\claude-acp-load.json, 2026-11-22):
+# claude-agent-acp 0.109.1 custa ~2 processos e ~250 MB por sessao, linear, abertura ~0,6 s, sem erro ate 40 sessoes;
+# caiu perto de 75 (0xC0000409). 32 = folga sobre o medido estavel e ~8 GB de arvore. Ajustavel por
+# AGENT_BAR_SESSION_LIMITS="claude-acp=24,ollama=8" (o processo por sessao limita processos: ~2n+3).
+DEFAULT_LIMITS = {"claude-acp": 32}
 DEFAULT_LIMIT = 32
+
+
+def limits_from_env(env: Mapping[str, str] | None = None) -> dict[str, int]:
+    """`AGENT_BAR_SESSION_LIMITS="prov=n,prov2=m"`; entrada invalida e ignorada (fica o padrao medido)."""
+    raw = (os.environ if env is None else env).get("AGENT_BAR_SESSION_LIMITS", "")
+    out: dict[str, int] = {}
+    for part in raw.split(","):
+        name, _, value = part.partition("=")
+        if name.strip() and value.strip().isdigit() and int(value) > 0:
+            out[name.strip()] = int(value)
+    return out
 STALL_TIMEOUT_S = 180.0                                                        # turno sem nenhum evento: "parado?"
 IDLE_TIMEOUT_S = 45 * 60.0                                                     # sessao parada: fecha e libera o processo
 DOWN = (ProviderUnavailable, NotConnected)
@@ -70,7 +85,7 @@ class SessionManager:
                  idle_timeout: float = IDLE_TIMEOUT_S, killer: Callable[[int], bool] = kill_tree):
         self.factories = dict(factories)
         self.store_path = store_path
-        self.limits = {**DEFAULT_LIMITS, **(limits or {})}
+        self.limits = {**DEFAULT_LIMITS, **limits_from_env(), **(limits or {})}
         self.default_limit = default_limit
         self.clock = clock
         self.stall_timeout = stall_timeout

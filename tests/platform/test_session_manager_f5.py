@@ -131,3 +131,14 @@ def test_process_identity_helpers():
         p.kill()
         p.wait(10)
     assert creation_time(p.pid) is None and not same_process(p.pid, created)
+
+
+def test_limits_come_from_measurement_and_can_be_configured(monkeypatch):
+    from agent_bar.platform.sessions import DEFAULT_LIMITS, limits_from_env
+    assert DEFAULT_LIMITS["claude-acp"] == 32
+    assert limits_from_env({"AGENT_BAR_SESSION_LIMITS": "claude-acp=24, ollama=8,bad=x,zero=0"}) == {"claude-acp": 24,
+                                                                                                    "ollama": 8}
+    monkeypatch.setenv("AGENT_BAR_SESSION_LIMITS", "a=1")
+    m = SessionManager({"a": lambda: Fake()})
+    assert m.limit_for("a") == 1 and m.limit_for("claude-acp") == 32
+    m.close_all()
