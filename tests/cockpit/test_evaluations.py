@@ -34,11 +34,20 @@ def src(tmp_path):
     return g, ref, (ev, engine, dl)
 
 
-def evaluate(g, ref, evaluator=CLAUDE, run=OK_RENDER, scores=None, shas=None, **kw):
+def delivered(ref, shas, *, confirmed=True):
+    """Bloco `delivery` como o caminho do #94 grava: referência + renders entregues, confirmado pelo provedor."""
+    return {"batch_id": "b" * 32, "session_id": "s1", "status": ["SENT"], "confirmed": confirmed,
+            "confirmation": "o provedor contou … (+512); cada imagem sozinha custa 256 (reference) + 256 (render)",
+            "images": [{"role": "reference", "sha256": ref.images[0].sha256}]
+            + [{"role": "render", "sha256": s} for s in shas], "model_reported": ""}
+
+
+def evaluate(g, ref, evaluator=CLAUDE, run=OK_RENDER, scores=None, shas=None, delivery=None, **kw):
     item = g.get(run)
+    shas = shas if shas is not None else [item.images[0].sha256]
     return item, V.new_evaluation(item, evaluator, reference=ref, camera="dia_cama_3q",
-                                  scores=scores if scores is not None else SCORES,
-                                  image_shas=shas if shas is not None else [item.images[0].sha256],
+                                  scores=scores if scores is not None else SCORES, image_shas=shas,
+                                  delivery=delivery if delivery is not None else delivered(ref, shas),
                                   clock=lambda: 1795400000.0, **kw)
 
 
@@ -119,7 +128,8 @@ def test_only_render_runs_are_evaluated(src):
     item = g.get(OK_BUILD)
     with pytest.raises(V.EvaluationRejected) as e:
         V.new_evaluation(item, CLAUDE, reference=ref, camera="preview", scores=SCORES,
-                         image_shas=[item.images[0].sha256])
+                         image_shas=[item.images[0].sha256],
+                         delivery=delivered(ref, [item.images[0].sha256]))
     assert "só run de render é avaliado" in e.value.reasons
 
 
@@ -182,7 +192,8 @@ def test_an_evaluation_on_render4_never_makes_it_eligible(src, tmp_path):
     g, ref, roots = src
     item = g.get(R4)
     ev = V.new_evaluation(item, CLAUDE, reference=ref, camera="render_dia_cama_3q", scores=SCORES,
-                          image_shas=[item.images[0].sha256])
+                          image_shas=[item.images[0].sha256],
+                         delivery=delivered(ref, [item.images[0].sha256]))
     store = V.EvaluationStore(tmp_path / "data", protected=roots)
     store.save(ev, item)
     evals, _ = store.for_item(item)
@@ -201,3 +212,98 @@ def test_engine_root_is_protected(src, tmp_path):
     inside = V.EvaluationStore(Path(roots[1]) / "x", protected=roots)
     with pytest.raises(E.EvidenceError):
         inside.save(ev, item)
+
+
+# ------------------------------------------------------------- F1-05 sobre o caminho do #94: só com entrega confirmada
+def test_evaluation_without_a_confirmed_delivery_is_refused(src):
+    g, ref, _ = src
+    item = g.get(OK_RENDER)
+    shas = [item.images[0].sha256]
+    with pytest.raises(V.EvaluationRejected) as e:
+        evaluate(g, ref, delivery=delivered(ref, shas, confirmed=False))
+    assert any("não confirmada pelo provedor" in r for r in e.value.reasons)
+    _, ev = evaluate(g, ref)
+    d = ev.to_dict()
+    del d["delivery"]
+    assert any("sem a entrega ao modelo" in r for r in V.check(d, item))
+
+
+def test_cited_images_and_reference_must_be_the_ones_delivered(src):
+    g, ref, _ = src
+    item = g.get(OK_RENDER)
+    other = [i.sha256 for i in item.images if i.sha256 != item.images[0].sha256] or ["c" * 64]
+    with pytest.raises(V.EvaluationRejected) as e:
+        evaluate(g, ref, delivery=delivered(ref, other))                     # entregou outra imagem
+    assert any("não são as imagens de render entregues" in r for r in e.value.reasons)
+    dl = delivered(ref, [item.images[0].sha256])
+    dl["images"][0]["sha256"] = "d" * 64                                       # referência entregue ≠ a citada
+    with pytest.raises(V.EvaluationRejected) as e:
+        evaluate(g, ref, delivery=dl)
+    assert any("referência da avaliação não foi a imagem de referência entregue" in r for r in e.value.reasons)
+
+
+def test_rubric_prompt_asks_one_to_five_per_criterion_in_json_and_no_total():
+    p = V.rubric_prompt()
+    assert all(f"- {c.key}: {c.label}" in p for c in V.RUBRIC_V1.criteria)
+    assert "nota inteira de 1 a 5" in p and "SOMENTE com um objeto JSON" in p
+    assert "Não dê nota total, média, porcentagem nem nota de 0 a 100" in p
+
+
+MODEL_JSON = ("Segue a avaliação:\n```json\n{"
+              + ", ".join(f'"{k}": {{"score": {s}, "justification": "{j}"}}' for k, (s, j) in SCORES.items())
+              + ', "total": 15}\n```')
+
+
+def test_parse_scores_reads_every_criterion_and_drops_fields_outside_the_rubric():
+    scores, notes = V.parse_scores(MODEL_JSON)
+    assert scores == SCORES
+    assert notes == ["o modelo devolveu campos fora da rubrica, descartados: total"]
+
+
+@pytest.mark.parametrize("text,why", [
+    ("não consigo avaliar", "não tem o objeto JSON"),
+    ('{"fidelidade_referencia": {"score": 3, "justification": "x"}', "ilegível"),              # JSON cortado
+    ('{"fidelidade_referencia": {"score": 3, "justification": "x"}}', "cama_cabeceira_enxoval: o modelo não deu nota"),
+    ('{"a": 1,}', "ilegível")])
+def test_parse_scores_refuses_what_it_cannot_read_without_inventing(text, why):
+    with pytest.raises(V.EvaluationRejected) as e:
+        V.parse_scores(text)
+    assert any(why in r for r in e.value.reasons), e.value.reasons
+
+
+def test_score_out_of_range_from_the_model_is_refused_not_clamped(src):
+    g, ref, _ = src
+    bad = {**SCORES, "iluminacao": (7, "muito boa")}
+    with pytest.raises(V.EvaluationRejected) as e:
+        evaluate(g, ref, scores=bad)
+    assert "iluminacao: nota precisa ser inteira de 1 a 5 (veio 7)" in e.value.reasons
+
+
+def test_from_vision_refuses_a_result_that_the_provider_did_not_confirm(src):
+    g, ref, _ = src
+
+    class NotConfirmed:
+        text, deliveries, session_id, usage = MODEL_JSON, [], "s", None
+
+        def confirmation(self):
+            return False, "entregue ao adaptador; contagem do provedor indisponível"
+    with pytest.raises(V.EvaluationRejected) as e:
+        V.from_vision(NotConfirmed(), g.get(OK_RENDER), ref, QWEN)
+    assert e.value.reasons == ["não confirmado pelo provedor: entregue ao adaptador; contagem do provedor indisponível"]
+
+
+def test_summary_line_lists_each_criterion_without_a_total(src):
+    g, ref, _ = src
+    _, ev = evaluate(g, ref, evaluator=QWEN)
+    line = V.summary(ev.to_dict())
+    assert line == ("qwen2.5vl:7b, confiança baixa: Fidelidade 3/5 · Cama 2/5 · Materiais 3/5 · Iluminação 4/5 · "
+                    "Mobiliário 3/5")
+    assert "/100" not in line and "total" not in line
+
+
+def test_a_score_outside_one_to_five_is_kept_as_given_so_the_record_refuses_it():
+    import json as _json
+    bad = {k: {"score": s, "justification": j} for k, (s, j) in SCORES.items()}
+    bad["iluminacao"]["score"] = 7
+    scores, _ = V.parse_scores(_json.dumps(bad))
+    assert scores["iluminacao"] == (7, SCORES["iluminacao"][1])                 # nunca "corrigido" para 5

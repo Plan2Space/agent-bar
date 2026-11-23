@@ -121,6 +121,9 @@ class ReviewTab(QWidget):
         self.last_comment: RC.ReviewComment | None = None
         self.gallery_fn = gallery_fn
         self.evaluation_store = evaluation_store
+        self.evaluation_error = ""
+        self.last_evaluation: V.Evaluation | None = None
+        self._rubric_ctx: dict | None = None
         self.evaluations_for: Callable[[G.GalleryItem], list] = (
             (lambda item: evaluation_store.for_item(item)[0]) if evaluation_store is not None else (lambda _item: []))
         self.gallery: G.Gallery | None = None
@@ -641,9 +644,11 @@ class ReviewTab(QWidget):
             who = ev["evaluator"]
             conf = " · <b>confiança baixa</b>" if ev.get("confidence") == "baixa" else ""
             parts.append(f"<h4>{e(who['model'])} ({e(who['provider'])}, digest {e(str(who['digest'])[:16])}…, "
-                         f"versão {e(str(who['version']))}){conf}</h4>"
+                         f"versão {e(str(who['version'] or '—'))}){conf}</h4>"
                          f"<p>{e(ev['created_at'])} · câmera {e(ev['camera'])} · referência {e(ev['reference']['id'])} "
-                         f"@ {e(ev['reference']['sha256'][:12])}…</p><ul>")
+                         f"@ {e(ev['reference']['sha256'][:12])}…</p>"
+                         f"<p>entrega: confirmada pelo provedor · lote {e(ev['delivery']['batch_id'][:8])}… · "
+                         f"{e(ev['delivery']['confirmation'])}</p><ul>")
             for key in rubric.keys():
                 s = ev["scores"][key]
                 parts.append(f"<li><b>{e(labels[key])}</b>: {s['score']}/5 — {e(s['justification'])}</li>")
@@ -668,11 +673,18 @@ class ReviewTab(QWidget):
         self.vision_model_box.setStyleSheet(COMBO_CSS)
         self.vision_models_btn = QPushButton("Modelos")
         self.vision_send_btn = QPushButton("Avaliar este run (enviar imagem)")
-        for b in (self.vision_models_btn, self.vision_send_btn):
+        self.rubric_btn = QPushButton("Avaliar pela rubrica v1 (nota 1–5)")
+        cost = ("Manda a referência do cômodo e o render no mesmo pedido; depois mede o custo de cada imagem sozinha "
+                "para confirmar que as duas chegaram: 1 chamada sem imagem + 1 por imagem, além do pedido.")
+        self.vision_send_btn.setToolTip(cost)
+        self.rubric_btn.setToolTip(cost + " Grava a nota de 1 a 5 por critério só se a entrega for confirmada pelo "
+                                   "provedor.")
+        for b in (self.vision_models_btn, self.vision_send_btn, self.rubric_btn):
             b.setStyleSheet(BTN_CSS)
         row.addWidget(self.vision_model_box, 2)
         row.addWidget(self.vision_models_btn)
         row.addWidget(self.vision_send_btn, 2)
+        row.addWidget(self.rubric_btn, 2)
         self.vision_prompt = QPlainTextEdit(RV.DEFAULT_PROMPT)
         self.vision_prompt.setMaximumHeight(54)
         self.vision_status = QLabel("")
@@ -692,6 +704,7 @@ class ReviewTab(QWidget):
         lay.addWidget(self.vision_usage)
         self.vision_models_btn.clicked.connect(self.load_vision_models)
         self.vision_send_btn.clicked.connect(self.evaluate_selected)
+        self.rubric_btn.clicked.connect(lambda: self.evaluate_selected(rubric=True))
         self._vision_enable()
         return box
 
@@ -709,6 +722,7 @@ class ReviewTab(QWidget):
         ok = self.vision is not None and not busy
         self.vision_models_btn.setEnabled(ok)
         self.vision_send_btn.setEnabled(ok and self.vision_model_box.count() > 0)
+        self.rubric_btn.setEnabled(ok and self.vision_model_box.count() > 0 and self.evaluation_store is not None)
         if self.vision is None:
             self.vision_status.setText("avaliação por visão indisponível")
 
@@ -737,23 +751,42 @@ class ReviewTab(QWidget):
         paths = {li.data(Qt.ItemDataRole.UserRole) for li in self.gallery_images.selectedItems()}
         return [i.key for i in it.images if str(i.path) in paths]
 
-    def evaluate_selected(self) -> None:
-        """Clique em "Avaliar este run": item e imagens selecionados na galeria, modelo escolhido."""
+    def evaluate_selected(self, rubric: bool = False) -> None:
+        """Clique em "Avaliar este run" (texto livre) ou "Avaliar pela rubrica" (nota 1–5 gravada só com entrega
+        confirmada pelo provedor): item e imagens selecionados na galeria, modelo escolhido."""
         item = self._gallery_item(self.gallery_tree.currentItem())
         self.vision_result, self.vision_error = None, ""
+        self.evaluation_error, self._rubric_ctx = "", None
         self.vision_text.clear()
         self.vision_usage.setText("")
         if self.vision is None or item is None or self.vision_model_box.currentData() is None:
             self.vision_error = "escolha um run da galeria e um modelo"
             self.vision_status.setText(self.vision_error)
             return
-        model, keys, prompt = self.vision_model_box.currentData(), self.selected_image_keys(), self.vision_prompt.toPlainText()
+        model, keys = self.vision_model_box.currentData(), self.selected_image_keys()
+        prompt = V.rubric_prompt() if rubric else self.vision_prompt.toPlainText()
         ref = G.reference_item(self.gallery_items())
-        self.vision_status.setText(f"enviando {len(keys)} imagem(ns) de {item.item_id} para {model}…")
+        n = len(keys) + 1
+        self.vision_status.setText(f"enviando a referência e {len(keys)} imagem(ns) de {item.item_id} para {model}; "
+                                   f"depois mede o custo de cada imagem ({n + 1} chamadas extras)…")
         self._vision_enable(busy=True)
+        vision = self.vision
 
         def job():
-            return self.vision.ask(item, keys, model, prompt, reference=ref).result(600)  # type: ignore[union-attr]
+            res = vision.ask(item, keys, model, prompt, reference=ref).result(900)
+            if not rubric:
+                return res
+            info = next((m for m in vision.models() if m.get("model_id") == model), {})
+            try:
+                digest = vision.digest(model)
+            except Exception:                                                 # noqa: BLE001 - sem digest: recusada
+                digest = ""
+            self._rubric_ctx = {"item": item, "reference": ref, "evaluator": V.Evaluator(
+                "agent", vision.provider_id, model, digest, res.usage.model_reported if res.usage else "",
+                str(info.get("images") or "UNKNOWN"),
+                f"images={info.get('images')} em {info.get('source') or vision.provider_id}; entrega medida pelo "
+                "provedor (caminho do #94)")}
+            return res
         fut = self._vpool().submit(job)
         fut.add_done_callback(lambda f: self.bridge.vision_done.emit(f.exception() or f.result()))
 
@@ -775,6 +808,27 @@ class ReviewTab(QWidget):
         ok, confirm = res.confirmation()                                       # SENT não é "chegou"
         self.vision_usage.setText(f"{usage_line(res.usage)} · {res.delivery_line()}\n"
                                   f"{'confirmado pelo provedor' if ok else 'não confirmado'}: {confirm}")
+        ctx, self._rubric_ctx = getattr(self, "_rubric_ctx", None), None
+        if ctx is not None:
+            self._save_evaluation(res, ctx)
+
+    def _save_evaluation(self, res: RV.VisionResult, ctx: dict) -> None:
+        """Rubrica v1: grava a avaliação SÓ com entrega confirmada pelo provedor e nota 1–5 + justificativa em todos os
+        critérios. Qualquer recusa fica na tela com o motivo e nada é gravado."""
+        item = ctx["item"]
+        try:
+            if self.evaluation_store is None:
+                raise V.EvaluationRejected(["registro de avaliações indisponível"])
+            ev = V.from_vision(res, item, ctx["reference"], ctx["evaluator"])
+            path = self.evaluation_store.save(ev, item)
+        except V.EvaluationRejected as exc:
+            self.evaluation_error = "avaliação NÃO gravada: " + "; ".join(exc.reasons)
+            self.vision_status.setText(self.evaluation_error)
+            return
+        self.last_evaluation = ev
+        self.vision_status.setText(f"avaliação gravada ({path.name}): {V.summary(ev.to_dict())} — {V.LABEL}")
+        self._show_evaluations(item)
+        self.design.set_items(self.gallery_items(), self.evaluations_for)
 
     def _show_gallery_image(self, li: QListWidgetItem | None) -> None:
         if li is None:

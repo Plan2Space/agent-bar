@@ -9,13 +9,16 @@ critério, com nota inteira de 1 a 5 e justificativa. Regras travadas aqui (e po
     S01C-F1-06/15); os pesos da rubrica são só metadado;
   - avaliação do `qwen2.5vl` sai com confiança baixa até a calibração (D-S01C-2);
   - o runtime nunca grava HUMAN_APPROVAL nem veredito: avaliador humano ou campo de veredito são recusados (VS-R13);
-  - gravada FORA do evidence, do motor e da design-library (VS-R12), com escrita atômica.
+  - gravada FORA do evidence, do motor e da design-library (VS-R12), com escrita atômica;
+  - só vale com entrega CONFIRMADA PELO PROVEDOR (caminho do #94, `RunVision`): o bloco `delivery` guarda o lote do
+    ledger, a referência e o render entregues por sha256 e o texto da confirmação medida; sem "confirmado", recusa.
 """
 from __future__ import annotations
 
 import json
 import re
 import time
+import typing
 import uuid
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass
@@ -39,6 +42,7 @@ class Criterion:
     key: str
     label: str
     weight_pct: int                                          # metadado; nunca vira soma (D-S01C-2)
+    short: str = ""                                          # rótulo curto para a tela principal
 
 
 @dataclass(frozen=True)
@@ -53,11 +57,11 @@ class Rubric:
 
 RUBRIC_V1 = Rubric(
     "rubric-v1", "P2S-SUITE01-VISUAL-CONVERGENCE Anexo A §8.2 (D-S01C-2)",
-    (Criterion("fidelidade_referencia", "Fidelidade à referência", 25),
-     Criterion("cama_cabeceira_enxoval", "Cama, cabeceira e enxoval", 25),
-     Criterion("materiais_texturas", "Materiais e texturas", 20),
-     Criterion("iluminacao", "Iluminação", 15),
-     Criterion("mobiliario_detalhes", "Mobiliário e detalhes", 15)))
+    (Criterion("fidelidade_referencia", "Fidelidade à referência", 25, "Fidelidade"),
+     Criterion("cama_cabeceira_enxoval", "Cama, cabeceira e enxoval", 25, "Cama"),
+     Criterion("materiais_texturas", "Materiais e texturas", 20, "Materiais"),
+     Criterion("iluminacao", "Iluminação", 15, "Iluminação"),
+     Criterion("mobiliario_detalhes", "Mobiliário e detalhes", 15, "Mobiliário")))
 RUBRICS = {RUBRIC_V1.version: RUBRIC_V1}
 CURRENT_RUBRIC = RUBRIC_V1
 
@@ -98,6 +102,7 @@ class Evaluation:
     limitations: list[str]
     created_at: str              # UTC ISO
     confidence: str              # normal | baixa
+    delivery: dict               # entrega confirmada pelo provedor (lote do ledger, shas por papel, confirmação)
     label: str = LABEL
 
     def to_dict(self) -> dict:
@@ -183,6 +188,7 @@ def check(d: Mapping, item: GalleryItem | None = None) -> list[str]:
             errs.append("só run de render é avaliado")
     if not isinstance(d.get("limitations"), list):
         errs.append("sem a lista de limitações")
+    errs += _delivery_errors(d)
     if d.get("confidence") not in ("normal", "baixa"):
         errs.append("confiança inválida")
     elif low_confidence(str(ev.get("model") or "")) and d.get("confidence") != "baixa":
@@ -190,12 +196,38 @@ def check(d: Mapping, item: GalleryItem | None = None) -> list[str]:
     return errs
 
 
+def _delivery_errors(d: Mapping) -> list[str]:
+    """A avaliação só vale com a entrega confirmada pelo provedor, das MESMAS imagens que ela cita."""
+    dl = d.get("delivery")
+    if not isinstance(dl, Mapping):
+        return ["sem a entrega ao modelo (caminho do #94): avaliação sem prova de que o modelo viu as imagens"]
+    errs: list[str] = []
+    if dl.get("confirmed") is not True:
+        errs.append("entrega não confirmada pelo provedor: a avaliação só vale com \"confirmado pelo provedor\"")
+    if not str(dl.get("confirmation") or "").strip():
+        errs.append("sem o texto da confirmação medida")
+    if not str(dl.get("batch_id") or "").strip():
+        errs.append("sem o lote do registro de imagens")
+    sent = [x for x in dl.get("images") or [] if isinstance(x, Mapping)]
+    refs = {x.get("sha256") for x in sent if x.get("role") == "reference"}
+    renders = {x.get("sha256") for x in sent if x.get("role") == "render"}
+    ref_sha = (d.get("reference") or {}).get("sha256")
+    if ref_sha not in refs:
+        errs.append("a referência da avaliação não foi a imagem de referência entregue ao modelo")
+    cited = {(im or {}).get("sha256") for im in d.get("images") or []}
+    if not cited or cited != renders:
+        errs.append("as imagens avaliadas não são as imagens de render entregues ao modelo")
+    return errs
+
+
 def new_evaluation(item: GalleryItem, evaluator: Evaluator, *, reference: GalleryItem, camera: str,
-                   scores: Mapping[str, tuple[int, str]], image_shas: Iterable[str], limitations: Sequence[str] = (),
-                   rubric: Rubric = CURRENT_RUBRIC, clock: Callable[[], float] = time.time) -> Evaluation:
+                   scores: Mapping[str, tuple[int, str]], image_shas: Iterable[str], delivery: Mapping,
+                   limitations: Sequence[str] = (), rubric: Rubric = CURRENT_RUBRIC,
+                   clock: Callable[[], float] = time.time, reference_sha256: str = "") -> Evaluation:
     """Monta e confere a avaliação. Qualquer motivo de recusa -> EvaluationRejected (nada é gravado)."""
     by_sha = {i.sha256: i for i in item.images}
     ref_img = reference.images[0] if reference.images else None
+    ref_sha = reference_sha256 or (ref_img.sha256 if ref_img else "")
     lims = list(limitations)
     low = low_confidence(evaluator.model)
     if low and LOW_CONFIDENCE_NOTE not in lims:
@@ -203,15 +235,91 @@ def new_evaluation(item: GalleryItem, evaluator: Evaluator, *, reference: Galler
     ev = Evaluation(
         id=uuid.uuid4().hex[:12], schema=SCHEMA, plant=item.plant, room=item.room, run_id=item.item_id,
         source=item.source, evaluator=asdict(evaluator),
-        reference={"id": reference.item_id, "sha256": ref_img.sha256 if ref_img else ""}, camera=camera,
+        reference={"id": reference.item_id, "sha256": ref_sha}, camera=camera,
         rubric_version=rubric.version,
         scores={k: {"score": s, "justification": j} for k, (s, j) in scores.items()},
         images=[{"ident": by_sha[s].ident if s in by_sha else "", "sha256": s} for s in image_shas],
-        limitations=lims, created_at=_utc(clock()), confidence="baixa" if low else "normal")
+        limitations=lims, created_at=_utc(clock()), confidence="baixa" if low else "normal",
+        delivery=dict(delivery))
     errs = check(ev.to_dict(), item)
     if errs:
         raise EvaluationRejected(errs)
     return ev
+
+
+# --------------------------------------------------------------------------------- do modelo para o registro
+def rubric_prompt(rubric: Rubric = CURRENT_RUBRIC) -> str:
+    """Pedido ao modelo: nota inteira de 1 a 5 por critério, com justificativa, só em JSON. Sem total nem 0–100."""
+    lines = ["Avalie o render (imagens depois da 1ª) comparando com a referência (1ª imagem), critério a critério.",
+             "Dê para cada critério uma nota inteira de 1 a 5 (1 = muito longe da referência, 5 = igual) e uma "
+             "justificativa curta citando o que se vê.", "Critérios:"]
+    lines += [f"- {c.key}: {c.label}" for c in rubric.criteria]
+    example = ", ".join(f'"{c.key}": {{"score": 3, "justification": "..."}}' for c in rubric.criteria)
+    lines += ["Responda SOMENTE com um objeto JSON neste formato, sem texto antes ou depois:", "{" + example + "}",
+              "Não dê nota total, média, porcentagem nem nota de 0 a 100. Não dê veredito nem aprovação."]
+    return "\n".join(lines)
+
+
+_JSON = re.compile(r"\{.*\}", re.S)
+
+
+def parse_scores(text: str, rubric: Rubric = CURRENT_RUBRIC) -> tuple[dict[str, tuple[int, str]], list[str]]:
+    """Notas do texto do modelo: o objeto JSON da resposta, critério a critério. Falta de critério, nota fora de 1–5 ou
+    sem justificativa: recusa (nada é completado ou inventado). Campos fora da rubrica são descartados e anotados."""
+    m = _JSON.search(text or "")
+    if m is None:
+        raise EvaluationRejected(["a resposta do modelo não tem o objeto JSON pedido"])
+    try:
+        data = json.loads(m.group(0))
+    except ValueError as exc:
+        raise EvaluationRejected([f"JSON da resposta ilegível ({exc.msg})"]) from None
+    if not isinstance(data, dict):
+        raise EvaluationRejected(["a resposta do modelo não é um objeto JSON"])
+    out: dict[str, tuple[int, str]] = {}
+    errs: list[str] = []
+    for c in rubric.criteria:
+        v = data.get(c.key)
+        if not isinstance(v, Mapping):
+            errs.append(f"{c.key}: o modelo não deu nota")
+            continue
+        out[c.key] = (typing.cast(int, v.get("score")), str(v.get("justification") or ""))
+    extra = sorted(set(data) - set(rubric.keys()))
+    notes = [f"o modelo devolveu campos fora da rubrica, descartados: {', '.join(extra)}"] if extra else []
+    if errs:
+        raise EvaluationRejected(errs)
+    return out, notes
+
+
+def from_vision(result, item: GalleryItem, reference: GalleryItem, evaluator: Evaluator, *,
+                rubric: Rubric = CURRENT_RUBRIC, clock: Callable[[], float] = time.time) -> Evaluation:
+    """Avaliação a partir do `VisionResult` do caminho do #94. Só com "confirmado pelo provedor"; as imagens citadas
+    são exatamente as de render entregues, e a referência é a entregue (por sha256)."""
+    confirmed, confirmation = result.confirmation()
+    if not confirmed:
+        raise EvaluationRejected([f"não confirmado pelo provedor: {confirmation}"])
+    rows = list(result.deliveries)
+    renders = [d for d in rows if d.role == "render"]
+    ref_rows = [d for d in rows if d.role == "reference"]
+    keys = {i.sha256: i.key for i in item.images}
+    scores, notes = parse_scores(result.text, rubric)
+    delivery = {"batch_id": rows[0].batch_id if rows else "", "session_id": result.session_id,
+                "status": sorted({d.status for d in rows}), "confirmed": True, "confirmation": confirmation,
+                "images": [{"role": d.role, "sha256": d.sha256} for d in rows],
+                "model_reported": result.usage.model_reported if result.usage is not None else ""}
+    return new_evaluation(item, evaluator, reference=reference,
+                          camera=", ".join(keys.get(d.sha256, "?") for d in renders),
+                          scores=scores, image_shas=[d.sha256 for d in renders], delivery=delivery,
+                          limitations=notes, rubric=rubric, clock=clock,
+                          reference_sha256=ref_rows[0].sha256 if ref_rows else "")
+
+
+def summary(ev: Mapping, rubric: Rubric = CURRENT_RUBRIC) -> str:
+    """Uma linha para a tela principal: modelo, confiança e a nota de cada critério (sem soma nem média)."""
+    who = (ev.get("evaluator") or {}).get("model", "?")
+    conf = ", confiança baixa" if ev.get("confidence") == "baixa" else ""
+    parts = [f"{c.short or c.label} {ev['scores'][c.key]['score']}/5" for c in rubric.criteria
+             if c.key in (ev.get("scores") or {})]
+    return f"{who}{conf}: " + " · ".join(parts)
 
 
 class EvaluationStore:
@@ -261,5 +369,5 @@ class EvaluationStore:
         return ok, bad
 
 
-__all__ = ["CURRENT_RUBRIC", "LABEL", "LOW_CONFIDENCE_NOTE", "RUBRIC_V1", "SCHEMA", "Criterion", "Evaluation",
+__all__ = ["from_vision", "parse_scores", "rubric_prompt", "summary", "CURRENT_RUBRIC", "LABEL", "LOW_CONFIDENCE_NOTE", "RUBRIC_V1", "SCHEMA", "Criterion", "Evaluation",
            "EvaluationRejected", "EvaluationStore", "Evaluator", "Rubric", "check", "low_confidence", "new_evaluation"]

@@ -9,7 +9,7 @@ Ordem, e o que cada passo recusa (nada é enviado quando algo é recusado):
   4. as imagens vão no MESMO pedido, referência primeiro, como `ImagePayload` (sem segunda leitura); o ledger grava uma
      linha por imagem com o papel (`reference`/`render`) antes do envio e marca SENT quando o adaptador aceita;
   5. confirmação: SENT não prova que o modelo recebeu. Depois do turno, mede-se (sessões novas, mesmo texto) a linha
-     de base só de texto e o custo de CADA imagem sozinha (essas imagens também passam pelo ledger, CALIBRATION_BY).
+     de base só de texto e o custo de CADA imagem sozinha (essas imagens também passam pelo ledger, finalidade CALIBRATION).
      Confirma só se o acréscimo medido do pedido com todas as imagens >= soma dos custos - metade do menor: faltando
      qualquer imagem, não fecha. Sem contagem medida: "entregue ao adaptador; contagem do provedor indisponível".
      No Ollama 0.40 o prompt_eval_count conta o prompt inteiro mesmo com cache (medido: par 4029 = 41 + 2042 + 1946).
@@ -41,6 +41,7 @@ PROVIDER = "ollama"
 REQUESTED_BY = "studio:review"
 CALIBRATION_BY = "studio:review:calibracao"          # turnos que medem o custo de cada imagem sozinha
 PURPOSE = "EVALUATION"
+CALIBRATION_PURPOSE = "CALIBRATION"                      # ledger: medida de tokens, nunca imagem avaliada
 DEFAULT_PROMPT = ("Compare o render com a referência: descreva de forma objetiva o que cada imagem mostra (cama, "
                   "cabeceira, enxoval, materiais, iluminação, mobiliário) e o que difere entre elas. Cite só elementos "
                   "visíveis. Não dê nota nem veredito.")
@@ -180,6 +181,10 @@ class RunVision:
     def models(self) -> list[dict]:
         return self.sessions.models(self.provider_id)
 
+    def digest(self, model_id: str) -> str:
+        """Digest do modelo instalado (para o registro da avaliação); CapabilityUnsupported sem fonte."""
+        return self.sessions.model_digest(self.provider_id, model_id)
+
     def ask(self, item: GalleryItem, image_keys: Sequence[str], model_id: str, prompt: str = DEFAULT_PROMPT, *,
             reference: GalleryItem | None = None,
             on_event: Callable[[AgentEvent], None] = lambda _e: None) -> cf.Future:
@@ -265,7 +270,7 @@ class RunVision:
         err = ""
         try:
             if images:
-                fut = self.sessions.send(sid, text, sink, images=list(images), purpose=PURPOSE,
+                fut = self.sessions.send(sid, text, sink, images=list(images), purpose=CALIBRATION_PURPOSE,
                                          requested_by=CALIBRATION_BY, reference=link, roles=list(roles))
             else:
                 fut = self.sessions.send(sid, text, sink)
@@ -290,5 +295,5 @@ class RunVision:
             pass
 
 
-__all__ = ["CALIBRATION_BY", "DEFAULT_PROMPT", "MIN_IMAGE_TOKENS", "PURPOSE", "REQUESTED_BY", "RunVision", "VisionRefused", "VisionResult",
+__all__ = ["CALIBRATION_BY", "CALIBRATION_PURPOSE", "DEFAULT_PROMPT", "MIN_IMAGE_TOKENS", "PURPOSE", "REQUESTED_BY", "RunVision", "VisionRefused", "VisionResult",
            "VISION_CONTEXT", "framing", "reference_link", "verified_payloads"]
