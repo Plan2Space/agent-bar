@@ -36,8 +36,12 @@ class FakeEngine:
         self.mode = mode
         self.calls: list[tuple[list[str], dict]] = []
 
-    def __call__(self, argv, cwd, env, timeout_s, log_path):
+    def __call__(self, argv, cwd, env, timeout_s, log_path, on_start=None):
         self.calls.append((list(argv), dict(env)))
+        if self.mode == "launch_error":
+            raise OSError("python do motor nao abriu")
+        if on_start is not None:
+            on_start(4242, 1234.5)                                            # identidade do processo do motor
         log_path.parent.mkdir(parents=True, exist_ok=True)
         log_path.write_text("engine log\n", encoding="utf-8")
         if self.mode == "timeout":
@@ -94,17 +98,19 @@ class Perm:
             respond(self.choice)
 
 
-def make(engine_root, tmp_path, engine=None, busy=False, **kw):
+def make(engine_root, tmp_path, engine=None, busy=False, alive=True, **kw):
     tool = SketchUpSampleTool(engine_root, engine_root / "runs" / "local-executor", allowed_roots=(tmp_path / "apps",),
                               runner=engine or FakeEngine(), sketchup_busy=lambda: busy, head=lambda _r: None,
+                              alive=lambda pid, created: alive,
                               clock=lambda: 1_790_000_000.0, python=engine_root / ".venv" / "python.exe",
                               base_env={"PATH": "x", "GH_TOKEN": "segredo", "ANTHROPIC_API_KEY": "k", "TEMP": "t"}, **kw)
     return tool
 
 
-def ctx(perm, session="ollama-1", turn=1, events=None):
+def ctx(perm, session="ollama-1", turn=1, events=None, turn_id="turn-0001"):
     ev = events if events is not None else []
-    return ToolContext(session_id=session, turn=turn, model_id="llama3.1:8b", model_digest="46e0c10c" + "0" * 56,
+    return ToolContext(session_id=session, turn=turn, turn_id=turn_id, model_id="llama3.1:8b",
+                       model_digest="46e0c10c" + "0" * 56,
                        provider_version="0.40.17", workspace=None, on_permission=perm, cancel=threading.Event(),
                        emit=lambda kind, data: ev.append((kind, dict(data))))
 
@@ -250,3 +256,32 @@ def test_preflight_explains_what_is_missing(engine_root, tmp_path):
 def test_filtered_env_drops_secrets_case_insensitively():
     env = filtered_env({"Path": "p", "github_token": "x", "SystemRoot": "C:/Windows", "OPENAI_API_KEY": "y"})
     assert env == {"Path": "p", "SystemRoot": "C:/Windows", "PYTHONUTF8": "1"}
+
+
+def test_a_new_turn_after_a_studio_restart_is_a_new_request(engine_root, tmp_path):
+    engine = FakeEngine()
+    tool = make(engine_root, tmp_path, engine)
+    a = tool.run(call(), ctx(Perm(), turn_id="studio-1-turn"))
+    b = tool.run(call(), ctx(Perm(), turn_id="studio-2-turn"))                 # mesma sessao "ollama-1", turno 1
+    assert a["request_id"] != b["request_id"] and len(engine.calls) == 2 and not b.get("replayed")
+
+
+def test_an_engine_that_died_without_a_manifest_is_failed_and_frees_the_slot(engine_root, tmp_path):
+    engine = FakeEngine("timeout")
+    tool = make(engine_root, tmp_path, engine, alive=False)
+    first = tool.run(call(), ctx(Perm()))
+    assert first["status"] == "unknown" and first["engine_pid"] == 4242
+    again = tool.run(call(), ctx(Perm()))
+    assert again["status"] == "failed" and again["error"]["code"] == "ENGINE_GONE" and len(engine.calls) == 1
+    engine.mode = "ok"
+    other = tool.run(call({"fixture_ref": "room_alt_5x3"}), ctx(Perm()))
+    assert other["status"] == "completed" and len(engine.calls) == 2
+
+
+def test_an_engine_that_cannot_start_is_failed_and_does_not_block(engine_root, tmp_path):
+    engine = FakeEngine("launch_error")
+    tool = make(engine_root, tmp_path, engine)
+    res = tool.run(call(), ctx(Perm()))
+    assert res["status"] == "failed" and res["error"]["code"] == "ENGINE_LAUNCH_FAILED"
+    engine.mode = "ok"
+    assert tool.run(call({"fixture_ref": "room_alt_5x3"}), ctx(Perm()))["status"] == "completed"

@@ -201,3 +201,16 @@ def test_executor_sends_its_system_prompt_and_a_compact_result_to_the_model(serv
     assert json.loads(follow["messages"][-1]["content"]) == {"status": "completed", "run_id": "lx-1"}
     assert all(m["role"] != "system" for m in a._history[sid])                 # historico do Chat: so a conversa
     a.disconnect()
+
+
+def test_each_turn_gets_a_fresh_studio_turn_id_even_after_a_restart(server):
+    seen = []
+    for _ in range(2):                                                       # dois "Studios": ids de sessao repetem
+        host = Host()
+        a = make(server, host)
+        server.tool_script = {"calls": [call()]}
+        ask(a)
+        c, ctx = host.calls[0]
+        seen.append((ctx.session_id, ctx.turn, ctx.turn_id))
+        a.disconnect()
+    assert seen[0][:2] == seen[1][:2] and seen[0][2] != seen[1][2] and len(seen[0][2]) >= 16

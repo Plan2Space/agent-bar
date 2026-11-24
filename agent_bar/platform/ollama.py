@@ -29,6 +29,7 @@ import logging
 import threading
 import urllib.error
 import urllib.request
+import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
@@ -314,7 +315,7 @@ class OllamaAdapter(ProviderAdapter):
                 raise SessionNotFound(session_id)
             if session_id in self._running:
                 raise PromptFailed("ja ha um turno em curso nesta sessao")
-            run = {"resp": None, "cancel": threading.Event()}
+            run = {"resp": None, "cancel": threading.Event(), "turn_id": uuid.uuid4().hex}
             self._running[session_id] = run
         rec = self._sessions[session_id]
         messages = [*self._history[session_id], {"role": "user", "content": text}]   # historico: so o texto
@@ -382,7 +383,8 @@ class OllamaAdapter(ProviderAdapter):
         turn = self._turns.get(sid, 0)
         calls, refused = normalize_tool_calls(raw_calls, self.tool_host.names(), turn)
         model = str(body.get("model") or "")
-        ctx = ToolContext(session_id=sid, turn=turn, model_id=model, model_digest=self._digests.get(model),
+        ctx = ToolContext(session_id=sid, turn=turn, turn_id=str(run.get("turn_id") or uuid.uuid4().hex),
+                          model_id=model, model_digest=self._digests.get(model),
                           provider_version=self.version, workspace=(self._sessions.get(sid) or {}).get("workspace"),
                           on_permission=self.on_permission, cancel=run["cancel"],
                           emit=lambda kind, data: on_event(AgentEvent(kind, str(data.get("title") or ""), dict(data))))

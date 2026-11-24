@@ -52,7 +52,7 @@ class EngineExit:
     pid: int | None
 
 
-Runner = Callable[[list[str], Path, dict, float, Path], EngineExit]
+Runner = Callable[..., EngineExit]                                           # (argv, cwd, env, timeout_s, log, on_start)
 
 
 def sha256_file(path: Path) -> str:
@@ -71,7 +71,8 @@ def filtered_env(base: Mapping[str, str]) -> dict[str, str]:
     return out
 
 
-def run_engine(argv: list[str], cwd: Path, env: dict, timeout_s: float, log_path: Path) -> EngineExit:
+def run_engine(argv: list[str], cwd: Path, env: dict, timeout_s: float, log_path: Path,
+               on_start: Callable[[int, float | None], None] | None = None) -> EngineExit:
     """Sobe o motor como processo filho (sem shell), saida inteira no log. Nao mata no prazo: o motor fecha o proprio
     SketchUp pelo PID; matar o Python deixaria o SketchUp orfao. Prazo vencido = `unknown`, reconciliado depois."""
     log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -79,6 +80,9 @@ def run_engine(argv: list[str], cwd: Path, env: dict, timeout_s: float, log_path
     with open(log_path, "ab") as log:
         proc = subprocess.Popen(argv, cwd=str(cwd), env=env, stdin=subprocess.DEVNULL, stdout=log, stderr=log,
                                 creationflags=flags)
+        if on_start is not None:                                             # identidade gravada antes de esperar
+            from agent_bar.platform.proc import creation_time
+            on_start(proc.pid, creation_time(proc.pid))
         try:
             return EngineExit(proc.wait(timeout=timeout_s), proc.pid)
         except subprocess.TimeoutExpired:
@@ -95,6 +99,12 @@ def sketchup_running() -> bool:
     except (OSError, subprocess.SubprocessError):
         return False
     return b'"sketchup.exe"' in out.lower()
+
+
+def engine_alive(pid: int, created: float | None) -> bool:
+    """O processo do motor daquele pedido ainda vive? PID + instante de criacao (o Windows reaproveita PID)."""
+    from agent_bar.platform.proc import same_process
+    return same_process(pid, created)
 
 
 def git_head(root: Path) -> dict | None:
@@ -173,6 +183,7 @@ class SketchUpSampleTool:
     def __init__(self, engine_root: Path | str, out_root: Path | str, *, allowed_roots: tuple[Path | str, ...],
                  registry: RequestRegistry | None = None, runner: Runner = run_engine,
                  sketchup_busy: Callable[[], bool] = sketchup_running, head: Callable[[Path], dict | None] = git_head,
+                 alive: Callable[[int, float | None], bool] = engine_alive,
                  clock: Callable[[], float] = time.time, permission_timeout_s: float = 16 * 60,
                  engine_timeout_s: float = 15 * 60, base_env: Mapping[str, str] | None = None,
                  python: Path | str | None = None):
@@ -192,6 +203,7 @@ class SketchUpSampleTool:
         self.runner = runner
         self.sketchup_busy = sketchup_busy
         self.head = head
+        self.alive = alive
         self.clock = clock
         self.permission_timeout_s = permission_timeout_s
         self.engine_timeout_s = engine_timeout_s
@@ -251,7 +263,10 @@ class SketchUpSampleTool:
 
     # -------------------------------------------------------------------------------------------- execucao
     def request_id(self, call: ToolCall, ctx: ToolContext) -> str:
-        return "rq-" + hashlib.sha256(f"{ctx.session_id}|{ctx.turn}|{call.digest}".encode()).hexdigest()[:20]
+        """Estavel para a MESMA chamada do MESMO turno (retry), unico entre turnos e reinicios do Studio: o id de
+        sessao do Ollama recomeca em `ollama-1`, entao o turno entra pelo uuid que o Studio gera a cada envio."""
+        key = f"{ctx.session_id}|{ctx.turn_id}|{call.digest}"
+        return "rq-" + hashlib.sha256(key.encode()).hexdigest()[:20]
 
     def _fixture(self, call: ToolCall) -> tuple[str, Path] | dict:
         args = dict(call.arguments)
@@ -369,8 +384,21 @@ class SketchUpSampleTool:
                 "--run-id", run_id]
         log = self.out_root / "_studio" / f"{rid}.engine.log"
         started = self.clock()
-        exit_ = self.runner(argv, self.engine_root, filtered_env(self.base_env), self.engine_timeout_s, log)
-        result = {**base, "engine_pid": exit_.pid, "engine_returncode": exit_.returncode,
+        ident: dict[str, Any] = {}
+
+        def on_start(pid: int, created: float | None) -> None:               # crash do Studio: o registro ja sabe o PID
+            ident.update(engine_pid=pid, engine_created=created)
+            self.registry.update(rid, "running", {**base, "status": "running", **ident}, self.clock())
+        try:
+            exit_ = self.runner(argv, self.engine_root, filtered_env(self.base_env), self.engine_timeout_s, log,
+                                on_start=on_start)
+        except (OSError, subprocess.SubprocessError) as exc:
+            result = {**base, "status": "failed", "engine_log": str(log), "started_at": started,
+                      "finished_at": self.clock(), "error": {"code": "ENGINE_LAUNCH_FAILED",
+                                                             "message": f"{type(exc).__name__}: {str(exc)[:200]}"}}
+            self._finish(call, ctx, rid, result)
+            return result
+        result = {**base, **ident, "engine_pid": exit_.pid, "engine_returncode": exit_.returncode,
                   "engine_log": str(log), "started_at": started, "finished_at": self.clock()}
         if exit_.returncode is None:
             result.update(status="unknown", error={"code": "ENGINE_TIMEOUT", "message":
@@ -447,9 +475,16 @@ class SketchUpSampleTool:
                     result.update(self.read_run(run_dir, prior["fixture_hash"]))
                     self._finish(None, None, prior["request_id"], result)
                     return {**result, "replayed": True}
-            result.update(status="unknown", error={"code": "RESULT_UNKNOWN", "message":
-                          "pedido ja enviado ao motor sem resultado final; nenhum novo run foi disparado"})
-            self.registry.update(prior["request_id"], "unknown", result, self.clock())
+            pid = result.get("engine_pid")
+            if pid and self.alive(int(pid), result.get("engine_created")):
+                result.update(status="unknown", error={"code": "RESULT_UNKNOWN", "message":
+                              "o motor deste pedido ainda roda sem resultado final; nenhum novo run foi disparado"})
+                self.registry.update(prior["request_id"], "unknown", result, self.clock())
+            else:                                                            # motor morto sem manifest final
+                code = "ENGINE_GONE" if pid else "ENGINE_NOT_STARTED"
+                result.update(status="failed", error={"code": code, "message":
+                              "o motor deste pedido terminou sem run_manifest final; nenhum novo run foi disparado"})
+                self._finish(None, None, prior["request_id"], result)
         return {**result, "replayed": True}
 
     def _refuse(self, call: ToolCall, ctx: ToolContext, rid: str, err: dict, **extra: Any) -> dict:

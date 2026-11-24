@@ -44,6 +44,7 @@ class ToolContext:
     """O que o executor sabe do turno que pediu a ferramenta (proveniencia + canal de permissao + cancelamento)."""
     session_id: str
     turn: int
+    turn_id: str                                                             # uuid do Studio por envio (unico entre reinicios)
     model_id: str
     model_digest: str | None
     provider_version: str | None
