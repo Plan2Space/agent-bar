@@ -318,10 +318,10 @@ def _rest_reset(gh: Gh, fallback: float) -> float:
 
 def collect_approvals(gh: Gh, prs: Iterable[tuple[str, int]], approvers: Approvers | Sequence[str] | None = None, runs=None,
                       store_path: Path | None = None, max_prs: int = 12, reviewer: str | None = None, now=None,
-                      memo: ApprovalMemo | None = None, versions: Mapping[tuple[str, int], tuple[str, str]] | None = None,
+                      memo: ApprovalMemo | None = None, versions: Mapping[tuple[str, int], tuple[str, str, str]] | None = None,
                       clock: Callable[[], float] | None = None) -> ApprovalBoard:
-    """Sem `memo`, como sempre: lê tudo. Com `memo` e `versions` (HEAD, updatedAt da fila), só relê o PR cuja chave
-    (HEAD, updatedAt, evidência do motor) mudou; o login é lido uma vez; no 403 de cota, o REST para até o reset e a
+    """Sem `memo`, como sempre: lê tudo. Com `memo` e `versions` (HEAD, updatedAt, estado do CI da fila), só relê o PR
+    cuja chave (HEAD, updatedAt, CI, evidência do motor) mudou (o updatedAt não muda quando um check termina); o login é lido uma vez; no 403 de cota, o REST para até o reset e a
     linha diz isso (aprovação indisponível, nunca dado velho sem rótulo). A regra de aprovação é a mesma (`_one`)."""
     import datetime as _dt
     import time as _time
@@ -354,8 +354,8 @@ def collect_approvals(gh: Gh, prs: Iterable[tuple[str, int]], approvers: Approve
         ref = (repo, n)
         key = None
         if versions and ref in versions:
-            head, updated = versions[ref]
-            key = (head, updated, evidence_for(repo, head, runs) if head else None)
+            head, updated, checks = versions[ref]
+            key = (head, updated, checks, evidence_for(repo, head, runs) if head else None)
         cached = memo.rows.get(ref) if memo is not None else None
         if cached is not None and key is not None and cached[0] == key:
             board.rows.append(cached[1])                                     # nada mudou: zero REST

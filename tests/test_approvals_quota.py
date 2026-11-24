@@ -20,6 +20,7 @@ class FakeGh:
         self.calls: list[list[str]] = []
         self.head = {7: HEAD_A, 8: HEAD_A}
         self.rate_limited = False
+        self.rollup = "SUCCESS"
 
     def rest(self) -> list[list[str]]:
         return [a for a in self.calls if a[:2] != ["api", "graphql"] and a[:2] != ["api", "rate_limit"]]
@@ -31,7 +32,7 @@ class FakeGh:
         if args[:2] == ["api", "graphql"]:
             n = int(next(a.split("=", 1)[1] for a in args if a.startswith("number=")))
             return 0, json.dumps({"data": {"repository": {"pullRequest": {"headRefOid": self.head[n], "commits": {"nodes": [
-                {"commit": {"committedDate": "2026-11-24T00:00:00Z", "statusCheckRollup": {"state": "SUCCESS"}}}]}}}}})
+                {"commit": {"committedDate": "2026-11-24T00:00:00Z", "statusCheckRollup": {"state": self.rollup}}}]}}}}})
         if self.rate_limited:
             return 1, "gh: API rate limit exceeded for user ID 1. (HTTP 403)"
         if args[:2] == ["api", "user"]:
@@ -50,7 +51,7 @@ REFS = [("Plan2Space/agent-bar", 7), ("Plan2Space/agent-bar", 8)]
 
 
 def versions(gh, updated="2026-11-24T00:00:00Z"):
-    return {ref: (gh.head[ref[1]], updated) for ref in REFS}
+    return {ref: (gh.head[ref[1]], updated, gh.rollup) for ref in REFS}
 
 
 def collect(gh, memo, vers, now=1_700_000_000.0):
@@ -78,7 +79,7 @@ def test_only_the_pr_whose_head_or_updated_at_changed_is_read_again():
     assert board.rows[1].head_sha == HEAD_B
     before = len(gh.rest())
     vers = versions(gh)
-    vers[REFS[0]] = (HEAD_A, "2026-11-24T01:00:00Z")                               # comentário novo no PR 7
+    vers[REFS[0]] = (HEAD_A, "2026-11-24T01:00:00Z", gh.rollup)                               # comentário novo no PR 7
     collect(gh, memo, vers)
     assert len(gh.rest()) - before == 4
 
@@ -119,7 +120,7 @@ def test_engine_evidence_change_reads_the_pr_again():
             self.runs = runs
     gh, memo = FakeGh(), ap.ApprovalMemo()
     refs = [(ap.ENGINE_REPO, 7)]
-    vers = {refs[0]: (HEAD_A, "u1")}
+    vers = {refs[0]: (HEAD_A, "u1", "SUCCESS")}
     ap.collect_approvals(gh, refs, approvers=["fmmodesto"], memo=memo, versions=vers, runs=Runs([]), clock=lambda: 1.0)
     before = len(gh.rest())
     run = type("R", (), {"engine_commit": HEAD_A, "verdict": "PASS", "problems": [], "run_id": "r1"})()
@@ -150,9 +151,9 @@ def test_the_worker_keeps_one_memo_and_passes_the_queue_versions(monkeypatch):
     monkeypatch.setattr(ap, "collect_approvals", fake_collect)
     w = Worker(cfg.Settings())
     assert isinstance(w._approval_memo, ap.ApprovalMemo)                          # noqa: SLF001
-    q = PrQueue(rows=[PrRow(7, "t", "u", "aguarda", "Plan2Space/agent-bar", head=HEAD_A, updated_at="u1")])
+    q = PrQueue(rows=[PrRow(7, "t", "u", "aguarda", "Plan2Space/agent-bar", head=HEAD_A, updated_at="u1", checks="SUCCESS")])
     col._approvals_for(q, None, None, memo=w._approval_memo, gh=lambda a: (0, ""))   # noqa: SLF001
-    assert seen["memo"] is w._approval_memo and seen["versions"] == {("Plan2Space/agent-bar", 7): (HEAD_A, "u1")}
+    assert seen["memo"] is w._approval_memo and seen["versions"] == {("Plan2Space/agent-bar", 7): (HEAD_A, "u1", "SUCCESS")}
 
 
 def test_a_rate_limit_on_a_pr_read_also_suspends_rest():
@@ -177,3 +178,43 @@ def test_the_worker_loop_passes_its_memo_to_the_collection(monkeypatch):
     monkeypatch.setattr(col, "collect_snapshot", fake)
     w._loop()                                                                      # noqa: SLF001
     assert seen["approval_memo"] is w._approval_memo                              # noqa: SLF001
+
+
+def test_ci_finishing_invalidates_the_memo_even_though_updated_at_does_not_change():
+    """MUST do fmmodesto (#113 @ 20bf744): o updatedAt do PR não muda quando um check termina. Uma linha lida com o CI
+    pendente não pode ficar servida com o CI velho: o estado do statusCheckRollup do HEAD faz parte da chave."""
+    gh, memo = FakeGh(), ap.ApprovalMemo()
+    gh.rollup = "PENDING"
+    board = collect(gh, memo, versions(gh))
+    assert [r.ci_state for r in board.rows] == ["pending", "pending"]
+    before = len(gh.rest())
+    gh.rollup = "SUCCESS"                                                          # CI terminou; updatedAt igual
+    board = collect(gh, memo, versions(gh))
+    assert [r.ci_state for r in board.rows] == ["success", "success"]
+    assert len(gh.rest()) - before == 4 * 2                                        # relidos
+    before = len(gh.rest())
+    collect(gh, memo, versions(gh))
+    assert len(gh.rest()) == before                                                # estável de novo: zero REST
+
+
+def test_the_org_queue_carries_the_ci_rollup_into_the_approval_versions():
+    node = {"number": 7, "title": "t", "url": "u", "headRefOid": HEAD_A, "updatedAt": "u1",
+            "repository": {"nameWithOwner": "Plan2Space/agent-bar"}, "reviews": {"nodes": []},
+            "commits": {"nodes": [{"commit": {"statusCheckRollup": {"state": "PENDING"}}}]}}
+
+    def gh(args):
+        return 0, json.dumps({"data": {"search": {"pageInfo": {"hasNextPage": False, "endCursor": None}, "nodes": [node]}}})
+    q = col.collect_org_pr_queue(gh)
+    assert q.rows[0].checks == "PENDING"
+    seen = {}
+
+    def fake_collect(gh_, refs, **kw):
+        seen.update(kw["versions"])
+        return None
+    orig = ap.collect_approvals
+    ap.collect_approvals = fake_collect
+    try:
+        col._approvals_for(q, runs=None, store_path=None, memo=ap.ApprovalMemo(), gh=gh)
+    finally:
+        ap.collect_approvals = orig
+    assert seen[("Plan2Space/agent-bar", 7)] == (HEAD_A, "u1", "PENDING")

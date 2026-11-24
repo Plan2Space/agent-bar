@@ -320,6 +320,12 @@ def collect_backlog(gh: Callable[[list[str]], tuple[int, str]] = run_gh, owner: 
     return {k: v for k, v in b.counts.items() if k != "(sem status)"}, b.error, b.synced
 
 
+def _rollup_state(node: dict) -> str:
+    """Estado do statusCheckRollup do HEAD na fila GraphQL ('' sem CI). Entra na chave do memo de aprovações."""
+    commits = ((node.get("commits") or {}).get("nodes") or [{}])
+    return str(((commits[-1].get("commit") or {}).get("statusCheckRollup") or {}).get("state") or "")
+
+
 def classify_pr(node: dict) -> str:
     """O que precisa acontecer com este PR (so fatos do GitHub; nunca inventa): rascunho | conflito | ci | pronto | corrigir | aguarda.
     `pronto` exige APPROVED no HEAD ATUAL e checks SUCCESS: aprovacao de outro commit ou CI ausente/pendente nunca conta."""
@@ -327,8 +333,7 @@ def classify_pr(node: dict) -> str:
         return "rascunho"
     if node.get("mergeable") == "CONFLICTING":
         return "conflito"
-    commits = ((node.get("commits") or {}).get("nodes") or [{}])
-    rollup = ((commits[-1].get("commit") or {}).get("statusCheckRollup") or {}).get("state")
+    rollup = _rollup_state(node)
     if rollup in ("FAILURE", "ERROR"):
         return "ci"
     reviews = (node.get("reviews") or {}).get("nodes") or []
@@ -371,18 +376,18 @@ def collect_org_pr_queue(gh: Callable[[list[str]], tuple[int, str]] = run_gh, ow
         return PrQueue(error=f"mais de {max_pages * 50} PRs abertos: contagem incompleta recusada")
     rows = [PrRow(int(n["number"]), str(n.get("title") or ""), str(n.get("url") or ""), classify_pr(n),
                   str((n.get("repository") or {}).get("nameWithOwner") or ""), head=str(n.get("headRefOid") or ""),
-                  updated_at=str(n.get("updatedAt") or "")) for n in nodes]
+                  updated_at=str(n.get("updatedAt") or ""), checks=_rollup_state(n)) for n in nodes]
     rows.sort(key=lambda r: (PR_STATE_ORDER.index(r.state), r.repo, r.number))
     return PrQueue(rows=rows, synced=_now(now).strftime("%Y-%m-%dT%H:%M:%SZ"))
 
 
 def _approvals_for(pr_queue: PrQueue, runs, store_path, memo=None, gh=run_gh):
-    """C2: aprovações da fila. Com o memo, o PR só é relido quando HEAD, updatedAt ou evidência mudam (a fila
-    GraphQL já traz HEAD e updatedAt, sem gastar REST)."""
+    """C2: aprovações da fila. Com o memo, o PR só é relido quando HEAD, updatedAt, estado do CI ou evidência mudam
+    (a fila GraphQL já traz os três primeiros, sem gastar REST)."""
     from agent_bar import approvals as ap
     rows = [r for r in pr_queue.rows if r.repo and r.state != "rascunho"]
     refs = [(r.repo, r.number) for r in rows]
-    versions = {(r.repo, r.number): (r.head, r.updated_at) for r in rows if r.head}
+    versions = {(r.repo, r.number): (r.head, r.updated_at, r.checks) for r in rows if r.head}
     return ap.collect_approvals(gh, refs, runs=runs, store_path=store_path, memo=memo, versions=versions or None)
 
 

@@ -45,6 +45,7 @@ class PrRow:
     repo: str = ""                    # owner/name quando a fila cobre a org inteira
     head: str = ""                    # headRefOid (C2: chave da releitura das aprovações)
     updated_at: str = ""              # updatedAt do PR (comentário novo, review nova => muda)
+    checks: str = ""                  # statusCheckRollup do HEAD (o updatedAt NÃO muda quando um check termina)
 
 
 @dataclass(frozen=True)
