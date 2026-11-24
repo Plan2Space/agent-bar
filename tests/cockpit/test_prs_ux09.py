@@ -154,3 +154,22 @@ def test_in_all_repos_the_detail_and_the_review_use_the_rows_repo(gh, tmp_path):
         assert f"{ORG}/evidence#" in got[0][1]
     finally:
         dispose(tab)
+
+
+def test_when_only_the_diff_fails_the_pr_and_its_ci_still_show_with_the_reason(gh, monkeypatch):
+    """A cota REST do GitHub acaba (o `gh pr diff` e o `gh run list` usam REST; o `gh pr view` usa GraphQL): o detalhe
+    não some inteiro — o PR aparece, e o diff diz por que não veio."""
+    monkeypatch.setenv("FAKE_GH_FAIL_DIFF", "1")
+    tab = tab_for(gh, [f"{ORG}/agent-bar"])
+    try:
+        tab.refresh()
+        assert wait(lambda: tab.tree.topLevelItemCount() == 2)
+        tab.tree.setCurrentItem(tab.tree.topLevelItem(0))
+        assert wait(lambda: "#7" in tab.detail.toPlainText())
+        text = tab.detail.toPlainText()
+        assert "CI deste PR" in text and "failure" in text                          # o CI continua no PR
+        assert "diff indisponível" in text and "rate limit" in text
+        assert tab.open_btn.isEnabled()
+        assert not tab.review_btn.isEnabled() and "sem o diff" in tab.review_btn.toolTip()   # revisão sem diff, não
+    finally:
+        dispose(tab)

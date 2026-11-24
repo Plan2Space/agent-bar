@@ -52,6 +52,9 @@ def main() -> int:
         out = {**next(p for p in PRS if p["number"] == n), "body": "Corpo do PR", "comments": [
             {"author": {"login": "fmmodesto"}, "body": "parece bom"}]}
     elif sub == ("pr", "diff"):
+        if os.environ.get("FAKE_GH_FAIL_DIFF"):                # UX-09: a cota REST acabou
+            sys.stderr.write("HTTP 403: API rate limit exceeded for user ID 1.\n")
+            return 1
         size = int(os.environ.get("FAKE_GH_DIFF_SIZE", "0") or 0)
         sys.stdout.write("diff --git a/x.py b/x.py\n+print('oi')\n" + "+" * size)
         return 0

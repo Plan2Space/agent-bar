@@ -36,7 +36,8 @@ BTN_CSS = ("QPushButton{background:#2a2a30;color:#e6e6e6;border:1px solid #3a3a4
 TREE_CSS = ("QTreeWidget{background:#1a1a1f;color:#dcdce2;border:1px solid #2e2e36;font-size:12px}"
             "QTreeWidget::item:selected{background:#2c3a55}QHeaderView::section{background:#22222a;color:#aaa;border:0;padding:3px}")
 TEXT_CSS = "background:#121215;color:#d6d6dc;border:1px solid #2e2e36;font-size:12px"
-ALL = "*"                                                # "todos (N)" no seletor de repo (UX-09)
+DIFF_UNAVAILABLE = "(diff indisponível"                   # prefixo do texto quando o `gh pr diff` falha (UX-09)
+ALL = "*"                                              # "todos (N)" no seletor de repo (UX-09)
 REVIEW_COLOR = {"APPROVED": "#3ddc84", "CHANGES_REQUESTED": "#ff6b6d", "REVIEW_REQUIRED": "#ffc233"}
 
 
@@ -246,8 +247,12 @@ class PrsTab(_GhTab):
         self.submit("detail", lambda: self._load_detail(repo, number))
 
     def _load_detail(self, repo: str, number: int) -> tuple[str, dict, str, tuple[list[dict], str]]:
-        pr = self.gh.pr(repo, number)
-        return repo, pr, self.gh.pr_diff(repo, number), self._pr_ci(repo, pr)
+        pr = self.gh.pr(repo, number)                                          # GraphQL: sem o PR, nada a mostrar
+        try:                                                                    # REST: a cota pode acabar sozinha
+            diff = self.gh.pr_diff(repo, number)
+        except GhError as exc:
+            diff = f"{DIFF_UNAVAILABLE}: {exc.message})"
+        return repo, pr, diff, self._pr_ci(repo, pr)
 
     def _pr_ci(self, repo: str, pr: dict) -> tuple[list[dict], str]:
         """As execuções do Actions do HEAD exato do PR (só leitura). Falha aqui não derruba o detalhe: vira o motivo."""
@@ -283,7 +288,9 @@ class PrsTab(_GhTab):
             repo, pr, diff, ci = result  # type: ignore[misc]
             self.current, self.current_repo, self.current_diff = pr, repo, diff
             self.open_btn.setEnabled(bool(pr.get("url")))
-            self.review_btn.setEnabled(True)
+            no_diff = diff.startswith(DIFF_UNAVAILABLE)                       # revisão sem diff não revisa nada
+            self.review_btn.setEnabled(not no_diff)
+            self.review_btn.setToolTip("sem o diff do PR, a revisão assistida fica indisponível" if no_diff else "")
             self.detail.setHtml(self._detail_html(pr, diff, ci))
             self.status.setText(f"{repo}#{pr.get('number')} · HEAD {pr.get('headRefOid', '?')}")
 
