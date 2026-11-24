@@ -68,15 +68,17 @@ def _run_gui(ns: argparse.Namespace, log: logging.Logger) -> int:
         from agent_bar.startup import log_dir
         holder: dict = {}
         instance = SingleInstance(lock_dir=log_dir().parent, version=checkout_version(ROOT))
-        activate = lambda: _bring_forward(holder.get("bar"), log)  # noqa: E731
-        quit_for_update = lambda: _quit_for_update(holder.get("bar"), log)  # noqa: E731
+        activate = lambda: _bring_forward(holder.get("bar"), log, holder.get("core"))  # noqa: E731
+        quit_for_update = lambda: _quit_for_update(holder.get("bar"), log, holder.get("core"))  # noqa: E731
         if not instance.acquire(on_activate=activate, on_quit=quit_for_update, notify=False):
             if not _replace_older_instance(app, instance, activate, quit_for_update, log):
                 return 0
         app.aboutToQuit.connect(instance.release)
-    bar = Bar(cfg.load())
+    core = build_core(cfg.load())
+    bar = Bar(core.settings, core=core)
     if instance is not None:
-        holder["bar"] = bar
+        holder["bar"], holder["core"] = bar, core                               # a instância única fala com o núcleo
+    core.start()
     bar.show()
     log.info("barra visivel em %s,%s (%sx%s)", bar.x(), bar.y(), bar.width(), bar.height())
     if ns.open_panel:
@@ -101,6 +103,15 @@ def _run_gui(ns: argparse.Namespace, log: logging.Logger) -> int:
         delay = os.environ.get("AGENT_BAR_SCREENSHOT_DELAY_S", "7")                # coletas em fundo (aprovacoes) podem pedir mais tempo
         QTimer.singleShot(int(float(delay) * 1000) if delay.replace(".", "", 1).isdigit() else 7000, shot)
     return app.exec()
+
+
+def build_core(settings):
+    """UX-01: o núcleo sem janela. O aviso "PR precisa de você" vira item em Notificações no mesmo SQLite que a aba
+    Notificações do Cockpit lê (`<dados do cockpit>/permissions.sqlite`)."""
+    from agent_bar.cockpit.notifications import NotificationCenter
+    from agent_bar.cockpit.store import data_dir
+    from agent_bar.core import AppCore
+    return AppCore(settings, center=NotificationCenter(data_dir() / "permissions.sqlite"))
 
 
 def _replace_older_instance(app, instance, activate, quit_for_update, log: logging.Logger) -> bool:
@@ -136,19 +147,26 @@ def _replace_older_instance(app, instance, activate, quit_for_update, log: loggi
     return False
 
 
-def _quit_for_update(bar, log: logging.Logger) -> None:
-    """Pedido de uma versao nova: fecha esta instancia normalmente (encerra os agentes do cockpit e a coleta)."""
+def _quit_for_update(bar, log: logging.Logger, core=None) -> None:
+    """Pedido de uma versao nova: fecha esta instancia normalmente (encerra os agentes do cockpit e a coleta). Com ou sem
+    barra: quem encerra e o nucleo."""
     log.info("uma versao nova pediu para esta instancia fechar")
     if bar is not None:
-        bar.close_app()
+        bar.close_app()                                                         # fecha o painel e chama core.shutdown()
+    elif core is not None:
+        core.shutdown()
     else:
         from PySide6.QtWidgets import QApplication
         QApplication.quit()
 
 
-def _bring_forward(bar, log: logging.Logger) -> None:
-    """Segunda abertura: a barra existente aparece (sai de minimizada/escondida) e o painel abre. Nada e iniciado ou parado."""
+def _bring_forward(bar, log: logging.Logger, core=None) -> None:
+    """Segunda abertura: a barra existente aparece (sai de minimizada/escondida) e o painel abre. Sem barra, o Cockpit
+    do nucleo vem para a frente. Nada e iniciado ou parado."""
     if bar is None:
+        if core is not None:
+            log.info("segunda abertura sem barra: trazendo o Cockpit para a frente")
+            core.open_cockpit()
         return
     log.info("segunda abertura: trazendo a barra existente para a frente")
     bar.show()

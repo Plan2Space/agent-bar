@@ -8,13 +8,11 @@ import html
 import math
 import os
 import threading
-import traceback
 from pathlib import Path
 from typing import Callable
 
 from PySide6.QtCore import (
     QEasingCurve,
-    QObject,
     QPoint,
     QPointF,
     QPropertyAnimation,
@@ -52,7 +50,8 @@ from agent_bar import collectors as col
 from agent_bar import controls as ctl
 from agent_bar import geometry as geo
 from agent_bar import settings as cfg
-from agent_bar.inbox import Inbox, InboxNotifier, human_inbox, waited
+from agent_bar.core import AppCore, Worker  # noqa: F401 - Worker reexportado (compatibilidade)
+from agent_bar.inbox import Inbox, human_inbox, waited
 from agent_bar.models import Level, Snapshot
 from agent_bar.operations_view import OperationsView
 
@@ -142,51 +141,6 @@ class StatusIcon(QWidget):
             p.setBrush(QColor(COLORS[self.level]))
             p.drawEllipse(QRectF((self.SIZE - d) / 2, (self.SIZE - d) / 2, d, d))
         p.end()
-
-
-class Worker(QObject):
-    """Coleta periodica fora da thread de UI. Local a cada `local_interval_s`; GitHub e Project #2 com cache/TTL proprios."""
-    snapshot = Signal(object)
-
-    def __init__(self, settings: cfg.Settings):
-        super().__init__()
-        self.settings = settings
-        self._stop, self._now = threading.Event(), threading.Event()
-        self._cache = col.GithubCache(ttl_s=settings.github_interval_s)
-        self._backlog = col.GithubCache(ttl_s=settings.backlog_interval_s)
-        self._queue = col.GithubCache(ttl_s=settings.github_interval_s)
-        from agent_bar.approvals import ApprovalBoard
-        self._approvals = col.BackgroundCache(ttl_s=settings.github_interval_s,                      # varias chamadas por PR: nunca atrasa a barra
-                                              placeholder=ApprovalBoard(error="coletando aprovações (primeira leitura)"),
-                                              on_done=lambda: self._now.set(),
-                                              on_error=lambda exc: ApprovalBoard(error=f"coleta de aprovações falhou: {type(exc).__name__}: {exc}"))
-        self._thread = threading.Thread(target=self._loop, name="agent-bar-collector", daemon=True)
-
-    def start(self) -> None:
-        self._thread.start()
-
-    def refresh(self, force: bool = False) -> None:
-        if force:
-            self._cache.invalidate()
-            self._backlog.invalidate()
-            self._queue.invalidate()
-            self._approvals.invalidate()
-        self._now.set()
-
-    def stop(self) -> None:
-        self._stop.set()
-        self._now.set()
-        self._thread.join(timeout=5)
-
-    def _loop(self) -> None:
-        while not self._stop.is_set():
-            try:
-                self.snapshot.emit(col.collect_snapshot(cache=self._cache, backlog_cache=self._backlog, queue_cache=self._queue,
-                                                   approval_cache=self._approvals, claude_login=col.claude_login_state))
-            except Exception:                                                  # noqa: BLE001 — coleta nunca derruba a UI
-                traceback.print_exc()
-            self._now.wait(self.settings.local_interval_s)
-            self._now.clear()
 
 
 def dot(level: Level, name: str | None = None) -> str:
@@ -596,8 +550,10 @@ class Details(QWidget):
 class Bar(QWidget):
     result = Signal(bool, str)
 
-    def __init__(self, settings: cfg.Settings):
+    def __init__(self, settings: cfg.Settings, core: AppCore | None = None):
         super().__init__(None, Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.Tool)
+        own_core = core is None
+        self.core = core or AppCore(settings)                                    # UX-01: coleta, bandeja, aviso e saída são do núcleo
         self.setWindowTitle("P2S Studio")
         self.settings = settings
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
@@ -646,20 +602,11 @@ class Bar(QWidget):
         self.anim_timer.setInterval(90)
         self.anim_timer.timeout.connect(self._tick_animation)
         self._refresh_pending: float | None = None
-        self.tray = QSystemTrayIcon(self) if QSystemTrayIcon.isSystemTrayAvailable() else None
-        self._notice_url: str | None = None
-        if self.tray is not None:                                                     # sem icone visivel o Windows nao mostra o aviso
-            from PySide6.QtGui import QIcon
-            ico = Path(__file__).resolve().parents[1] / "launchers" / "agent_bar.ico"
-            self.tray.setIcon(QIcon(str(ico)) if ico.is_file() else QApplication.windowIcon())
-            self.tray.setToolTip("P2S Studio")
-            self.tray.messageClicked.connect(self._open_notice)
-            self.tray.show()
-        self.notifier = InboxNotifier(show=self._notify_human, enabled=lambda: self.settings.notify_human)
-        self.worker = Worker(settings)
+        self.tray = self.core.tray                                                   # vistas do núcleo (sem dono aqui)
+        self.notifier = self.core.notifier
+        self.worker = self.core.worker
         self.details = Details(self)
-        from agent_bar import runtime_pin
-        self.set_runtime_pin(runtime_pin.check())
+        self.set_runtime_pin(self.core.runtime_pin)
         self.worker.snapshot.connect(self.on_snapshot)
         self.result.connect(self.details.set_status)
         self._place()
@@ -667,7 +614,8 @@ class Bar(QWidget):
         self.topmost_timer.setInterval(500)
         self.topmost_timer.timeout.connect(self._keep_on_top)
         self.topmost_timer.start()
-        self.worker.start()
+        if own_core:                                                                # barra criada sozinha (testes, compatibilidade)
+            self.core.start()
 
     # -------------------------------------------------------------------------------------------------- posicao/pintura
     def _place(self) -> None:
@@ -768,12 +716,6 @@ class Bar(QWidget):
         if mini:
             self.details.hide()
 
-    def _notify_human(self, title: str, text: str, url: str) -> None:
-        if self.tray is None:
-            raise RuntimeError("bandeja do sistema indisponível")
-        self._notice_url = url
-        self.tray.showMessage(title, text, QSystemTrayIcon.MessageIcon.Information, 15000)
-
     def set_runtime_pin(self, st) -> None:
         """So divergencia comprovada vira o aviso vermelho; 'nao deu para saber' fica no log e no tooltip da engrenagem."""
         self.runtime_pin = st
@@ -781,10 +723,6 @@ class Bar(QWidget):
         w.setText(st.message if st.ok is False else "")
         w.setVisible(st.ok is False)
         self.gear.setToolTip(f"runtime: {st.message}")
-
-    def _open_notice(self) -> None:
-        if self._notice_url:
-            self.report(ctl.open_url(self._notice_url))
 
     def set_notify_human(self, on: bool) -> None:
         self.settings.notify_human = on
@@ -885,24 +823,18 @@ class Bar(QWidget):
     def confirm(self, text: str) -> bool:
         return QMessageBox.question(self, "Confirmar", text) == QMessageBox.StandardButton.Yes
 
+    @property
+    def cockpit(self):
+        return self.core.cockpit
+
     def action_cockpit(self) -> None:
         """Abre (ou traz para a frente) o cockpit ACP: janela propria, mesmo processo (SPEC AGENT-BAR-COCKPIT-ACP, D2)."""
-        win = getattr(self, "cockpit", None)
-        if win is None or win._closed:                                             # noqa: SLF001
-            from agent_bar.cockpit.ui.window import CockpitWindow
-            win = CockpitWindow()
-            self.cockpit = win
-        win.show()
-        win.raise_()
-        win.activateWindow()
-        win.chat.ensure_client()
+        self.core.open_cockpit()
 
     def close_app(self) -> None:
-        if getattr(self, "cockpit", None) is not None:                             # encerra so os agentes ACP que o cockpit iniciou
-            self.cockpit.shutdown()
-        self.worker.stop()
+        """Encerra o app inteiro pelo núcleo: agentes do Cockpit, coleta, bandeja e processo."""
         self.details.close()
-        QApplication.quit()
+        self.core.shutdown()
 
     # ------------------------------------------------------------------------------------------------------ snapshot
     def on_snapshot(self, s: Snapshot) -> None:
@@ -917,9 +849,8 @@ class Bar(QWidget):
                 self.tray.showMessage("P2S Studio", a.line(), QSystemTrayIcon.MessageIcon.Warning)
             self._levels[a.name] = a.level
         self._sync_animation()
-        self.inbox = human_inbox(s.approvals)
+        self.inbox = self.core.inbox if self.core.snap is s else human_inbox(s.approvals)   # o aviso é do núcleo
         self._sync_badge()
-        self.notifier.update(self.inbox)
         q = s.pr_queue
         self.pr.setText(f"PRs {len(q.rows)}" if not (q.error and not q.rows) else "PRs ?")
         self.pr.setToolTip("fila de PRs da org: " + (", ".join(f"{k} {v}" for k, v in q.counts().items()) or "nenhum aberto")
