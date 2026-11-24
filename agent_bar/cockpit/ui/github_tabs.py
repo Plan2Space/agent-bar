@@ -244,6 +244,7 @@ class PrsTab(_GhTab):
         number = int(item.data(0, Qt.ItemDataRole.UserRole))
         repo = str(item.data(1, Qt.ItemDataRole.UserRole) or "")
         self.review_btn.setEnabled(False)
+        self._pending_detail = (repo, number)
         self.submit("detail", lambda: self._load_detail(repo, number))
 
     def _load_detail(self, repo: str, number: int) -> tuple[str, dict, str, tuple[list[dict], str]]:
@@ -295,6 +296,15 @@ class PrsTab(_GhTab):
             self.status.setText(f"{repo}#{pr.get('number')} · HEAD {pr.get('headRefOid', '?')}")
 
     def on_error(self, tag: str, kind: str, msg: str) -> None:
+        if tag == "detail":                                                    # #107: o PR anterior não fica na tela
+            repo, number = getattr(self, "_pending_detail", ("", 0))
+            self.current, self.current_repo, self.current_diff = None, "", ""
+            self.open_btn.setEnabled(False)
+            self.review_btn.setEnabled(False)
+            self.detail.setHtml(f"<h3 style='color:#fff'>{html.escape(repo)}#{number}</h3>"
+                                f"<p style='color:#ff9a9b'>detalhe indisponível: [{html.escape(kind)}] "
+                                f"{html.escape(msg)}</p>")
+            return
         if tag != "list":
             return
         key = self._pending_key

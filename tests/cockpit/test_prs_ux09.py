@@ -173,3 +173,21 @@ def test_when_only_the_diff_fails_the_pr_and_its_ci_still_show_with_the_reason(g
         assert not tab.review_btn.isEnabled() and "sem o diff" in tab.review_btn.toolTip()   # revisão sem diff, não
     finally:
         dispose(tab)
+
+
+def test_a_failed_detail_never_leaves_the_previous_pr_on_screen_unlabeled(gh, monkeypatch):
+    """#107 MUST: falhou o detalhe do PR 8 → o PR 7 não fica na tela como se fosse o 8, nem "Abrir no GitHub" nele."""
+    tab = tab_for(gh, [f"{ORG}/agent-bar"])
+    try:
+        tab.refresh()
+        assert wait(lambda: tab.tree.topLevelItemCount() == 2)
+        tab.tree.setCurrentItem(tab.tree.topLevelItem(0))                               # PR 7 abre normal
+        assert wait(lambda: "#7" in tab.detail.toPlainText() and tab.open_btn.isEnabled())
+        monkeypatch.setenv("FAKE_GH_FAIL_VIEW", "8")
+        tab.tree.setCurrentItem(tab.tree.topLevelItem(1))                               # PR 8: o detalhe falha
+        assert wait(lambda: "indisponível" in tab.detail.toPlainText())
+        text = tab.detail.toPlainText()
+        assert "#8" in text and "#7 feat: coisa" not in text and "502" in text
+        assert not tab.open_btn.isEnabled() and not tab.review_btn.isEnabled() and tab.current is None
+    finally:
+        dispose(tab)

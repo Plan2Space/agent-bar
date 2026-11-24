@@ -49,6 +49,9 @@ def main() -> int:
         out = PRS
     elif sub == ("pr", "view"):
         n = int(argv[2])
+        if str(n) in os.environ.get("FAKE_GH_FAIL_VIEW", "").split(","):        # UX-09: o detalhe deste PR falha
+            sys.stderr.write("HTTP 502: Bad Gateway\n")
+            return 1
         out = {**next(p for p in PRS if p["number"] == n), "body": "Corpo do PR", "comments": [
             {"author": {"login": "fmmodesto"}, "body": "parece bom"}]}
     elif sub == ("pr", "diff"):
