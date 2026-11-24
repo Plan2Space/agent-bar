@@ -33,11 +33,14 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from agent_bar.cockpit import evaluations as V
 from agent_bar.cockpit import gallery as G
 from agent_bar.cockpit.ui.github_tabs import BTN_CSS
 
 NOT_EVALUATED = "Ainda não avaliado"
 THUMB = QSize(300, 169)
+# Área MÍNIMA da miniatura nos cartões (#102): a imagem cabe nela mantendo a proporção (16:10 → 216×135).
+CARD_THUMB = QSize(240, 135)
 CARD_CSS = "QFrame#card{background:#17171a;border:1px solid #2a2a30;border-radius:6px}"
 TITLE_CSS = "color:#e6e6ea;font-size:14px;font-weight:700"
 INFO_CSS = "color:#cfcfd4;font-size:12px"
@@ -95,6 +98,17 @@ def compare_label(a: G.GalleryItem, b: G.GalleryItem, img_a: G.GalleryImage, img
     return f"lado a lado, {same}; não é par de câmera conferido ({why})"
 
 
+def visual_line(evaluations) -> str:
+    """Nota visual na tela principal: a avaliação mais recente por critério (1–5, sem soma), ou "sem avaliação".
+    Avaliação é opinião consultiva: nunca vira MELHOR por si (S01C-F1-07)."""
+    evs = [e for e in evaluations if isinstance(e, dict) and e.get("scores")]
+    if not evs:
+        return G.visual_text(evaluations)
+    latest = max(evs, key=lambda e: str(e.get("created_at") or ""))
+    more = f" (+{len(evs) - 1} anterior(es))" if len(evs) > 1 else ""
+    return V.summary(latest) + more
+
+
 class Thumb(QLabel):
     """Imagem clicável (amplia)."""
     clicked = Signal()
@@ -144,7 +158,7 @@ class BigCard(QFrame):
         lay.setContentsMargins(10, 8, 10, 8)
         self.title = QLabel(title)
         self.title.setStyleSheet(TITLE_CSS)
-        self.thumb = Thumb(QSize(320, 180))
+        self.thumb = Thumb(CARD_THUMB)                                          # cede altura para a legenda
         self.info = QLabel("")
         self.info.setWordWrap(True)
         self.info.setStyleSheet(INFO_CSS)
@@ -163,6 +177,19 @@ class BigCard(QFrame):
         self.thumb.set_image(img.path if img else None, empty or "sem imagem com sha256 conferido")
         self.info.setText("\n".join(lines))
         self.enlarge_btn.setEnabled(img is not None)
+        self._fit_info()
+
+    def _fit_info(self) -> None:
+        """A legenda quebra em várias linhas e o QLabel informa ao layout o mínimo de uma linha só: o cartão ficava
+        menor que imagem + legenda e a legenda era desenhada por cima da imagem. O mínimo passa a ser a altura real."""
+        width = self.info.width() if self.info.width() > 50 else max(self.width() - 20, 200)
+        need = self.info.heightForWidth(width)
+        if need > 0 and self.info.minimumHeight() != need:
+            self.info.setMinimumHeight(need)
+
+    def resizeEvent(self, e) -> None:                                           # noqa: N802
+        super().resizeEvent(e)
+        self._fit_info()
 
 
 class DesignView(QWidget):
@@ -295,7 +322,7 @@ class DesignView(QWidget):
                      if last.verified else f"Estado técnico: {tech_text(last)}")
             self.cards["último"].fill(last, [
                 f"{last.when()} · {last.item_id}", G.camera_text(img), source_text(last), state,
-                f"Nota visual: {G.visual_text(self.evaluations_for(last))}"])
+                f"Nota visual: {visual_line(self.evaluations_for(last))}"])
         best = G.cards(self.items, self.evaluations_for)[2]
         if best.item is not None and not best.item.eligible(self.evaluations_for(best.item)):
             best = G.Card(best.role, None, "nenhum render elegível: candidato inelegível recusado")
@@ -315,7 +342,7 @@ class DesignView(QWidget):
                 f"{it.when()} · {it.item_id.split('-', 1)[-1]}",
                 f"{G.camera_text(img)} · especialista —",
                 f"técnico: {tech_text(it)}",
-                f"visual: {G.visual_text(self.evaluations_for(it))}",
+                f"visual: {visual_line(self.evaluations_for(it))}",
                 f"{source_text(it)}{mark}",
             ])
             li = QListWidgetItem(text)
@@ -413,5 +440,5 @@ class DesignView(QWidget):
             self.enlarged = None
 
 
-__all__ = ["NOT_EVALUATED", "BigCard", "DesignView", "best_headline", "compare_label", "source_text", "tech_text",
+__all__ = ["visual_line", "NOT_EVALUATED", "BigCard", "DesignView", "best_headline", "compare_label", "source_text", "tech_text",
            "thumbnail"]

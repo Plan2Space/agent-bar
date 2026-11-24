@@ -2,9 +2,12 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QMainWindow, QTabWidget
+from PySide6.QtWidgets import QLabel, QMainWindow, QSizePolicy, QTabWidget, QVBoxLayout, QWidget
 
 from agent_bar.cockpit.acp import AsyncRuntime
+from agent_bar.cockpit.evaluations import EvaluationStore
+from agent_bar.cockpit.evidence import evidence_dir
+from agent_bar.cockpit.gallery import engine_dir, library_dir
 from agent_bar.cockpit.github import GhClient, configured_repos
 from agent_bar.cockpit.notifications import NotificationCenter, image_notification
 from agent_bar.cockpit.run_vision import RunVision
@@ -16,6 +19,7 @@ from agent_bar.cockpit.ui.library_tab import LibraryTab
 from agent_bar.cockpit.ui.notifications_tab import NotificationsTab
 from agent_bar.cockpit.ui.permissions_tab import PermissionsTab
 from agent_bar.cockpit.ui.review_tab import ReviewTab
+from agent_bar.cockpit.ui.settings_tab import SettingsTab
 from agent_bar.cockpit.ui.workflows_tab import WorkflowsTab
 from agent_bar.platform.image_ledger import ImageLedger
 from agent_bar.platform.sessions import SessionManager
@@ -28,7 +32,8 @@ TAB_CSS = ("QTabWidget::pane{border:0;background:#16161a}QTabBar::tab{background
 
 class CockpitWindow(QMainWindow):
     def __init__(self, gh: GhClient | None = None, repos: list[str] | None = None, discover_fn=None, specs_root=None,
-                 dev_kwargs: dict | None = None, review_kwargs: dict | None = None, **chat_kwargs) -> None:
+                 dev_kwargs: dict | None = None, review_kwargs: dict | None = None, runtime_pin=None, core=None,
+                 **chat_kwargs) -> None:
         super().__init__()
         self.setWindowTitle("P2S Studio — Cockpit")
         self.resize(980, 720)
@@ -46,7 +51,8 @@ class CockpitWindow(QMainWindow):
                                       specs_root=specs_root, **wf_kwargs)
         self.tabs.addTab(self.sessions, "Chat")
         self.tabs.addTab(self.workflows, "Fluxos")
-        self.review = ReviewTab(**(review_kwargs or {}))
+        self.review = ReviewTab(**{"evaluation_store": EvaluationStore(protected=(evidence_dir(), engine_dir(), library_dir())),
+                                   **(review_kwargs or {})})
         self.tabs.addTab(self.review, "Revisão visual")
         self.review.packages.send_to_chat.connect(self.open_correction)
         self.review.request_chat.connect(self.open_correction)               # S01C-F1-11: comentário da galeria
@@ -84,9 +90,45 @@ class CockpitWindow(QMainWindow):
         self.workflows.inbox = self.sessions.inbox                           # pedidos dos Fluxos no mesmo Inbox
         self.prs.review_requested.connect(self.open_review)
         self.tabs.currentChanged.connect(self._tab_changed)
-        self.setCentralWidget(self.tabs)
+        body = QWidget()                                                       # UX-02: aviso do runtime acima das abas
+        lay = QVBoxLayout(body)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(0)
+        self.runtime_banner = QLabel("")
+        self.runtime_banner.setWordWrap(True)
+        self.runtime_banner.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.runtime_banner.setStyleSheet("QLabel{background:#3a1d1f;color:#ffb4b4;border-bottom:1px solid #6b2a2e;"
+                                          "padding:8px 12px;font-size:12px}")
+        lay.addWidget(self.runtime_banner)
+        lay.addWidget(self.tabs, 1)
+        self.setCentralWidget(body)
+        self.set_runtime_pin(runtime_pin)
+        # UX-05: barra de estado com a fonte, o commit e a hora da leitura do que a Revisão visual mostra
+        self.status_sources = QLabel("fontes ainda não lidas (abra a Revisão visual)")
+        self.status_sources.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)  # nunca alarga a janela
+        self.status_sources.setStyleSheet("color:#8f8f98;font-size:11px;padding:0 6px")
+        self.statusBar().setStyleSheet("QStatusBar{background:#141417;border-top:1px solid #26262c}")
+        self.statusBar().addWidget(self.status_sources, 1)
+        self.review.sources_changed.connect(self._sources_changed)
+        # UX-06: Configurações (Saúde do sistema, Diagnóstico) dentro da janela principal; a Central da barra não abre
+        self.core = core
+        self.settings = SettingsTab(core, chat_fn=lambda: self.chat, review=self.review)   # a sessão aberta AGORA
+        self.tabs.addTab(self.settings, "Configurações")
         self.setStyleSheet("QMainWindow{background:#16161a}")
         self._closed = False
+
+    def _sources_changed(self, text: str) -> None:
+        self.status_sources.setText(text)
+        self.status_sources.setToolTip(text.replace("  │  ", "\n"))
+        bad = any(st.status != "AO_VIVO" for st in self.review.data_states.values())
+        self.status_sources.setStyleSheet(f"color:{'#ffb4b4' if bad else '#8f8f98'};font-size:11px;padding:0 6px")
+
+    def set_runtime_pin(self, st) -> None:
+        """Divergência comprovada do agent-runtime (instalado x pyproject x uv.lock): faixa vermelha na janela principal,
+        selecionável, com os SHAs e o comando. "Não deu para saber" não vira alarme (fica no log e em Notificações não)."""
+        bad = st is not None and st.ok is False
+        self.runtime_banner.setText(f"Runtime divergente: {st.message}" if bad else "")
+        self.runtime_banner.setVisible(bad)
 
     def _notify(self, category: str, title: str, body: str = "", session_id: str = "", dedupe_key: str | None = None,
                 state: str = "NEW") -> None:

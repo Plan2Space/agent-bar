@@ -116,6 +116,18 @@ class SessionManager:
             adapter = self._adapter(provider_id, workspace)
         return adapter.list_models()
 
+    def model_digest(self, provider_id: str, model_id: str, workspace: str = "") -> str:
+        """Digest do modelo pelo adaptador do provedor (CapabilityUnsupported quando o provedor não informa)."""
+        with self._lock:
+            adapter = self._adapter(provider_id, workspace)
+        return adapter.model_digest(model_id)
+
+    def provider_version(self, provider_id: str, workspace: str = "") -> str:
+        """Versão que o adaptador leu do provedor (Ollama: /api/version); "" quando não há."""
+        with self._lock:
+            adapter = self._adapter(provider_id, workspace)
+        return str(getattr(adapter, "version", "") or "")
+
     def limit_for(self, provider_id: str) -> int:
         return int(self.limits.get(provider_id, self.default_limit))
 

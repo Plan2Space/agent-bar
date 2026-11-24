@@ -10,6 +10,8 @@ from agent_bar.cockpit import evidence as E
 from agent_bar.cockpit import gallery as G
 from tests.cockpit.gallery_fixture import (
     BAD_SHA,
+    CAL,
+    CAL_KEY,
     OK_BUILD,
     OK_RENDER,
     PLANT,
@@ -59,12 +61,12 @@ def test_without_publication_render4_still_appears_as_engine_fail(tmp_path):
     assert "evidence indisponível" in " ".join(g.errors)
 
 
-def test_unpublished_pass_render_is_verified_and_comparable_but_never_eligible(tmp_path):
+def test_unpublished_pass_render_is_verified_and_comparable_but_never_eligible(tmp_path, calibrated):
     it = gallery(tmp_path).get(OK_RENDER)
     assert it.build == {"geometria": "PASS", "funcional": "PASS", "construção": "PASS"}
     assert it.verified                                                          # VERIFICADO: provas conferidas
-    assert it.eligibility(evaluations=["avaliação válida"]) == [G.UNPUBLISHED_BLOCK]   # VS-R1a: nunca o melhor
-    st = it.states(evaluations=["avaliação válida"])
+    assert it.eligibility(evaluations=[CAL]) == [G.UNPUBLISHED_BLOCK]                 # VS-R1a: nunca o melhor
+    st = it.states(evaluations=[CAL])
     assert st["VISÍVEL"] == "sim" and st["VERIFICADO"] == "sim" and st["ELEGÍVEL"].startswith("não: não publicado")
 
 
@@ -175,7 +177,13 @@ from tests.cockpit.gallery_fixture import (  # noqa: E402
     build_negatives,
 )
 
-EVAL = ["avaliação válida"]                                                    # com avaliação: só a prova bloqueia
+EVAL = [CAL]                                                                   # avaliação calibrada: só a prova bloqueia
+
+
+@pytest.fixture
+def calibrated(monkeypatch):
+    """Registra a calibração de TESTE (o registro real é vazio: #100)."""
+    monkeypatch.setattr(G, "APPROVED_CALIBRATIONS", frozenset({CAL_KEY}))
 
 
 @pytest.fixture
@@ -236,7 +244,7 @@ def test_invalid_runs_stay_visible_with_their_reasons(neg):
     assert set(NEGATIVES) | {PUB_TAMPERED} <= ids
 
 
-def test_only_a_published_verified_pass_render_with_evaluation_is_eligible(neg):
+def test_only_a_published_verified_pass_render_with_evaluation_is_eligible(neg, calibrated):
     it = neg.get(PUB_OK)
     assert it.source == G.PUBLISHED and it.verified
     assert it.eligibility() == ["sem avaliação"]                                # sem avaliação, nada é elegível
@@ -282,9 +290,9 @@ def test_evaluation_only_on_a_fail_render_never_makes_it_best(tmp_path):
     assert cards[2].item is None and cards[2].text.startswith("nenhum render elegível")
 
 
-def test_best_card_never_names_a_winner_before_the_rule_exists(neg):
+def test_best_card_never_names_a_winner_before_the_rule_exists(neg, calibrated):
     items = neg.of(PLANT, ROOM)
-    cards = G.cards(items, lambda i: ["avaliação"] if i.item_id == PUB_OK else [])   # um elegível de verdade
+    cards = G.cards(items, lambda i: [CAL] if i.item_id == PUB_OK else [])   # um elegível de verdade
     assert cards[2].item is None and "S01C-F1-07" in cards[2].text
 
 

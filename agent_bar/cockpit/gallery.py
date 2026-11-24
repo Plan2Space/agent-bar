@@ -213,6 +213,8 @@ class GalleryItem:
         out = self.technical_blockers()
         if not evaluations:
             out.append("sem avaliação")
+        elif not [e for e in evaluations if not uncalibrated(e)]:                # D-S01C-2: nota sem calibração não pesa
+            out.append(UNCALIBRATED_ONLY)
         return out
 
     def eligible(self, evaluations: Sequence[object] = ()) -> bool:
@@ -248,6 +250,22 @@ class Gallery:
 
 # ------------------------------------------------------------------------------- cartões e histórico (S01C-F1-04)
 NO_EVALUATION = "sem avaliação"
+UNCALIBRATED_ONLY = "só avaliações sem calibração aprovada (S01C-F1-06)"
+# Calibrações APROVADAS e registradas (S01C-F1-06), por (provedor, modelo, digest). D-S01C-2: só avaliador daqui conta
+# para ELEGÍVEL. Vazio: a F1-06 ainda não aprovou nenhuma calibração, então hoje nenhuma avaliação torna um run elegível.
+APPROVED_CALIBRATIONS: frozenset[tuple[str, str, str]] = frozenset()
+
+
+def _evaluator_key(evaluation: object) -> tuple[str, str, str]:
+    ev = evaluation.get("evaluator") if isinstance(evaluation, dict) else getattr(evaluation, "evaluator", None)
+    ev = ev if isinstance(ev, dict) else {}
+    return str(ev.get("provider") or ""), str(ev.get("model") or ""), str(ev.get("digest") or "")
+
+
+def uncalibrated(evaluation: object) -> bool:
+    """Avaliador sem calibração aprovada registrada (D-S01C-2, #100): a avaliação aparece, mas não conta para ELEGÍVEL.
+    Não depende da confiança declarada: confiança "normal" sem calibração também não conta."""
+    return _evaluator_key(evaluation) not in APPROVED_CALIBRATIONS
 BEST_RULE_PENDING = "inconclusivo: regra de melhor render ainda não implementada (S01C-F1-07)"
 
 
@@ -373,7 +391,7 @@ def cards(items: Sequence[GalleryItem], evaluations_for=lambda _item: ()) -> lis
     if not any(evaluations_for(i) for i in renders):
         out.append(Card("melhor conhecido", None, NO_EVALUATION))
     elif not any(i.eligible(evaluations_for(i)) for i in renders):
-        out.append(Card("melhor conhecido", None, "nenhum render elegível (FAIL, build incompleto ou sem avaliação)"))
+        out.append(Card("melhor conhecido", None, "nenhum render elegível (FAIL, build incompleto, sem avaliação ou só avaliações sem calibração)"))
     else:
         out.append(Card("melhor conhecido", None, BEST_RULE_PENDING))
     return out
@@ -604,6 +622,7 @@ def build_gallery(catalog: E.Catalog | None, engine: Path | None = None, library
 
 
 __all__ = ["ENGINE", "IMPORTED", "NO_EVALUATION", "PUBLISHED", "REFERENCE", "SKP_UNCHECKED", "SOURCES",
+           "APPROVED_CALIBRATIONS", "UNCALIBRATED_ONLY", "uncalibrated",
            "UNCHECKED_BLOCK", "UNCHECKED_LABEL", "UNCHECKED_NOTE", "UNPUBLISHED_BLOCK", "UNPUBLISHED_NOTE",
            "Card", "Gallery", "GalleryImage", "GalleryItem", "build_gallery",
            "CAMERA_PREFERENCE", "LIGHTING_PREFERENCE", "camera_of", "camera_rank", "camera_text",
