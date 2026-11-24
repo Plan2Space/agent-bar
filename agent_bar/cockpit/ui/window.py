@@ -19,6 +19,7 @@ from agent_bar.cockpit.ui.library_tab import LibraryTab
 from agent_bar.cockpit.ui.notifications_tab import NotificationsTab
 from agent_bar.cockpit.ui.permissions_tab import PermissionsTab
 from agent_bar.cockpit.ui.review_tab import ReviewTab
+from agent_bar.cockpit.ui.settings_tab import SettingsTab
 from agent_bar.cockpit.ui.workflows_tab import WorkflowsTab
 from agent_bar.platform.image_ledger import ImageLedger
 from agent_bar.platform.sessions import SessionManager
@@ -31,7 +32,7 @@ TAB_CSS = ("QTabWidget::pane{border:0;background:#16161a}QTabBar::tab{background
 
 class CockpitWindow(QMainWindow):
     def __init__(self, gh: GhClient | None = None, repos: list[str] | None = None, discover_fn=None, specs_root=None,
-                 dev_kwargs: dict | None = None, review_kwargs: dict | None = None, runtime_pin=None,
+                 dev_kwargs: dict | None = None, review_kwargs: dict | None = None, runtime_pin=None, core=None,
                  **chat_kwargs) -> None:
         super().__init__()
         self.setWindowTitle("P2S Studio — Cockpit")
@@ -109,6 +110,10 @@ class CockpitWindow(QMainWindow):
         self.statusBar().setStyleSheet("QStatusBar{background:#141417;border-top:1px solid #26262c}")
         self.statusBar().addWidget(self.status_sources, 1)
         self.review.sources_changed.connect(self._sources_changed)
+        # UX-06: Configurações (Saúde do sistema, Diagnóstico) dentro da janela principal; a Central da barra não abre
+        self.core = core
+        self.settings = SettingsTab(core, chat_fn=lambda: self.chat, review=self.review)   # a sessão aberta AGORA
+        self.tabs.addTab(self.settings, "Configurações")
         self.setStyleSheet("QMainWindow{background:#16161a}")
         self._closed = False
 
