@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QMainWindow, QTabWidget
+from PySide6.QtWidgets import QLabel, QMainWindow, QTabWidget, QVBoxLayout, QWidget
 
 from agent_bar.cockpit.acp import AsyncRuntime
 from agent_bar.cockpit.evaluations import EvaluationStore
@@ -31,7 +31,8 @@ TAB_CSS = ("QTabWidget::pane{border:0;background:#16161a}QTabBar::tab{background
 
 class CockpitWindow(QMainWindow):
     def __init__(self, gh: GhClient | None = None, repos: list[str] | None = None, discover_fn=None, specs_root=None,
-                 dev_kwargs: dict | None = None, review_kwargs: dict | None = None, **chat_kwargs) -> None:
+                 dev_kwargs: dict | None = None, review_kwargs: dict | None = None, runtime_pin=None,
+                 **chat_kwargs) -> None:
         super().__init__()
         self.setWindowTitle("P2S Studio — Cockpit")
         self.resize(980, 720)
@@ -88,9 +89,28 @@ class CockpitWindow(QMainWindow):
         self.workflows.inbox = self.sessions.inbox                           # pedidos dos Fluxos no mesmo Inbox
         self.prs.review_requested.connect(self.open_review)
         self.tabs.currentChanged.connect(self._tab_changed)
-        self.setCentralWidget(self.tabs)
+        body = QWidget()                                                       # UX-02: aviso do runtime acima das abas
+        lay = QVBoxLayout(body)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(0)
+        self.runtime_banner = QLabel("")
+        self.runtime_banner.setWordWrap(True)
+        self.runtime_banner.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.runtime_banner.setStyleSheet("QLabel{background:#3a1d1f;color:#ffb4b4;border-bottom:1px solid #6b2a2e;"
+                                          "padding:8px 12px;font-size:12px}")
+        lay.addWidget(self.runtime_banner)
+        lay.addWidget(self.tabs, 1)
+        self.setCentralWidget(body)
+        self.set_runtime_pin(runtime_pin)
         self.setStyleSheet("QMainWindow{background:#16161a}")
         self._closed = False
+
+    def set_runtime_pin(self, st) -> None:
+        """Divergência comprovada do agent-runtime (instalado x pyproject x uv.lock): faixa vermelha na janela principal,
+        selecionável, com os SHAs e o comando. "Não deu para saber" não vira alarme (fica no log e em Notificações não)."""
+        bad = st is not None and st.ok is False
+        self.runtime_banner.setText(f"Runtime divergente: {st.message}" if bad else "")
+        self.runtime_banner.setVisible(bad)
 
     def _notify(self, category: str, title: str, body: str = "", session_id: str = "", dedupe_key: str | None = None,
                 state: str = "NEW") -> None:
