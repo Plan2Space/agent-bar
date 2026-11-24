@@ -66,7 +66,7 @@ def tech_text(item: G.GalleryItem) -> str:
 def source_text(item: G.GalleryItem) -> str:
     """Fonte do item; run do motor leva sempre o texto do VS-R1a."""
     if item.source == G.ENGINE:
-        return f"motor: {G.UNPUBLISHED_NOTE}"
+        return f"motor: {G.publication_note(item)}"
     if item.source == G.REFERENCE:
         return f"referência: {item.provenance_text()}"
     return item.source_label

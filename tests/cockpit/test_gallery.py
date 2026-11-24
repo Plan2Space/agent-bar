@@ -388,3 +388,28 @@ def test_comparison_with_the_reference_never_claims_a_camera_pair():
     ref = _run("ref@v1", "r2", source=G.REFERENCE)
     a, b, note = G.comparison_pair(_run("rc5", "render_entardecer_close_banco", "render_entardecer_r2_canto"), ref)
     assert (a.key, b.key, note) == ("render_entardecer_r2_canto", "r2", "")
+
+
+# ------------------------------------------------ evidence ilegível: publicação não conferida, nunca "não publicado"
+def test_without_a_readable_evidence_an_engine_run_never_claims_it_was_not_published(tmp_path):
+    from agent_bar.cockpit.ui.design_view import source_text
+    _ev, engine, dl = build_all(tmp_path)
+    g = G.build_gallery(None, engine, dl, rooms=[(PLANT, ROOM)])                   # o evidence não pôde ser lido
+    eng = [i for i in g.of(PLANT, ROOM) if i.source == G.ENGINE]
+    assert eng
+    for it in eng:
+        assert not it.publication_checked
+        assert G.UNPUBLISHED_NOTE not in it.notes and G.UNCHECKED_NOTE in it.notes
+        why = it.eligibility(["avaliação"])
+        assert G.UNPUBLISHED_BLOCK not in why and not it.eligible(["avaliação"])    # continua fora do "melhor"
+        if it.kind == "render":
+            assert G.UNCHECKED_BLOCK in why
+        assert source_text(it) == f"motor: {G.UNCHECKED_NOTE}"
+
+
+def test_with_a_readable_evidence_an_unpublished_engine_run_still_says_not_published(tmp_path):
+    from agent_bar.cockpit.ui.design_view import source_text
+    g = gallery(tmp_path)
+    eng = [i for i in g.of(PLANT, ROOM) if i.source == G.ENGINE]
+    assert eng and all(i.publication_checked for i in eng)
+    assert all(source_text(i) == f"motor: {G.UNPUBLISHED_NOTE}" and G.UNPUBLISHED_NOTE in i.notes for i in eng)

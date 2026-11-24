@@ -45,6 +45,10 @@ SOURCE_LABEL = {PUBLISHED: "publicado", ENGINE: "motor, não publicado", REFEREN
                 IMPORTED: "importada, sem proveniência"}
 UNPUBLISHED_NOTE = "não publicado, não validado pelo verify.py"
 UNPUBLISHED_BLOCK = "não publicado: aparece e pode ser comparado, mas não pode ser o melhor render validado (VS-R1a)"
+# Sem evidence legível não dá para saber se o run do motor foi publicado: nunca afirmar "não publicado" nesse caso.
+UNCHECKED_NOTE = "publicação não conferida (evidence indisponível)"
+UNCHECKED_BLOCK = ("publicação não conferida: o evidence não pôde ser lido; aparece e pode ser comparado, mas não pode "
+                   "ser o melhor render validado")
 SKP_UNCHECKED = "skp não conferido"
 BUILD_KEYS = ("geometria", "funcional", "construção")
 ENGINE_REPO = "Plan2Space/sketchup-mcp-next"
@@ -132,10 +136,11 @@ class GalleryItem:
     synthetic: bool | None = None  # só REFERENCIA: imagem gerada (ex.: pelo ChatGPT), nunca foto real
     usage: str = ""              # só REFERENCIA: ex.: conceptual-only
     provenance: str = ""         # só REFERENCIA: registration.source_type / origin.kind
+    publication_checked: bool = True  # só MOTOR: False quando o evidence não pôde ser lido (não dá para saber)
 
     @property
     def notes(self) -> list[str]:
-        out = [UNPUBLISHED_NOTE] if self.source == ENGINE else []
+        out = [publication_note(self)] if self.source == ENGINE else []
         if self.source == REFERENCE:
             out.append(f"curadoria {self.curation or 'sem estado'}; referência estética, nunca geometria")
             out.append(self.provenance_text())
@@ -196,7 +201,7 @@ class GalleryItem:
             if v != "PASS" and not v.startswith(SKP_UNCHECKED):
                 out.append(f"build: {k} {v}")
         if self.source != PUBLISHED:
-            out.append(UNPUBLISHED_BLOCK)
+            out.append(UNCHECKED_BLOCK if self.source == ENGINE and not self.publication_checked else UNPUBLISHED_BLOCK)
         return out
 
     def eligibility(self, evaluations: Sequence[object] = ()) -> list[str]:
@@ -551,6 +556,11 @@ def load_references(root: Path, plant: str, room: str) -> tuple[list[GalleryItem
 
 
 # ---------------------------------------------------------------------------------------------------- montagem
+def publication_note(item: GalleryItem) -> str:
+    """O que dizer da publicação de um run do motor: "não publicado" só quando o evidence foi lido e o run não está lá."""
+    return UNPUBLISHED_NOTE if item.publication_checked else UNCHECKED_NOTE
+
+
 def build_gallery(catalog: E.Catalog | None, engine: Path | None = None, library: Path | None = None,
                   rooms: Iterable[tuple[str, str]] | None = None) -> Gallery:
     """Junta as fontes. Uma fonte indisponível vira erro da galeria; as outras continuam (cada item já diz a fonte)."""
@@ -575,6 +585,9 @@ def build_gallery(catalog: E.Catalog | None, engine: Path | None = None, library
             it, ids = _published(run, started)
             g.items.append(it)
             published_engine |= ids
+        if catalog is None:                                  # sem evidence: publicação não conferida, nunca "não publicado"
+            for i in eng:
+                i.publication_checked = False
         g.items += [i for i in eng if i.item_id not in published_engine]           # VS-R4: uma vez, como PUBLICADO
         refs, errs = load_references(library, plant, room)
         g.items += refs
@@ -583,7 +596,8 @@ def build_gallery(catalog: E.Catalog | None, engine: Path | None = None, library
 
 
 __all__ = ["ENGINE", "IMPORTED", "NO_EVALUATION", "PUBLISHED", "REFERENCE", "SKP_UNCHECKED", "SOURCES",
-           "UNPUBLISHED_BLOCK", "UNPUBLISHED_NOTE", "Card", "Gallery", "GalleryImage", "GalleryItem", "build_gallery",
+           "UNCHECKED_BLOCK", "UNCHECKED_NOTE", "UNPUBLISHED_BLOCK", "UNPUBLISHED_NOTE",
+           "Card", "Gallery", "GalleryImage", "GalleryItem", "build_gallery",
            "CAMERA_PREFERENCE", "LIGHTING_PREFERENCE", "camera_of", "camera_rank", "camera_text",
            "caption", "cards", "comparison_pair", "engine_dir", "file_sha256", "latest_render", "library_dir", "load_engine",
-           "load_references", "primary_image", "reference_item", "trend_text", "visual_text"]
+           "load_references", "primary_image", "publication_note", "reference_item", "trend_text", "visual_text"]

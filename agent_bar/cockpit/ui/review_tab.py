@@ -571,7 +571,8 @@ class ReviewTab(QWidget):
         self.gallery_note.setText(
             "Do mais recente para o mais antigo. "
             + " · ".join(f"{G.SOURCE_LABEL[s]}: {n}" for s, n in counts.items() if n)
-            + ". Itens do motor: " + G.UNPUBLISHED_NOTE + ". Visível, verificado, elegível e melhor são estados "
+            + ". Itens do motor: " + (G.UNPUBLISHED_NOTE if self.catalog is not None else G.UNCHECKED_NOTE)
+            + ". Visível, verificado, elegível e melhor são estados "
             "separados; elegível = candidato a melhor render (F0 §4), não é veredito visual." + errs)
         for i in items:
             st = i.states()                                                    # VISÍVEL sempre; os outros com motivo
