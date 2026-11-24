@@ -342,7 +342,7 @@ def classify_pr(node: dict) -> str:
 
 
 ORG_PR_QUERY = ("query($q:String!,$after:String){search(query:$q,type:ISSUE,first:50,after:$after){pageInfo{hasNextPage endCursor} "
-                "nodes{... on PullRequest{number title url isDraft mergeable headRefOid repository{nameWithOwner} "
+                "nodes{... on PullRequest{number title url isDraft mergeable headRefOid updatedAt repository{nameWithOwner} "
                 "reviews(last:1){nodes{state commit{oid}}} commits(last:1){nodes{commit{statusCheckRollup{state}}}}}}}}")
 
 
@@ -370,15 +370,26 @@ def collect_org_pr_queue(gh: Callable[[list[str]], tuple[int, str]] = run_gh, ow
     else:
         return PrQueue(error=f"mais de {max_pages * 50} PRs abertos: contagem incompleta recusada")
     rows = [PrRow(int(n["number"]), str(n.get("title") or ""), str(n.get("url") or ""), classify_pr(n),
-                  str((n.get("repository") or {}).get("nameWithOwner") or "")) for n in nodes]
+                  str((n.get("repository") or {}).get("nameWithOwner") or ""), head=str(n.get("headRefOid") or ""),
+                  updated_at=str(n.get("updatedAt") or "")) for n in nodes]
     rows.sort(key=lambda r: (PR_STATE_ORDER.index(r.state), r.repo, r.number))
     return PrQueue(rows=rows, synced=_now(now).strftime("%Y-%m-%dT%H:%M:%SZ"))
+
+
+def _approvals_for(pr_queue: PrQueue, runs, store_path, memo=None, gh=run_gh):
+    """C2: aprovações da fila. Com o memo, o PR só é relido quando HEAD, updatedAt ou evidência mudam (a fila
+    GraphQL já traz HEAD e updatedAt, sem gastar REST)."""
+    from agent_bar import approvals as ap
+    rows = [r for r in pr_queue.rows if r.repo and r.state != "rascunho"]
+    refs = [(r.repo, r.number) for r in rows]
+    versions = {(r.repo, r.number): (r.head, r.updated_at) for r in rows if r.head}
+    return ap.collect_approvals(gh, refs, runs=runs, store_path=store_path, memo=memo, versions=versions or None)
 
 
 def collect_snapshot(procs_fn=list_processes, gh=run_gh, cache: GithubCache | None = None, backlog_cache: GithubCache | None = None,
                      now: dt.datetime | None = None, queue_cache: GithubCache | None = None,
                      claude_login: Callable[[], bool | None] | None = None, targets: Targets | None = None,
-                     approval_cache: GithubCache | None = None) -> Snapshot:
+                     approval_cache: GithubCache | None = None, approval_memo=None) -> Snapshot:
     """Uma coleta completa. Chamar FORA da thread de UI."""
     n = _now(now)
     t = targets or load_targets()
@@ -404,10 +415,9 @@ def collect_snapshot(procs_fn=list_processes, gh=run_gh, cache: GithubCache | No
     from agent_bar.benchmark import benchmark_from_env
 
     benchmark = benchmark_from_env()
-    from agent_bar.approvals import collect_approvals
-
     refs = [(r.repo, r.number) for r in pr_queue.rows if r.repo and r.state != "rascunho"]
-    afetch = lambda: collect_approvals(gh, refs, runs=runs, store_path=Path(observation.db_path) if observation.db_path else None)  # noqa: E731
+    store = Path(observation.db_path) if observation.db_path else None
+    afetch = lambda: _approvals_for(pr_queue, runs, store, memo=approval_memo, gh=gh)  # noqa: E731
     approvals = approval_cache.get("approvals:" + ",".join(f"{a}#{b}" for a, b in refs), afetch) if approval_cache else afetch()
     return Snapshot(at=n.isoformat(), claude=claude, github=github, backlog=counts, backlog_error=board.error,
                     backlog_synced=board.synced, observation=observation, pr_queue=pr_queue, runs=runs, board=board,

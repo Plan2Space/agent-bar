@@ -43,6 +43,8 @@ class PrRow:
     url: str
     state: str                       # um de PR_STATE_ORDER
     repo: str = ""                    # owner/name quando a fila cobre a org inteira
+    head: str = ""                    # headRefOid (C2: chave da releitura das aprovações)
+    updated_at: str = ""              # updatedAt do PR (comentário novo, review nova => muda)
 
 
 @dataclass(frozen=True)
