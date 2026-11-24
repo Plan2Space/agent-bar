@@ -641,13 +641,13 @@ class ReviewTab(QWidget):
             self.gallery_note.setText(f"galeria indisponível: {self.gallery_error}" if self.gallery_error else "")
             return
         items = self.gallery_items()
-        counts = {s: sum(1 for i in items if i.source == s) for s in G.SOURCES}
         errs = (f" · {len(self.gallery.errors)} aviso(s): " + "; ".join(self.gallery.errors[:3])
                 if self.gallery.errors else "")
         self.gallery_note.setText(
             "Do mais recente para o mais antigo. "
-            + " · ".join(f"{G.SOURCE_LABEL[s]}: {n}" for s, n in counts.items() if n)
-            + ". Itens do motor: " + G.UNPUBLISHED_NOTE + ". Visível, verificado, elegível e melhor são estados "
+            + G.counts_text(items, publication_checked=self.catalog is not None)
+            + ". Itens do motor: " + (G.UNPUBLISHED_NOTE if self.catalog is not None else G.UNCHECKED_NOTE)
+            + ". Visível, verificado, elegível e melhor são estados "
             "separados; elegível = candidato a melhor render (F0 §4), não é veredito visual." + errs)
         for i in items:
             st = i.states()                                                    # VISÍVEL sempre; os outros com motivo
@@ -673,7 +673,7 @@ class ReviewTab(QWidget):
             self.gallery_pane.show_image("", None, "selecione um item da galeria")
             return
         st = it.states()
-        lines = [f"{it.item_id} · fonte {it.source} ({it.source_label})", *it.notes,
+        lines = [f"{it.item_id} · {G.source_line(it)}", *it.notes,
                  *(f"{k}: {v}" for k, v in st.items())]
         if it.camera_file:
             lines.append(f"câmeras/render spec: {it.camera_file}")

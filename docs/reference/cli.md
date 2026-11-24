@@ -10,7 +10,7 @@ python -m agent_bar.app [--once-json] [--screenshot ARQ.png] [--open-panel]
 
 | Opção | O que faz | Interface? |
 | --- | --- | --- |
-| *(nenhuma)* | abre a barra e fica residente (não encerra ao fechar a última janela; só **Encerrar barra** sai) | sim |
+| *(nenhuma)* | abre o **Cockpit** (janela principal, D-UX-1) e fica residente na bandeja: fechar o Cockpit manda para a bandeja; só **Sair do P2S Studio** (bandeja ou barra) encerra. A barra flutuante é opcional e começa desligada (bandeja → *Barra flutuante*) | sim |
 | `--once-json` | faz **uma** coleta completa (inclusive o login do Claude e do Codex) e imprime o diagnóstico em texto; sai com código 0 | não |
 | `--open-panel` | abre o painel 4 s depois de iniciar (evidência e teste) | sim |
 | `--screenshot ARQ.png` | 7 s após iniciar, grava um PNG da barra (`ARQ.png`) e do painel (`ARQ_panel.png`) e encerra | sim |
