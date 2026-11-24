@@ -167,3 +167,35 @@ def test_a_live_state_never_takes_the_commit_probed_for_another_path(studio):
     assert tab.data_states["evidence"].checkout is None                          # o commit era de outro caminho
     tab._set_state("evidence", ev)                                                            # noqa: SLF001
     assert tab.data_states["evidence"].checkout == DS.Checkout("develop", "aaaaaaa")
+
+
+def test_a_probe_of_another_path_never_changes_a_live_state(studio):
+    """#104 SHOULD (mutante sobrevivente): o commit de um caminho não vai para o estado AO VIVO de outro caminho."""
+    win, ev, _engine, _dl, _shas, _state = studio
+    tab = win.review
+    tab.data_states["evidence"] = DS.live("evidence", "E:/novo", 1_700_000_000.0)
+    tab._checkout_read(tab.req, "evidence", ("E:/antigo", DS.Checkout("develop", "abc1234")))   # noqa: SLF001
+    assert tab.data_states["evidence"].checkout is None
+
+
+def test_a_probe_of_the_same_path_never_changes_what_a_cached_state_shows(studio):
+    """#104 SHOULD (mutante sobrevivente): o estado em CACHE mostra o commit da leitura que deu certo; um probe novo do
+    MESMO caminho (o checkout mudou e a leitura falhou) não troca esse commit."""
+    win, ev, _engine, _dl, _shas, _state = studio
+    tab = win.review
+    shown = DS.Checkout("develop", "1111111")
+    tab.data_states["evidence"] = DS.failed("evidence", "E:/ev", "falhou",
+                                            DS.live("evidence", "E:/ev", 1_700_000_000.0, shown))
+    tab._checkout_read(tab.req, "evidence", ("E:/ev", DS.Checkout("develop", "2222222")))      # noqa: SLF001
+    assert tab.data_states["evidence"].checkout == shown and "1111111" in tab.data_states["evidence"].line()
+
+
+def test_a_probe_from_an_older_reload_is_ignored(studio):
+    """#104 SHOULD (mutante sobrevivente): o probe de um reload anterior não muda o estado nem o registro de checkouts."""
+    win, ev, _engine, _dl, _shas, _state = studio
+    tab = win.review
+    tab.req += 1
+    tab.data_states["evidence"] = DS.live("evidence", "E:/ev", 1_700_000_000.0)
+    before = dict(tab._checkouts)                                                                   # noqa: SLF001
+    tab._checkout_read(tab.req - 1, "evidence", ("E:/ev", DS.Checkout("develop", "9999999")))      # noqa: SLF001
+    assert tab.data_states["evidence"].checkout is None and tab._checkouts == before              # noqa: SLF001
