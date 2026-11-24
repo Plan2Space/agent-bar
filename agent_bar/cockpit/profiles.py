@@ -25,6 +25,10 @@ class AgentProfile:
     adapter: str = "acp"                                                     # "acp" ou um adaptador da plataforma (ex.: "ollama")
 
     def available(self) -> tuple[bool, str]:
+        if self.adapter == "ollama-executor":                                # P2S-LOCAL-EXECUTOR: so com o motor pronto
+            from agent_bar.platform.sketchup_sample import preflight_from_env
+            ok, why = preflight_from_env()
+            return ok, ("" if ok else f"executor local indisponível: {why}")
         if self.adapter == "ollama" and os.environ.get("OLLAMA_HOST", "").strip():
             return True, ""                                                  # servidor configurado; o connect confirma
         exe = self.argv[0]
@@ -39,6 +43,7 @@ def profiles() -> list[AgentProfile]:
     return [
         AgentProfile("claude", "Claude Code (ACP)", real),
         AgentProfile("ollama", "Ollama (local)", ("ollama",), adapter="ollama"),
+        AgentProfile("ollama-executor", "Executor local (amostra)", ("ollama",), adapter="ollama-executor"),
         AgentProfile("demo", "Demonstração (sem LLM)", (sys.executable, "-m", "agent_bar.cockpit.demo_agent"), demo=True),
     ]
 
