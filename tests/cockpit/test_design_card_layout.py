@@ -57,3 +57,25 @@ def test_the_caption_rectangle_never_crosses_the_image_rectangle(view, w, h):
         assert caption.top() > image.bottom(), (name, w, h)
         assert card.info.height() >= card.info.heightForWidth(card.info.width()), (name, w, h)   # nenhuma linha cortada
         assert card.enlarge_btn.geometry().top() > caption.bottom(), (name, w, h)
+
+
+@pytest.mark.parametrize("w,h", [(1280, 800), (1680, 1050), (1920, 1080)])
+def test_the_thumbnail_area_is_at_least_240x135_and_the_image_fills_it_keeping_its_proportion(view, w, h):
+    """#102 SHOULD: a ÁREA da miniatura nunca fica abaixo de 240×135; a imagem cabe nela sem distorcer, encostando em
+    pelo menos um dos lados (um render 16:10 fica 216×135 numa área 240×135: proporção, não encolhimento)."""
+    from agent_bar.cockpit.ui.design_view import CARD_THUMB
+    assert (CARD_THUMB.width(), CARD_THUMB.height()) == (240, 135)
+    view.resize(w, h - 140)
+    view.show()
+    for _ in range(15):
+        _APP.processEvents()
+    for name, card in view.cards.items():
+        area = card.thumb.size()
+        assert area.width() >= 240 and area.height() >= 135, (name, w, h, area)
+        pix = card.thumb.pixmap()
+        if pix is None or pix.isNull():
+            continue
+        src = card.thumb._pix
+        assert abs(pix.width() / pix.height() - src.width() / src.height()) < 0.02, (name, "distorceu")
+        assert pix.width() <= area.width() and pix.height() <= area.height()
+        assert pix.width() >= area.width() - 2 or pix.height() >= area.height() - 2, (name, w, h, pix.size(), area)

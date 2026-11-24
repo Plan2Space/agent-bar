@@ -38,6 +38,8 @@ from agent_bar.cockpit.ui.github_tabs import BTN_CSS
 
 NOT_EVALUATED = "Ainda não avaliado"
 THUMB = QSize(300, 169)
+# Área MÍNIMA da miniatura nos cartões (#102): a imagem cabe nela mantendo a proporção (16:10 → 216×135).
+CARD_THUMB = QSize(240, 135)
 CARD_CSS = "QFrame#card{background:#17171a;border:1px solid #2a2a30;border-radius:6px}"
 TITLE_CSS = "color:#e6e6ea;font-size:14px;font-weight:700"
 INFO_CSS = "color:#cfcfd4;font-size:12px"
@@ -144,7 +146,7 @@ class BigCard(QFrame):
         lay.setContentsMargins(10, 8, 10, 8)
         self.title = QLabel(title)
         self.title.setStyleSheet(TITLE_CSS)
-        self.thumb = Thumb(QSize(240, 135))                                     # cede altura para a legenda
+        self.thumb = Thumb(CARD_THUMB)                                          # cede altura para a legenda
         self.info = QLabel("")
         self.info.setWordWrap(True)
         self.info.setStyleSheet(INFO_CSS)
