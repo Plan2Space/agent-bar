@@ -84,9 +84,12 @@ def _default_provider_client(profile, workspace: str, **kw):
     from agent_bar.cockpit.provider_client import ProviderClient
     from agent_bar.platform.discovery import discover
     from agent_bar.platform.ollama import OllamaAdapter
-    if profile.adapter != "ollama":
+    if profile.adapter not in ("ollama", "ollama-executor"):
         raise ValueError(f"adaptador desconhecido: {profile.adapter}")
     endpoint = next(p["endpoint"] for p in discover(which=lambda _n: None) if p["provider_id"] == "ollama")
+    if profile.adapter == "ollama-executor":                                 # P2S-LOCAL-EXECUTOR-SKETCHUP-POC
+        from agent_bar.platform.sketchup_sample import executor_adapter
+        return ProviderClient(executor_adapter(endpoint), **kw)
     return ProviderClient(OllamaAdapter(endpoint, timeout=30), **kw)
 
 
@@ -433,6 +436,7 @@ class ChatView(QWidget):
         if p.adapter != "acp":                                               # provedor da plataforma (F1/F2): mesmo Chat
             self.client = self.provider_factory(
                 p, ws, on_update=lambda u, g=gen: self.bridge.update.emit(g, u),
+                on_permission=lambda req, respond, g=gen: self.bridge.permission.emit(g, req, respond),
                 on_exit=lambda code, g=gen: self.bridge.exited.emit(g, code))
             fut = self.client.connect(None)
             fut.add_done_callback(lambda f, g=gen: self._emit_done(g, "connect", f))

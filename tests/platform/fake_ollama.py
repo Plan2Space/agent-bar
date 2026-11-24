@@ -38,6 +38,10 @@ class FakeOllama:
         self.no_digest = False                                                # /api/tags sem digest
         self.no_counts = False                                                # nenhum turno manda os contadores
         self.image_reply: str | None = None                                  # resposta fixa dos turnos com imagem
+        # tool calling (P2S-LOCAL-EXECUTOR): o que o "modelo" devolve quando o pedido traz `tools`:
+        # {"calls": [...raw tool_calls...], "content": "texto", "drop": True (corta antes do done),
+        #  "again": True (devolve tool_calls tambem na rodada com o resultado)}
+        self.tool_script: dict | None = None
         outer = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -88,7 +92,24 @@ class FakeOllama:
                 try:
                     if body.get("think") is True:
                         line({"model": model, "message": {"role": "assistant", "thinking": "pensando..."}, "done": False})
-                    if "devagar" in last:
+                    script = outer.tool_script
+                    role = body["messages"][-1].get("role")
+                    if script is not None and role == "user" and ("tools" in body or script.get("untold")):
+                        if script.get("content"):
+                            line({"model": model, "message": {"role": "assistant", "content": script["content"]},
+                                  "done": False})
+                        if script.get("calls"):
+                            line({"model": model, "message": {"role": "assistant", "content": "",
+                                                              "tool_calls": script["calls"]}, "done": False})
+                        if script.get("drop"):
+                            return                                           # stream cortado: sem done
+                    elif script is not None and role == "tool":
+                        if script.get("again") and script.get("calls"):
+                            line({"model": model, "message": {"role": "assistant", "content": "",
+                                                              "tool_calls": script["calls"]}, "done": False})
+                        line({"model": model, "message": {"role": "assistant",
+                                                          "content": "resultado: " + str(last)[:60]}, "done": False})
+                    elif "devagar" in last:
                         for i in range(2000):
                             line({"model": model, "message": {"role": "assistant", "content": f"{i} "}, "done": False})
                             time.sleep(0.02)

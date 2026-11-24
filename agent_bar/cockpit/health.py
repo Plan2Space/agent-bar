@@ -68,6 +68,11 @@ def executor_row(chat) -> HealthRow:
     label = getattr(prof, "label", "agente desconhecido")
     executor = (getattr(prof, "key", "") in EXECUTOR_KEYS and getattr(prof, "adapter", "") == "acp"
                 and not getattr(prof, "demo", False))
+    if getattr(prof, "adapter", "") == "ollama-executor":                  # P2S-LOCAL-EXECUTOR: uma ferramenta só
+        used = sorted(str(t) for t in getattr(chat, "tools_observed", ()) or ())
+        return HealthRow(name, NOT_EXECUTOR, [f"não: {label} executa só build_room_sample (amostra no SketchUp), "
+                                              "não é o Executor Claude", f"sessão do Chat: {status}",
+                                              f"ferramenta usada nesta sessão: {len(used)}"])
     if not executor:
         return HealthRow(name, NOT_EXECUTOR, [f"não: {label} não é executor (sem ferramentas)", f"sessão do Chat: {status}"])
     mcp = "ferramentas MCP: não conferidas aqui"
