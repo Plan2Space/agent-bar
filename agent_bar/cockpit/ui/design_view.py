@@ -28,7 +28,6 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QPushButton,
-    QSplitter,
     QVBoxLayout,
     QWidget,
 )
@@ -147,6 +146,23 @@ class Thumb(QLabel):
         super().mousePressEvent(e)
 
 
+def state_lines(item: G.GalleryItem, evaluations: Sequence) -> list[str]:
+    """Os cinco estados do run, uma linha cada, sem misturar (pedido do Felipe): geometria, construção, render,
+    publicação e avaliação. Run cujas provas não fecham nunca mostra o PASS do manifest: "não verificado" com o motivo."""
+    gaps = item.verification_gaps()
+    if gaps:
+        why = f"não verificado ({gaps[0]})"
+        geo = cons = rend = why
+    else:
+        geo, cons = item.build.get("geometria", "—"), item.build.get("construção", "—")
+        rend = item.render_verdict or "sem veredito"
+    return [f"Geometria: {geo}",
+            f"Construção: {cons}",
+            f"Render: {rend}",
+            f"Publicação: {source_text(item)}",
+            f"Avaliação: {visual_line(evaluations)}"]
+
+
 class BigCard(QFrame):
     """Cartão grande: título, miniatura real, linhas de informação e "Ampliar"."""
 
@@ -205,35 +221,41 @@ class DesignView(QWidget):
         self.enlarged: QDialog | None = None
         self.compared: tuple[G.GalleryItem, G.GalleryItem] | None = None
         self.compared_images: tuple[G.GalleryImage, G.GalleryImage] | None = None
+        self.thumbs_loaded = False                                               # UX-14: miniaturas só sob demanda
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         cards = QHBoxLayout()
+        cards.setContentsMargins(0, 0, 0, 0)
         self.cards = {"referência": BigCard("REFERÊNCIA"), "último": BigCard("ÚLTIMO RENDER"),
                       "melhor": BigCard("MELHOR RENDER")}
-        for c in self.cards.values():
-            cards.addWidget(c, 1)
+        for key, c in self.cards.items():
+            cards.addWidget(c, 1 if key == "melhor" else 2)                     # referência e último: as imagens grandes
             c.enlarge_btn.clicked.connect(lambda _=False, card=c: self._enlarge_item(card.item))
             c.thumb.clicked.connect(lambda card=c: self._enlarge_item(card.item))
-        top = QWidget()
-        top.setLayout(cards)
-        cards.setContentsMargins(0, 0, 0, 0)
-        split = QSplitter(Qt.Orientation.Vertical)
-        split.addWidget(top)
-        bottom = QWidget()
-        bl = QVBoxLayout(bottom)
-        bl.setContentsMargins(0, 4, 0, 0)
-        head = QHBoxLayout()
-        self.history_title = QLabel("Histórico de evolução (mais recente primeiro)")
-        self.history_title.setStyleSheet(TITLE_CSS)
-        head.addWidget(self.history_title, 1)
-        self.cmp_ref_btn = QPushButton("Comparar com a referência")
+        self.cards["melhor"].hide()                                               # só com avaliação válida e elegível
+        lay.addLayout(cards, 3)
+        self.best_note = QLabel("")                                               # melhor render sem destaque: uma linha
+        self.best_note.setWordWrap(True)
+        self.best_note.setStyleSheet(MUTED_CSS)
+        lay.addWidget(self.best_note)
+        head = QHBoxLayout()                                                      # ações sobre o último render (ou o run
+        self.cmp_ref_btn = QPushButton("Comparar com a referência")              # escolhido no histórico aberto)
         self.cmp_prev_btn = QPushButton("Comparar com a versão anterior")
         self.enlarge_btn = QPushButton("Ampliar")
         self.tech_btn = QPushButton("Detalhes técnicos")
-        for b in (self.cmp_ref_btn, self.cmp_prev_btn, self.enlarge_btn, self.tech_btn):
-            b.setStyleSheet(BTN_CSS)
-            head.addWidget(b)
-        bl.addLayout(head)
+        for btn in (self.cmp_ref_btn, self.cmp_prev_btn, self.enlarge_btn, self.tech_btn):
+            btn.setStyleSheet(BTN_CSS)
+            head.addWidget(btn)
+        head.addStretch(1)
+        self.history_toggle = QPushButton("▸ Histórico completo")
+        self.history_toggle.setCheckable(True)
+        self.history_toggle.setStyleSheet(BTN_CSS)
+        head.addWidget(self.history_toggle)
+        lay.addLayout(head)
+        self.history_title = QLabel("")                                           # compatibilidade: o texto do histórico
+        self.history_title.setStyleSheet(TITLE_CSS)
+        self.history_title.hide()
+        lay.addWidget(self.history_title)
         self.history = QListWidget()
         self.history.setViewMode(QListView.ViewMode.IconMode)
         self.history.setIconSize(THUMB)
@@ -243,7 +265,8 @@ class DesignView(QWidget):
         self.history.setMovement(QListView.Movement.Static)
         self.history.setStyleSheet("QListWidget{background:#121215;color:#cfcfd4;border:1px solid #2a2a30;"
                                    "font-size:11px}")
-        bl.addWidget(self.history, 1)
+        self.history.hide()
+        lay.addWidget(self.history, 2)
         self.compare = QWidget()
         cl = QVBoxLayout(self.compare)
         cl.setContentsMargins(0, 4, 0, 0)
@@ -264,7 +287,7 @@ class DesignView(QWidget):
         cl.addWidget(self.compare_label)
         cl.addLayout(panes, 1)
         self.compare.hide()
-        bl.addWidget(self.compare, 1)
+        lay.addWidget(self.compare, 2)
         row = QHBoxLayout()                                                       # S01C-F1-11: comentário → Chat
         self.comment = QLineEdit()
         self.comment.setPlaceholderText("Comente o que está na tela (ex.: gostei mais da iluminação anterior, mas quero "
@@ -275,16 +298,14 @@ class DesignView(QWidget):
         self.comment_btn.setStyleSheet(BTN_CSS)
         row.addWidget(self.comment, 1)
         row.addWidget(self.comment_btn)
-        bl.addLayout(row)
+        lay.addLayout(row)
         self.comment_status = QLabel("")
         self.comment_status.setWordWrap(True)
         self.comment_status.setStyleSheet(MUTED_CSS)
-        bl.addWidget(self.comment_status)
+        lay.addWidget(self.comment_status)
         self.comment_btn.clicked.connect(lambda: self.comment_requested.emit(self.comment.text()))
         self.comment.returnPressed.connect(lambda: self.comment_requested.emit(self.comment.text()))
-        split.addWidget(bottom)
-        split.setSizes([330, 520])
-        lay.addWidget(split, 1)
+        self.history_toggle.toggled.connect(self._toggle_history)
         self.cmp_ref_btn.clicked.connect(self.compare_with_reference)
         self.cmp_prev_btn.clicked.connect(self.compare_with_previous)
         self.enlarge_btn.clicked.connect(lambda: self._enlarge_item(self.selected()))
@@ -318,19 +339,21 @@ class DesignView(QWidget):
             self.cards["último"].fill(None, ["nenhum render do cômodo"], "nenhum render")
         else:
             img = G.primary_image(last)
-            state = (f"Geometria: {last.build.get('geometria', '—')} · Render: {last.render_verdict or '—'}"
-                     if last.verified else f"Estado técnico: {tech_text(last)}")
-            self.cards["último"].fill(last, [
-                f"{last.when()} · {last.item_id}", G.camera_text(img), source_text(last), state,
-                f"Nota visual: {visual_line(self.evaluations_for(last))}"])
+            self.cards["último"].fill(last, [f"{last.when()} · {last.item_id}", G.camera_text(img),
+                                             *state_lines(last, self.evaluations_for(last))])
         best = G.cards(self.items, self.evaluations_for)[2]
         if best.item is not None and not best.item.eligible(self.evaluations_for(best.item)):
             best = G.Card(best.role, None, "nenhum render elegível: candidato inelegível recusado")
         if best.item is None:                                                     # nunca um inválido para preencher
             head = best_headline(best.text)
             self.cards["melhor"].fill(None, [head, best.text], head)
+            self.cards["melhor"].hide()                                           # sem destaque sem avaliação válida
+            self.best_note.setText(f"Melhor render: {head.lower()} ({best.text})")
+            self.best_note.show()
         else:                                                                     # (S01C-F1-07 decide; hoje não ocorre)
             self.cards["melhor"].fill(best.item, [f"{best.item.when()} · {best.item.item_id}", best.text])
+            self.cards["melhor"].show()
+            self.best_note.hide()
 
     def _fill_history(self) -> None:
         self.history.clear()
@@ -346,23 +369,47 @@ class DesignView(QWidget):
                 f"{source_text(it)}{mark}",
             ])
             li = QListWidgetItem(text)
-            if img is not None:
-                pix = thumbnail(img.path)
-                if not pix.isNull():
-                    li.setIcon(QIcon(pix))
             li.setData(Qt.ItemDataRole.UserRole, it.item_id)
             li.setToolTip(it.item_id)
             self.history.addItem(li)
         self.history_title.setText(f"Histórico de evolução: {len(self.renders)} render(s), mais recente primeiro")
-        if self.history.count():
-            self.history.setCurrentRow(0)
+        fails = sum(1 for i in self.renders if i.render_verdict == "FAIL")
+        self.history_toggle.setText(f"{'▾' if self.history_toggle.isChecked() else '▸'} Histórico completo "
+                                    f"({len(self.renders)} runs, {fails} FAIL)")
+        self.history_toggle.setEnabled(bool(self.renders))
+        self.thumbs_loaded = False
+        if self.history_toggle.isChecked():
+            self._load_thumbs()
+        self._buttons()
+
+    def _load_thumbs(self) -> None:
+        """As miniaturas só são decodificadas quando o histórico é aberto (nunca 14 imagens na tela principal)."""
+        for row in range(self.history.count()):
+            li = self.history.item(row)
+            it = next((i for i in self.renders if i.item_id == li.data(Qt.ItemDataRole.UserRole)), None)
+            img = G.primary_image(it) if it is not None else None
+            if img is not None:
+                pix = thumbnail(img.path)
+                if not pix.isNull():
+                    li.setIcon(QIcon(pix))
+        self.thumbs_loaded = True
+
+    def _toggle_history(self, on: bool) -> None:
+        self.history.setVisible(on)
+        self.history_title.setVisible(on)
+        if on and not self.thumbs_loaded:
+            self._load_thumbs()
+        if not on:
+            self.history.setCurrentRow(-1)                                        # recolheu: as ações voltam ao último
+        text = self.history_toggle.text()
+        self.history_toggle.setText(("▾" if on else "▸") + text[1:])
         self._buttons()
 
     # ------------------------------------------------------------------------------------------------ ações
     def selected(self) -> G.GalleryItem | None:
         li = self.history.currentItem()
-        if li is None:
-            return None
+        if li is None:                                                            # sem escolha: o último render
+            return G.latest_render(self.renders)
         return next((i for i in self.renders if i.item_id == li.data(Qt.ItemDataRole.UserRole)), None)
 
     def previous_of(self, item: G.GalleryItem) -> G.GalleryItem | None:
@@ -440,5 +487,6 @@ class DesignView(QWidget):
             self.enlarged = None
 
 
-__all__ = ["visual_line", "NOT_EVALUATED", "BigCard", "DesignView", "best_headline", "compare_label", "source_text", "tech_text",
+__all__ = ["visual_line", "NOT_EVALUATED", "BigCard", "DesignView", "best_headline", "compare_label", "source_text",
+           "state_lines", "tech_text",
            "thumbnail"]
