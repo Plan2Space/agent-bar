@@ -2,8 +2,19 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QLabel, QMainWindow, QSizePolicy, QTabWidget, QVBoxLayout, QWidget
+from PySide6.QtGui import QGuiApplication
+from PySide6.QtWidgets import (
+    QFrame,
+    QLabel,
+    QMainWindow,
+    QScrollArea,
+    QSizePolicy,
+    QTabWidget,
+    QVBoxLayout,
+    QWidget,
+)
 
+from agent_bar.cockpit import window_state as WS
 from agent_bar.cockpit.acp import AsyncRuntime
 from agent_bar.cockpit.evaluations import EvaluationStore
 from agent_bar.cockpit.evidence import evidence_dir
@@ -30,15 +41,58 @@ TAB_CSS = ("QTabWidget::pane{border:0;background:#16161a}QTabBar::tab{background
            "QTabBar::tab:selected{background:#2c2c34;color:#ffffff}")
 
 
+class PageScroll(QScrollArea):
+    """Uma aba dentro de uma área de rolagem: acima do mínimo da aba ela ocupa todo o espaço; abaixo dele (altura OU
+    largura) aparece a barra de rolagem em vez de espremer widgets uns sobre os outros. O QScrollArea acompanha sozinho
+    o mínimo quando a aba cresce depois (a galeria termina de carregar, uma legenda aumenta)."""
+
+    def __init__(self, page) -> None:
+        super().__init__()
+        self.page = page
+        self.setWidgetResizable(True)
+        self.setFrameShape(QFrame.Shape.NoFrame)
+        self.setWidget(page)
+
+
+class ScrollTabs(QTabWidget):
+    """Abas cujas PÁGINAS rolam e cuja barra de abas fica sempre fixa no topo da janela (UX-04). Para quem usa, as
+    páginas continuam sendo os próprios widgets: `widget`, `currentWidget`, `setCurrentWidget` e `indexOf` desembrulham."""
+
+    def addTab(self, page, *args):                                               # noqa: N802
+        return super().addTab(PageScroll(page), *args)
+
+    def insertTab(self, index, page, *args):                                     # noqa: N802
+        return super().insertTab(index, PageScroll(page), *args)
+
+    @staticmethod
+    def _page(w):
+        return w.page if isinstance(w, PageScroll) else w
+
+    def widget(self, index):
+        return self._page(super().widget(index))
+
+    def currentWidget(self):                                                     # noqa: N802
+        return self._page(super().currentWidget())
+
+    def indexOf(self, page) -> int:                                              # noqa: N802
+        return next((i for i in range(self.count()) if self.widget(i) is page), -1)
+
+    def setCurrentWidget(self, page) -> None:                                    # noqa: N802
+        i = self.indexOf(page)
+        if i >= 0:
+            self.setCurrentIndex(i)
+
+
 class CockpitWindow(QMainWindow):
     def __init__(self, gh: GhClient | None = None, repos: list[str] | None = None, discover_fn=None, specs_root=None,
                  dev_kwargs: dict | None = None, review_kwargs: dict | None = None, runtime_pin=None, core=None,
-                 **chat_kwargs) -> None:
+                 window_store: WS.WindowStateStore | None = None, **chat_kwargs) -> None:
         super().__init__()
         self.setWindowTitle("P2S Studio — Cockpit")
-        self.resize(980, 720)
+        self.window_store = window_store or WS.WindowStateStore()
+        self.restore_window()
         self.runtime = AsyncRuntime("cockpit")
-        self.tabs = QTabWidget()
+        self.tabs = ScrollTabs()                                                # UX-04: páginas rolam, abas fixas
         self.tabs.setStyleSheet(TAB_CSS)
         self.library: LibraryTab | None = None
         inbox = chat_kwargs.pop("inbox", None)
@@ -90,6 +144,8 @@ class CockpitWindow(QMainWindow):
         self.workflows.inbox = self.sessions.inbox                           # pedidos dos Fluxos no mesmo Inbox
         self.prs.review_requested.connect(self.open_review)
         self.tabs.currentChanged.connect(self._tab_changed)
+        # UX-04: abaixo do mínimo de uma aba (a Revisão visual pede ~1064×943 no Windows) a PÁGINA rola em vez de
+        # espremer os widgets uns sobre os outros; a barra de abas nunca sai da janela
         body = QWidget()                                                       # UX-02: aviso do runtime acima das abas
         lay = QVBoxLayout(body)
         lay.setContentsMargins(0, 0, 0, 0)
@@ -182,6 +238,8 @@ class CockpitWindow(QMainWindow):
     def shutdown(self) -> None:
         if self._closed:
             return
+        if self.isVisible():                                                    # "Encerrar"/troca de versão pelo núcleo
+            self.save_window()
         self._closed = True
         self.notifications.shutdown()
         self.permissions.shutdown()
@@ -198,10 +256,63 @@ class CockpitWindow(QMainWindow):
         self.image_ledger.close()
         self.center.close()
 
+    # ------------------------------------------------------------------------------------------------ janela (UX-04)
+    def restore_window(self) -> WS.WindowState:
+        """Reabre onde estava; monitor que sumiu → monitor visível; nunca maior que a área útil."""
+        screens = screen_rects()
+        st = WS.restore(self.window_store.load(), screens)
+        # UX-04: 900×600, cedendo numa área útil menor (a moldura nunca passa da barra de tarefas)
+        self.setMinimumSize(*WS.min_size(WS.screen_of(st, screens)))
+        self.resize(st.w, st.h)
+        self.move(st.x, st.y)
+        self._normal, self._prev_normal = (st.x, st.y, st.w, st.h), None        # o tamanho normal, mesmo se maximizada
+        if st.maximized:
+            self.setWindowState(self.windowState() | Qt.WindowState.WindowMaximized)
+        return st
+
+    def _remember_normal(self) -> None:
+        """Posição da MOLDURA e tamanho do conteúdo enquanto a janela está normal: é o que volta ao sair do maximizado.
+        (normalGeometry() dá o canto do conteúdo, não da moldura: salvar dele desceria a janela uma barra de título a
+        cada ciclo maximizar/reabrir.)"""
+        if self.windowState() == Qt.WindowState.WindowNoState and self.isVisible():
+            now = (self.pos().x(), self.pos().y(), self.width(), self.height())
+            if now != getattr(self, "_normal", None):
+                self._prev_normal, self._normal = getattr(self, "_normal", None), now
+
+    def changeEvent(self, e) -> None:                                           # noqa: N802
+        """O Windows entrega o resize do maximizar ANTES de o estado virar maximizado: o último "normal" registrado é
+        o tamanho maximizado; volta para o anterior."""
+        super().changeEvent(e)
+        from PySide6.QtCore import QEvent
+        if e.type() == QEvent.Type.WindowStateChange and self.isMaximized():
+            last = getattr(self, "_normal", None)
+            if last and (last[2], last[3]) == (self.width(), self.height()) and getattr(self, "_prev_normal", None):
+                self._normal = self._prev_normal
+
+    def moveEvent(self, e) -> None:                                             # noqa: N802
+        super().moveEvent(e)
+        self._remember_normal()
+
+    def resizeEvent(self, e) -> None:                                           # noqa: N802
+        super().resizeEvent(e)
+        self._remember_normal()
+
+    def save_window(self) -> WS.WindowState:
+        self._remember_normal()
+        x, y, w, h = getattr(self, "_normal", None) or (self.pos().x(), self.pos().y(), self.width(), self.height())
+        st = WS.WindowState(x, y, w, h, self.isMaximized())
+        try:
+            self.window_store.save(st)
+        except OSError:                                                        # salvar a janela nunca impede fechar
+            pass
+        return st
+
     def closeEvent(self, e) -> None:                                            # noqa: N802
         """D-UX-1: com o núcleo e a bandeja, fechar ESCONDE (agentes, sessões e coleta seguem; o ícone da bandeja e o
         atalho trazem a mesma janela de volta). Sem bandeja, fechar encerra o app pelo núcleo. Sozinha (testes,
-        compatibilidade), fecha como antes."""
+        compatibilidade), fecha como antes. Em todos os casos a geometria é salva antes (UX-04)."""
+        if not self._closed:
+            self.save_window()
         if self.close_to_tray is not None and self.close_to_tray():
             e.ignore()
             self.hide()
@@ -211,6 +322,17 @@ class CockpitWindow(QMainWindow):
         else:
             self.shutdown()
         super().closeEvent(e)
+
+
+def screen_rects() -> list[WS.Rect]:
+    """Áreas úteis dos monitores (lógicas), o principal primeiro."""
+    primary = QGuiApplication.primaryScreen()
+    screens = [primary] + [s for s in QGuiApplication.screens() if s is not primary]
+    out = []
+    for sc in screens:
+        g = sc.availableGeometry()
+        out.append(WS.Rect(g.x(), g.y(), g.width(), g.height()))
+    return out
 
 
 def _ollama_adapter(*_workspace):
