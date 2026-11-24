@@ -208,3 +208,30 @@ def test_the_real_chat_records_the_tools_its_session_used_and_a_new_session_star
         s.shutdown()
         s.deleteLater()
         QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+
+
+# ------------------------------------------------------------------ #106 SHOULD: segredo redigido e o Chat da sessão atual
+SECRETS = ["ghp_" + "A" * 36, "github_pat_" + "B" * 40, "sk-ant-" + "C" * 30, "Authorization: Bearer abcdefghijklmnop",
+           "token=xyz123456789secret"]
+
+
+def test_the_copied_diagnostic_and_the_rows_never_carry_a_secret():
+    leaky = " ; ".join(SECRETS)
+    c = core(SimpleNamespace(diagnostic=lambda: f"coleta: {leaky}", claude=snap().claude, github=snap().github,
+                             pr_queue=snap().pr_queue, observation=snap().observation),
+             PinStatus(False, "b" * 40, "a" * 40, f"agent-runtime divergente {leaky}"))
+    rows = H.health_rows(c)
+    text = H.diagnostic_text(c, rows)
+    for s in SECRETS:
+        value = s.split()[-1].split("=")[-1]
+        assert value not in text, s
+        assert all(value not in line for r in rows for line in r.lines), s
+    assert "<segredo>" in text
+
+
+def test_settings_follows_the_chat_session_that_is_open_now(window):
+    win, _c, _ = window
+    first = win.chat
+    second = win.sessions.add_session()
+    assert win.chat is second and win.chat is not first
+    assert win.settings.chat is second                                              # não o Chat da construção

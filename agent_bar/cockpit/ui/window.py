@@ -95,7 +95,7 @@ class CockpitWindow(QMainWindow):
         self.review.sources_changed.connect(self._sources_changed)
         # UX-06: Configurações (Saúde do sistema, Diagnóstico) dentro da janela principal; a Central da barra não abre
         self.core = core
-        self.settings = SettingsTab(core, chat=self.chat, review=self.review)
+        self.settings = SettingsTab(core, chat_fn=lambda: self.chat, review=self.review)   # a sessão aberta AGORA
         self.tabs.addTab(self.settings, "Configurações")
         self.setStyleSheet("QMainWindow{background:#16161a}")
         self._closed = False

@@ -7,7 +7,9 @@ linhas; ferramentas MCP não são afirmadas aqui (a prova delas é do UX-12).
 from __future__ import annotations
 
 import platform
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+
+from agent_bar.store_reader import redact_secrets
 
 OK, WARN, BAD, UNKNOWN = "ok", "atenção", "falha", "desconhecido"
 NOT_EXECUTOR = "não é executor"                    # cinza: conectado, mas o agente não executa ferramentas
@@ -116,8 +118,9 @@ def sources_row(review) -> HealthRow:
 def health_rows(core, chat=None, review=None, checkout_sha: str = "") -> list[HealthRow]:
     snap = getattr(core, "snap", None) if core is not None else None
     pin = getattr(core, "runtime_pin", None) if core is not None else None
-    return [runtime_row(pin), app_row(checkout_sha), *claude_rows(snap, chat), github_row(snap), eventstore_row(snap),
+    rows = [runtime_row(pin), app_row(checkout_sha), *claude_rows(snap, chat), github_row(snap), eventstore_row(snap),
             sources_row(review)]
+    return [replace(r, lines=[redact_secrets(line) for line in r.lines]) for r in rows]   # #106: nada de segredo na tela
 
 
 def diagnostic_text(core, rows: list[HealthRow]) -> str:
@@ -128,7 +131,7 @@ def diagnostic_text(core, rows: list[HealthRow]) -> str:
         out += [f"    {line}" for line in r.lines]
     snap = getattr(core, "snap", None) if core is not None else None
     out += ["", snap.diagnostic() if snap is not None else "coleta: ainda não chegou"]
-    return "\n".join(out)
+    return redact_secrets("\n".join(out))                                       # #106: nem no texto copiado
 
 
 __all__ = ["BAD", "EXECUTOR_KEYS", "NOT_EXECUTOR", "OK", "UNKNOWN", "WARN", "HealthRow", "app_row", "claude_rows",

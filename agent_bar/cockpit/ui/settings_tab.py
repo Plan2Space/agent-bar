@@ -35,9 +35,11 @@ SECTIONS = ("Saúde do sistema", "Diagnóstico")
 
 
 class SettingsTab(QWidget):
-    def __init__(self, core=None, chat=None, review=None, checkout_sha_fn: Callable[[], str] | None = None) -> None:
+    def __init__(self, core=None, chat=None, review=None, checkout_sha_fn: Callable[[], str] | None = None,
+                 chat_fn: Callable[[], object] | None = None) -> None:
         super().__init__()
-        self.core, self.chat, self.review = core, chat, review
+        self.core, self.review = core, review
+        self._chat_fn = chat_fn or (lambda: chat)                          # #106: a sessão do Chat aberta AGORA
         self.checkout_sha_fn = checkout_sha_fn or _checkout_sha
         self._sha: str | None = None                                        # lido uma vez (git fora do caminho quente)
         lay = QHBoxLayout(self)
@@ -89,6 +91,10 @@ class SettingsTab(QWidget):
         self.render()
 
     # ------------------------------------------------------------------------------------------------ conteúdo
+    @property
+    def chat(self):
+        return self._chat_fn()
+
     def render(self) -> None:
         if self._sha is None:
             self._sha = self.checkout_sha_fn()
