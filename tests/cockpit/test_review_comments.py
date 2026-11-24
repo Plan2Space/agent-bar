@@ -162,7 +162,7 @@ def test_step10_comment_opens_the_chat_prefilled_with_context_and_does_not_send(
 def test_comment_without_a_selected_render_does_not_open_the_chat(studio):
     win, _engine, _tmp = studio
     d = win.review.design
-    d.history.setCurrentRow(-1)
+    d.set_items([])                                     # UX-14: sem escolha, vale o último render; aqui não há nenhum
     d.comment.setText(FELIPE)
     d.comment_btn.click()
     _APP.processEvents()
