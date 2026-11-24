@@ -18,6 +18,7 @@ class Settings:
     notifications: bool = False
     notify_human: bool = True          # aviso do Windows quando um PR passa a precisar do Felipe (uma vez por PR@HEAD)
     minimized: bool = False
+    bar_enabled: bool = False          # D-UX-1: barra flutuante opcional e desligada; o atalho abre o Cockpit (janela principal)
 
 
 def settings_path() -> Path:
