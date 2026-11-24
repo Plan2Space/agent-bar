@@ -47,7 +47,9 @@ def win(tmp_path, monkeypatch):
     monkeypatch.setattr(CW, "screen_rects", lambda: [WS.Rect(0, 0, 2560, 1400)])
     (tmp_path / "ws").mkdir()
     core = FakeCore()
-    w = CW.CockpitWindow(repos=["o/r"], workspaces_fn=lambda: [tmp_path / "ws"], core=core,
+    from agent_bar.cockpit.github import GhClient
+    gh = GhClient(exe=[sys.executable, str(Path(__file__).with_name("fake_gh.py"))])   # sem rede (C1)
+    w = CW.CockpitWindow(gh=gh, repos=["o/r"], workspaces_fn=lambda: [tmp_path / "ws"], core=core,
                          profiles_fn=lambda: [AgentProfile("stub", "Stub", (sys.executable, str(STUB)))],
                          window_store=WS.WindowStateStore(tmp_path / "window.json"))
     w.show()

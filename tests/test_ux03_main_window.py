@@ -184,3 +184,19 @@ def test_when_the_old_version_does_not_close_the_message_points_to_sair_not_to_t
     ok = A._replace_older_instance(SimpleNamespace(processEvents=lambda: None), inst, None, None,  # noqa: SLF001
                                    logging.getLogger("t"))
     assert ok is False and seen and "Sair do P2S Studio" in seen[0] and "menu da barra" not in seen[0]
+
+
+def test_closing_to_the_tray_still_saves_the_window_geometry(studio):
+    """UX-03 + UX-04 juntos: fechar manda para a bandeja E salva onde a janela estava."""
+    from agent_bar.cockpit import window_state as WS
+    core, quits, shut, _b = studio
+    A.start_main(core)
+    win = core.cockpit
+    win.resize(1100, 760)
+    win.move(140, 95)
+    _APP.processEvents()
+    win.close()
+    _APP.processEvents()
+    saved = WS.WindowStateStore().load()
+    assert not win.isVisible() and shut == [] and quits == []                  # na bandeja
+    assert saved is not None and (saved.w, saved.h) == (1100, 760)             # e a geometria salva
