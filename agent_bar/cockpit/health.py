@@ -82,6 +82,15 @@ def executor_row(chat) -> HealthRow:
     return HealthRow(name, OK, [f"sessão do Chat: {status}", f"ferramentas usadas nesta sessão: {len(tools)} ({shown})", mcp])
 
 
+def permissions_row() -> HealthRow:
+    """Em que modo o Studio responde aos pedidos de permissão dos agentes (bypass é a decisão do Felipe)."""
+    from agent_bar.cockpit import permission_mode as PM
+    mode = PM.current()
+    return HealthRow("Permissões dos agentes", OK, [PM.label(mode), "cada aprovação automática fica registrada (Inbox, "
+                                                   "Notificações); operação irreversível continua pedindo o código"
+                                                   if mode == PM.BYPASS else "cada ferramenta pede confirmação"])
+
+
 def github_row(snap) -> HealthRow:
     if snap is None:
         return HealthRow("GitHub", UNKNOWN, ["a coleta ainda não chegou"])
@@ -118,8 +127,8 @@ def sources_row(review) -> HealthRow:
 def health_rows(core, chat=None, review=None, checkout_sha: str = "") -> list[HealthRow]:
     snap = getattr(core, "snap", None) if core is not None else None
     pin = getattr(core, "runtime_pin", None) if core is not None else None
-    rows = [runtime_row(pin), app_row(checkout_sha), *claude_rows(snap, chat), github_row(snap), eventstore_row(snap),
-            sources_row(review)]
+    rows = [runtime_row(pin), app_row(checkout_sha), *claude_rows(snap, chat), permissions_row(), github_row(snap),
+            eventstore_row(snap), sources_row(review)]
     return [replace(r, lines=[redact_secrets(line) for line in r.lines]) for r in rows]   # #106: nada de segredo na tela
 
 
