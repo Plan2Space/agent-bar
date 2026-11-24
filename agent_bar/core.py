@@ -231,7 +231,7 @@ class AppCore(QObject):
                 win = self.cockpit_factory()
             else:
                 from agent_bar.cockpit.ui.window import CockpitWindow
-                win = CockpitWindow(runtime_pin=self.runtime_pin)
+                win = CockpitWindow(core=self, runtime_pin=self.runtime_pin)
             win.close_to_tray = self._close_to_tray
             win.quit_app = self.shutdown                                       # sem bandeja, fechar encerra o app inteiro
             self.cockpit = win
