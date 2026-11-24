@@ -21,7 +21,13 @@ MODELS = {
 }
 
 
-IMAGE_TOKENS = 256                                                          # como o Ollama: a imagem entra no prompt
+def fake_digest(name: str) -> str:
+    """Digest determinístico como o do /api/tags (64 hex)."""
+    import hashlib
+    return hashlib.sha256(f"fake-ollama/{name}".encode()).hexdigest()
+
+
+IMAGE_TOKENS = 256                                                         # como o Ollama: a imagem entra no prompt
 
 
 class FakeOllama:
@@ -29,6 +35,9 @@ class FakeOllama:
         self.models = MODELS if models is None else models
         self.requests: list[tuple[str, dict]] = []
         self.aborted = 0
+        self.no_digest = False                                                # /api/tags sem digest
+        self.no_counts = False                                                # nenhum turno manda os contadores
+        self.image_reply: str | None = None                                  # resposta fixa dos turnos com imagem
         outer = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -47,7 +56,9 @@ class FakeOllama:
                 if self.path == "/api/version":
                     return self._json({"version": "0.40.16-fake"})
                 if self.path == "/api/tags":
-                    return self._json({"models": [{"name": n, "model": n} for n in outer.models]})
+                    tags = [{"name": n, "model": n, **({} if outer.no_digest else {"digest": fake_digest(n)})}
+                            for n in outer.models]
+                    return self._json({"models": tags})
                 return self._json({"error": "not found"}, 404)
 
             def do_POST(self):
@@ -86,8 +97,9 @@ class FakeOllama:
                             line({"error": "model does not support images"})
                             return
                         imgs = body["messages"][-1]["images"]
-                        line({"model": model, "message": {"role": "assistant",
-                              "content": f"imagens={len(imgs)} bytes={sum(len(i) for i in imgs)}"}, "done": False})
+                        text = (outer.image_reply if outer.image_reply is not None
+                                else f"imagens={len(imgs)} bytes={sum(len(i) for i in imgs)}")
+                        line({"model": model, "message": {"role": "assistant", "content": text}, "done": False})
                     elif "historico" in last:
                         n = sum(1 for m in body["messages"] if m["role"] == "user")
                         line({"model": model, "message": {"role": "assistant", "content": f"users={n}"}, "done": False})
@@ -98,7 +110,7 @@ class FakeOllama:
                              "done_reason": "stop",
                              "prompt_eval_count": 13 + IMAGE_TOKENS * len(body["messages"][-1].get("images") or []),
                              "prompt_eval_cached_count": 0, "eval_count": 2}
-                    if "semcontagem" in last:                         # servidor que nao manda os contadores
+                    if "semcontagem" in last or outer.no_counts:                         # servidor que nao manda os contadores
                         final = {k: v for k, v in final.items() if not k.endswith("_count")}
                     line(final)
                 except (ConnectionError, OSError):

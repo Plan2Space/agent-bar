@@ -28,7 +28,7 @@ CATEGORIES = ("PERMISSION", "AGENT", "TASK", "BUILD", "RENDER", "PR_CI", "ERROR"
 IMAGE_STATE = {"RECORDED": "NEW", "SENT": "NEW", "NOT_SENT": "FAILED"}
 IMAGE_VERB = {"RECORDED": "Imagem registrada para envio", "SENT": "Imagem entregue", "NOT_SENT": "Imagem não enviada"}
 PURPOSE_TEXT = {"REFERENCE": "referência", "EVALUATION": "avaliação", "CORRECTION_PACKAGE": "pacote de correção",
-                "CHAT": "Chat"}
+                "CHAT": "Chat", "CALIBRATION": "calibração de tokens"}
 
 
 def image_notification(rows) -> dict:
