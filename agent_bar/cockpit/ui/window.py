@@ -5,6 +5,9 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QMainWindow, QTabWidget
 
 from agent_bar.cockpit.acp import AsyncRuntime
+from agent_bar.cockpit.evaluations import EvaluationStore
+from agent_bar.cockpit.evidence import evidence_dir
+from agent_bar.cockpit.gallery import engine_dir, library_dir
 from agent_bar.cockpit.github import GhClient, configured_repos
 from agent_bar.cockpit.notifications import NotificationCenter, image_notification
 from agent_bar.cockpit.run_vision import RunVision
@@ -46,7 +49,8 @@ class CockpitWindow(QMainWindow):
                                       specs_root=specs_root, **wf_kwargs)
         self.tabs.addTab(self.sessions, "Chat")
         self.tabs.addTab(self.workflows, "Fluxos")
-        self.review = ReviewTab(**(review_kwargs or {}))
+        self.review = ReviewTab(**{"evaluation_store": EvaluationStore(protected=(evidence_dir(), engine_dir(), library_dir())),
+                                   **(review_kwargs or {})})
         self.tabs.addTab(self.review, "Revisão visual")
         self.review.packages.send_to_chat.connect(self.open_correction)
         self.review.request_chat.connect(self.open_correction)               # S01C-F1-11: comentário da galeria
