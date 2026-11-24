@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import base64
 import concurrent.futures as cf
+import hashlib
 import itertools
 import json
 import logging
@@ -416,6 +417,10 @@ class OllamaAdapter(ProviderAdapter):
                           model_id=model, model_digest=self._digests.get(model),
                           provider_version=self.version, workspace=(self._sessions.get(sid) or {}).get("workspace"),
                           on_permission=self.on_permission, cancel=run["cancel"],
+                          provider="ollama", adapter=self.adapter_id, prompt_sha256=self._prompt_hash(body),
+                          inference={"think": body.get("think"), "num_ctx": (body.get("options") or {}).get("num_ctx"),
+                                     "temperature": (body.get("options") or {}).get("temperature"),
+                                     "seed": (body.get("options") or {}).get("seed")},
                           emit=lambda kind, data: on_event(AgentEvent(kind, str(data.get("title") or ""), dict(data))))
         out: list[dict] = []
         results: list[dict] = []
@@ -445,6 +450,12 @@ class OllamaAdapter(ProviderAdapter):
             content = shown if isinstance(shown, str) else json.dumps(shown, ensure_ascii=False, default=str)
             out.append({"role": "tool", "tool_name": c.name, "content": content})
         return out, results
+
+    @staticmethod
+    def _prompt_hash(body: dict) -> str | None:
+        """sha256 do ultimo texto do usuario do envio (o prompt em si nao vai para a proveniencia)."""
+        text = next((m.get("content") for m in reversed(body.get("messages") or []) if m.get("role") == "user"), None)
+        return hashlib.sha256(str(text).encode("utf-8")).hexdigest() if text is not None else None
 
     @staticmethod
     def _emit_refusal(r: RefusedCall, on_event) -> None:

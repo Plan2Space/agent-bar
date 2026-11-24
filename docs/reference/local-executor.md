@@ -45,3 +45,12 @@ min); reabrir o Studio não espera por isso e o registro reconcilia o run.
 `completed`; só então `SUPPORTED`, com a prova (modelo@digest → ferramenta → run). Por modelo:
 `OllamaAdapter.tool_calls_for(modelo)` diz `SUPPORTED` só para o `modelo@digest` que executou; outro modelo continua
 `UNKNOWN`.
+
+## Proveniência por papel (LAB-04)
+
+Cada execução grava em `<saída>/_studio/<request_id>.json` o bloco `provenance` (`p2s.lab.provenance.v1`): provedor,
+adaptador, versão do provedor, `model_id`, `model_digest`, sha256 do prompt do envio, parâmetros de inferência pedidos e
+os papéis separados — `tool_requester` (o modelo local), `planner` e `builder` (o motor, pelo commit; o modelo só
+escolheu a ferramenta e a `fixture_ref`), `renderer`, `evaluator` (a inspeção do motor), `refiner` e `outcome_writer`
+(o Studio, pelo commit). Não há modelo de reserva (`fallback_model` é sempre `null`). O que não foi medido fica `null`,
+nunca um valor inventado (ex.: `model_version`, `experiment_id`, `parent_run_id`).

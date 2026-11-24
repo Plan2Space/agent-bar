@@ -410,7 +410,8 @@ class SketchUpSampleTool:
                 "workspace_id": str(self.engine_root), "mode": self.mode, "studio_commit": studio.get("commit"),
                 "studio_dirty": studio.get("dirty"), "model": ctx.model_id,
                 "model_digest": ctx.model_digest, "provider_version": ctx.provider_version,
-                "session_id": ctx.session_id, "turn": ctx.turn, "call_digest": call.digest}
+                "session_id": ctx.session_id, "turn": ctx.turn, "call_digest": call.digest,
+                "provenance": provenance(ctx, head, studio)}
         self.registry.insert({**base, "session_id": ctx.session_id, "turn": ctx.turn, "call_digest": call.digest,
                               "status": "running", "result": {**base, "status": "running"}}, self.clock())
         ctx.emit("tool_update", {"toolCallId": call.call_id, "status": "in_progress",
@@ -441,6 +442,8 @@ class SketchUpSampleTool:
                           "o motor nao terminou no prazo; o resultado sera reconciliado pelo run_id (sem novo run)"})
         else:
             result.update(self.read_run(self.out_root / run_id, fixture_hash))
+            su = result.get("sketchup") or {}                                # o que o motor registrou, depois do run
+            result["provenance"]["roles"]["builder"]["sketchup_version"] = su.get("version")
         self._finish(call, ctx, rid, result)
         return result
 
@@ -531,6 +534,34 @@ class SketchUpSampleTool:
         ctx.emit("tool_update", {"toolCallId": call.call_id, "title": f"Executor local (amostra): {TOOL_NAME}",
                                  "kind": "execute", "status": "failed", "content": _text(summary(result))})
         return result
+
+
+def provenance(ctx: ToolContext, engine_head: dict | None, studio: dict) -> dict:
+    """Quem fez o que nesta execucao (P2S-STUDIO-LLM-LAB-001 §10). O modelo local so PEDIU a ferramenta e escolheu a
+    fixture: o plano de construcao e do motor, a partir da fixture versionada, e nao e atribuido ao modelo. Nao ha
+    modelo de reserva: `fallback_model` e sempre None neste executor. O que nao foi medido fica None."""
+    engine = f"sketchup-mcp-next@{(engine_head or {}).get('commit') or 'desconhecido'}"
+    model = f"{ctx.model_id}@{ctx.model_digest or 'sem-digest'}"
+    return {
+        "schema": "p2s.lab.provenance.v1", "provider": ctx.provider, "adapter": ctx.adapter,
+        "provider_version": ctx.provider_version, "model_id": ctx.model_id, "model_digest": ctx.model_digest,
+        "model_version": None,                                               # o Ollama so da a tag (no model_id) e o digest
+        "experiment_id": None, "parent_run_id": None,
+        "prompt_sha256": ctx.prompt_sha256, "inference": dict(ctx.inference),
+        "roles": {
+            "tool_requester": {"kind": "model", "id": model},
+            "planner": {"kind": "engine", "id": engine,
+                        "note": "plano de construcao derivado da fixture versionada; o modelo so escolheu a ferramenta "
+                                "e a fixture_ref"},
+            "builder": {"kind": "engine", "id": engine, "sketchup_version": None},
+            "renderer": None,                                                # esta ferramenta nao renderiza
+            "evaluator": {"kind": "engine_harness", "id": engine,
+                          "note": "inspecao do .skp reaberto (validation_report.json); veredito visual: humano"},
+            "refiner": None,
+            "outcome_writer": {"kind": "studio", "id": f"agent-bar@{studio.get('commit')}"},
+        },
+        "fallback_model": None,
+    }
 
 
 def _error(code: str, message: str) -> dict:

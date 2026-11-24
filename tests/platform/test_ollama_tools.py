@@ -291,3 +291,16 @@ def test_tool_capability_is_per_model(server):
         assert a.tool_calls_for("chat-a")["state"] == "SUPPORTED"
         assert a.tool_calls_for("chat-b")["state"] == "UNKNOWN"              # prova de um nao vale para o outro
         a.disconnect()
+
+
+def test_tool_context_carries_prompt_hash_and_inference_parameters(server):
+    import hashlib
+    host = Host()
+    a = make(server, host)
+    server.tool_script = {"calls": [call()]}
+    ask(a, "crie uma amostra")
+    ctx = host.calls[0][1]
+    assert ctx.prompt_sha256 == hashlib.sha256("crie uma amostra".encode()).hexdigest()
+    assert ctx.provider == "ollama" and ctx.adapter == "ollama"
+    assert ctx.inference == {"think": None, "num_ctx": None, "temperature": None, "seed": None}
+    a.disconnect()

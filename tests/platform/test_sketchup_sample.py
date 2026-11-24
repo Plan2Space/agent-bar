@@ -389,3 +389,21 @@ def test_inbox_operation_keeps_model_and_digest_within_its_limit(engine_root, tm
 def test_studio_commit_outside_git_is_explicitly_unknown(engine_root, tmp_path):
     res = make(engine_root, tmp_path, studio_head=lambda: None).run(call(), ctx(Perm()))
     assert res["studio_commit"] == "desconhecido (fora de um checkout git)"
+
+
+def test_provenance_separates_who_asked_who_planned_who_built_and_who_judged(engine_root, tmp_path):
+    tool = make(engine_root, tmp_path, studio_head=lambda: {"commit": "s" * 40, "dirty": False})
+    tool.head = lambda _r: {"commit": "e" * 40, "dirty": False}
+    res = tool.run(call(), ctx(Perm()))
+    p = res["provenance"]
+    model = "llama3.1:8b@46e0c10c" + "0" * 56
+    assert p["schema"] == "p2s.lab.provenance.v1" and p["provider"] == "ollama" and p["adapter"] == "ollama"
+    assert p["model_id"] == "llama3.1:8b" and p["model_digest"].startswith("46e0c10c") and p["model_version"] is None
+    roles = p["roles"]
+    assert roles["tool_requester"] == {"kind": "model", "id": model}
+    assert roles["planner"]["kind"] == "engine" and "so escolheu" in roles["planner"]["note"]   # nao e do modelo
+    assert roles["builder"]["id"] == "sketchup-mcp-next@" + "e" * 40
+    assert roles["evaluator"]["kind"] == "engine_harness" and roles["outcome_writer"]["id"] == "agent-bar@" + "s" * 40
+    assert roles["renderer"] is None and roles["refiner"] is None and p["fallback_model"] is None
+    assert p["experiment_id"] is None and p["parent_run_id"] is None       # nao medido = None, nunca inventado
+    assert roles["builder"]["sketchup_version"] == "26.0.429"              # do manifest do motor, depois do run

@@ -52,6 +52,11 @@ class ToolContext:
     on_permission: Callable[..., None] | None
     cancel: threading.Event
     emit: Callable[[str, Mapping[str, Any]], None]                          # (kind "tool_call"|"tool_update", dados ACP)
+    # LAB-04 (P2S-STUDIO-LLM-LAB-001 §5, §10): identidade do provedor e do pedido; None = nao medido, nunca inventado
+    provider: str = "ollama"
+    adapter: str = "ollama"
+    prompt_sha256: str | None = None                                         # sha256 do texto do usuario deste envio
+    inference: Mapping[str, Any] = field(default_factory=dict)               # parametros pedidos ao provedor
 
 
 class ToolHost(Protocol):
