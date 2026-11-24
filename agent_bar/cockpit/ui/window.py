@@ -28,29 +28,46 @@ TAB_CSS = ("QTabWidget::pane{border:0;background:#16161a}QTabBar::tab{background
            "QTabBar::tab:selected{background:#2c2c34;color:#ffffff}")
 
 
-class VerticalScroll(QScrollArea):
-    """Rolagem só vertical: a largura acompanha a janela (a barra de abas e o Chat ficam sempre dentro dela) e a altura
-    nunca fica abaixo do mínimo da aba atual: abaixo dele a janela rola em vez de espremer widgets uns sobre os outros
-    (legenda por cima da imagem, histórico com 56 px)."""
+class PageScroll(QScrollArea):
+    """Uma aba dentro de uma área de rolagem: acima do mínimo da aba ela ocupa todo o espaço; abaixo dele (altura OU
+    largura) aparece a barra de rolagem em vez de espremer widgets uns sobre os outros. O QScrollArea acompanha sozinho
+    o mínimo quando a aba cresce depois (a galeria termina de carregar, uma legenda aumenta)."""
 
-    def __init__(self, inner) -> None:
+    def __init__(self, page) -> None:
         super().__init__()
-        self.setWidgetResizable(False)
+        self.page = page
+        self.setWidgetResizable(True)
         self.setFrameShape(QFrame.Shape.NoFrame)
-        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.setWidget(inner)
-        inner.currentChanged.connect(lambda _i: self._fit())
+        self.setWidget(page)
 
-    def _fit(self) -> None:
-        inner = self.widget()
-        page = inner.currentWidget()
-        need = (page.minimumSizeHint().height() if page is not None else 0) + inner.tabBar().sizeHint().height() + 8
-        width = self.viewport().width()
-        inner.resize(width, max(self.viewport().height(), need))
 
-    def resizeEvent(self, e) -> None:                                           # noqa: N802
-        super().resizeEvent(e)
-        self._fit()
+class ScrollTabs(QTabWidget):
+    """Abas cujas PÁGINAS rolam e cuja barra de abas fica sempre fixa no topo da janela (UX-04). Para quem usa, as
+    páginas continuam sendo os próprios widgets: `widget`, `currentWidget`, `setCurrentWidget` e `indexOf` desembrulham."""
+
+    def addTab(self, page, *args):                                               # noqa: N802
+        return super().addTab(PageScroll(page), *args)
+
+    def insertTab(self, index, page, *args):                                     # noqa: N802
+        return super().insertTab(index, PageScroll(page), *args)
+
+    @staticmethod
+    def _page(w):
+        return w.page if isinstance(w, PageScroll) else w
+
+    def widget(self, index):
+        return self._page(super().widget(index))
+
+    def currentWidget(self):                                                     # noqa: N802
+        return self._page(super().currentWidget())
+
+    def indexOf(self, page) -> int:                                              # noqa: N802
+        return next((i for i in range(self.count()) if self.widget(i) is page), -1)
+
+    def setCurrentWidget(self, page) -> None:                                    # noqa: N802
+        i = self.indexOf(page)
+        if i >= 0:
+            self.setCurrentIndex(i)
 
 
 class CockpitWindow(QMainWindow):
@@ -59,11 +76,10 @@ class CockpitWindow(QMainWindow):
                  window_store: WS.WindowStateStore | None = None, **chat_kwargs) -> None:
         super().__init__()
         self.setWindowTitle("P2S Studio — Cockpit")
-        self.setMinimumSize(WS.MIN_W, WS.MIN_H)                                 # UX-04: nada essencial some em tela menor
         self.window_store = window_store or WS.WindowStateStore()
         self.restore_window()
         self.runtime = AsyncRuntime("cockpit")
-        self.tabs = QTabWidget()
+        self.tabs = ScrollTabs()                                                # UX-04: páginas rolam, abas fixas
         self.tabs.setStyleSheet(TAB_CSS)
         self.library: LibraryTab | None = None
         inbox = chat_kwargs.pop("inbox", None)
@@ -114,10 +130,9 @@ class CockpitWindow(QMainWindow):
         self.workflows.inbox = self.sessions.inbox                           # pedidos dos Fluxos no mesmo Inbox
         self.prs.review_requested.connect(self.open_review)
         self.tabs.currentChanged.connect(self._tab_changed)
-        # UX-04: abaixo do mínimo de conteúdo de uma aba (a Revisão visual pede ~1064×943), a janela ROLA em vez de
-        # espremer os widgets uns sobre os outros; acima dele, as abas ocupam a janela inteira como antes
-        self.scroll = VerticalScroll(self.tabs)
-        self.setCentralWidget(self.scroll)
+        # UX-04: abaixo do mínimo de uma aba (a Revisão visual pede ~1064×943 no Windows) a PÁGINA rola em vez de
+        # espremer os widgets uns sobre os outros; a barra de abas nunca sai da janela
+        self.setCentralWidget(self.tabs)
         self.setStyleSheet("QMainWindow{background:#16161a}")
         self._closed = False
 
@@ -171,6 +186,8 @@ class CockpitWindow(QMainWindow):
     def shutdown(self) -> None:
         if self._closed:
             return
+        if self.isVisible():                                                    # "Encerrar"/troca de versão pelo núcleo
+            self.save_window()
         self._closed = True
         self.notifications.shutdown()
         self.permissions.shutdown()
@@ -190,7 +207,10 @@ class CockpitWindow(QMainWindow):
     # ------------------------------------------------------------------------------------------------ janela (UX-04)
     def restore_window(self) -> WS.WindowState:
         """Reabre onde estava; monitor que sumiu → monitor visível; nunca maior que a área útil."""
-        st = WS.restore(self.window_store.load(), screen_rects())
+        screens = screen_rects()
+        st = WS.restore(self.window_store.load(), screens)
+        # UX-04: 900×600, cedendo numa área útil menor (a moldura nunca passa da barra de tarefas)
+        self.setMinimumSize(*WS.min_size(WS.screen_of(st, screens)))
         self.resize(st.w, st.h)
         self.move(st.x, st.y)
         self._normal, self._prev_normal = (st.x, st.y, st.w, st.h), None        # o tamanho normal, mesmo se maximizada

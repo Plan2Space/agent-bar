@@ -33,6 +33,17 @@ class WindowState:
     maximized: bool = False
 
 
+def min_size(area: Rect) -> tuple[int, int]:
+    """O mínimo 900×600 cede numa área útil menor (ex.: 1093×574): a moldura inteira continua acima da barra de tarefas."""
+    return min(MIN_W, area.width - 2 * MARGIN), min(MIN_H, area.height - 2 * MARGIN - FRAME_H)
+
+
+def screen_of(st: WindowState, screens: list[Rect]) -> Rect:
+    """O monitor que tem a maior parte da janela (o principal se nenhum tem)."""
+    best = max(screens, key=lambda s: s.overlap(st.x, st.y, st.w, st.h + FRAME_H))
+    return best if best.overlap(st.x, st.y, st.w, st.h + FRAME_H) > 0 else screens[0]
+
+
 def default_rect(primary: Rect) -> WindowState:
     w = min(DEFAULT_W, primary.width - 2 * MARGIN)
     h = min(DEFAULT_H, primary.height - 2 * MARGIN - FRAME_H)
@@ -50,8 +61,9 @@ def restore(saved: WindowState | None, screens: list[Rect]) -> WindowState:
     best = max(screens, key=lambda s: s.overlap(saved.x, saved.y, saved.w, saved.h))
     if best.overlap(saved.x, saved.y, saved.w, saved.h) < VISIBLE_FRACTION * area_w:
         return WindowState(**{**asdict(default_rect(primary)), "maximized": saved.maximized})   # monitor sumiu
-    w = max(MIN_W, min(saved.w, best.width - 2 * MARGIN))
-    h = max(MIN_H, min(saved.h, best.height - 2 * MARGIN - FRAME_H))
+    mw, mh = min_size(best)
+    w = max(mw, min(saved.w, best.width - 2 * MARGIN))
+    h = max(mh, min(saved.h, best.height - 2 * MARGIN - FRAME_H))
     x, y = clamp_window(saved.x, saved.y, w, h + FRAME_H, best)                # a moldura inteira dentro da área útil
     return WindowState(x, y, w, h, saved.maximized)
 
@@ -66,7 +78,7 @@ class WindowStateStore:
         try:
             raw = json.loads(self.path.read_text(encoding="utf-8"))
             st = WindowState(int(raw["x"]), int(raw["y"]), int(raw["w"]), int(raw["h"]), bool(raw.get("maximized", False)))
-        except (OSError, ValueError, KeyError, TypeError):
+        except (OSError, ValueError, KeyError, TypeError, OverflowError):   # Infinity/1e400 → int() estoura; NaN → ValueError
             return None
         return st if st.w > 0 and st.h > 0 else None
 
@@ -75,4 +87,5 @@ class WindowStateStore:
 
 
 __all__ = ["DEFAULT_H", "DEFAULT_W", "FRAME_H", "MIN_H", "MIN_W", "VISIBLE_FRACTION", "WindowState", "WindowStateStore",
+           "min_size", "screen_of",
            "default_rect", "restore"]
