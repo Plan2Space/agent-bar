@@ -209,6 +209,7 @@ class PrsTab(_GhTab):
 
     def refresh(self) -> None:
         self._pending_key = self.key()
+        self.approval.clear("Aprovação: relendo a lista de PRs")              # nada aprovável até reler o PR
         repos = self.selected_repos()
         self.submit("list", lambda: self._collect(repos))
 
@@ -247,10 +248,12 @@ class PrsTab(_GhTab):
 
     def _select(self, item: QTreeWidgetItem | None) -> None:
         if item is None:
+            self.approval.clear("Aprovação: nenhum PR selecionado")
             return
         number = int(item.data(0, Qt.ItemDataRole.UserRole))
         repo = str(item.data(1, Qt.ItemDataRole.UserRole) or "")
         self.review_btn.setEnabled(False)
+        self.approval.clear(f"Aprovação de {repo}#{number}: relendo HEAD e CI")   # o do PR anterior sai já
         self._pending_detail = (repo, number)
         self.submit("detail", lambda: self._load_detail(repo, number))
 
@@ -278,6 +281,8 @@ class PrsTab(_GhTab):
             self.missing = dict(missing)
             self.shown_key = self._pending_key
             self.current, self.current_repo = None, ""
+            self._pending_detail = None                                        # detalhe em voo de antes da lista: descartado
+            self.approval.clear("Aprovação: nenhum PR selecionado")
             self.data_state = live("PRs", self._label(self.shown_key), self.clock())
             self.tree.clear()
             for repo, pr in rows:
@@ -294,6 +299,8 @@ class PrsTab(_GhTab):
             self.status.setText("")
         elif tag == "detail":
             repo, pr, diff, ci = result  # type: ignore[misc]
+            if (repo, int(pr.get("number") or 0)) != getattr(self, "_pending_detail", None):
+                return                                                         # resposta de um PR que já não é o selecionado
             self.current, self.current_repo, self.current_diff = pr, repo, diff
             self.open_btn.setEnabled(bool(pr.get("url")))
             no_diff = diff.startswith(DIFF_UNAVAILABLE)                       # revisão sem diff não revisa nada
@@ -316,6 +323,7 @@ class PrsTab(_GhTab):
             return
         if tag != "list":
             return
+        self.approval.clear("Aprovação: a lista de PRs não foi relida")
         key = self._pending_key
         if self.data_state is not None and self.shown_key == key:              # a tabela na tela é deste recorte
             self.data_state = failed("PRs", self._label(key), msg, self.data_state)
