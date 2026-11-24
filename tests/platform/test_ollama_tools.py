@@ -4,6 +4,8 @@ do turno COMPLETO chega ao executor; recusa tipada para inventada/malformada/dup
 from __future__ import annotations
 
 import json
+import threading
+import time
 
 import pytest
 
@@ -232,3 +234,47 @@ def test_executor_that_writes_the_final_text_skips_the_model_summary(server):
     assert roles == ["user", "assistant", "tool", "assistant"]                 # o resultado fica para o proximo turno
     assert a._history[sid][-1]["content"] == "Studio: completed lx-1"
     a.disconnect()
+
+
+class SlowHost(Host):
+    def __init__(self):
+        super().__init__()
+        self.entered, self.release = threading.Event(), threading.Event()
+
+    def run(self, c, ctx):
+        self.entered.set()
+        self.release.wait(10)
+        return super().run(c, ctx)
+
+
+def test_disconnect_does_not_freeze_while_the_engine_runs(server):
+    host = SlowHost()
+    a = make(server, host)
+    server.tool_script = {"calls": [call()]}
+    sid = a.create_session(SessionRequest(model_id="chat-a"))["session_id"]
+    fut = a.send_prompt(sid, "crie", lambda e: None)
+    assert host.entered.wait(10)
+    t0 = time.monotonic()
+    a.disconnect()                                                           # trocar de agente / fechar a aba
+    assert time.monotonic() - t0 < 1.0, "a UI ficaria congelada durante o build"
+    host.release.set()
+    fut.result(timeout=10)                                                   # o turno termina sozinho depois
+
+
+def test_capability_proof_names_the_model_that_executed(server):
+    a = make(server, Host())
+    server.tool_script = {"calls": [call()]}
+    ask(a)
+    method = a.describe()["capabilities"]["tool_calls"]["evidence"]["method"]
+    assert f"chat-a@{fake_digest('chat-a')[:12]}" in method and "so para" in method
+    a.disconnect()
+
+
+def test_executor_without_any_tool_model_says_so():
+    with FakeOllama({"think-b": {"capabilities": ["completion", "thinking"]}}) as s:
+        a = OllamaAdapter(s.endpoint, tool_host=Host())
+        a.connect()
+        with pytest.raises(Exception) as exc:
+            a.create_session(SessionRequest())
+        assert "tools" in str(exc.value)
+        a.disconnect()

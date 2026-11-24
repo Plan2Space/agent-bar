@@ -54,19 +54,22 @@ class FakeEngine:
         run_dir.mkdir(parents=True)
         skp = run_dir / "room_001.skp"
         data = b"" if self.mode == "empty_skp" else b"SKP-BYTES"
+        skp_rel = "../outside.skp" if self.mode == "skp_outside" else "room_001.skp"
+        if self.mode == "skp_outside":
+            (run_dir.parent / "outside.skp").write_bytes(data)
         if self.mode != "no_skp":
             skp.write_bytes(data)
         verdict = "FAIL" if self.mode == "inspection_fail" else "PASS"
         man = {"run_id": run_dir.name, "status": "FAILED" if self.mode == "engine_failed" else "OK",
                "finished_at": "2026-11-24T00:00:00Z", "verdict": verdict,
-               "engine": {"commit": "e" * 40}, "fixture": {"sha256": sha(fixture.read_bytes())},
+               "engine": {"commit": "e" * 40}, "fixture": {"sha256": "f" * 64 if self.mode == "other_fixture" else sha(fixture.read_bytes())},
                "sketchup": {"version": "26.0.429", "build_pid": 1, "reopen_pid": 2},
-               "artifacts": [{"role": "skp", "path": "room_001.skp",
-                              "sha256": "0" * 64 if self.mode == "hash_mismatch" else sha(data)}],
+               "artifacts": [{"role": "skp", "path": skp_rel,
+                              "sha256": "0" * 64 if self.mode == "hash_mismatch" else sha(data), "bytes": len(data)}],
                "error": {"code": "SU"} if self.mode == "engine_failed" else None}
         (run_dir / "run_manifest.json").write_text(json.dumps(man), encoding="utf-8")
         (run_dir / "validation_report.json").write_text(json.dumps(
-            {"verdict": verdict, "failed": [], "checks": [{"id": "reopened", "pass": True}]}), encoding="utf-8")
+            {"verdict": verdict, "failed": [], "checks": [{"id": "reopened", "pass": self.mode != "not_reopened"}]}), encoding="utf-8")
 
 
 @pytest.fixture
@@ -98,11 +101,11 @@ class Perm:
             respond(self.choice)
 
 
-def make(engine_root, tmp_path, engine=None, busy=False, alive=True, **kw):
+def make(engine_root, tmp_path, engine=None, busy=False, alive=True, clock_s=1_790_000_000.0, **kw):
     tool = SketchUpSampleTool(engine_root, engine_root / "runs" / "local-executor", allowed_roots=(tmp_path / "apps",),
                               runner=engine or FakeEngine(), sketchup_busy=lambda: busy, head=lambda _r: None,
                               alive=lambda pid, created: alive,
-                              clock=lambda: 1_790_000_000.0, python=engine_root / ".venv" / "python.exe",
+                              clock=lambda: clock_s, python=engine_root / ".venv" / "python.exe",
                               base_env={"PATH": "x", "GH_TOKEN": "segredo", "ANTHROPIC_API_KEY": "k", "TEMP": "t"}, **kw)
     return tool
 
@@ -143,7 +146,7 @@ def test_allow_once_runs_the_engine_once_and_reports_the_real_artifact(engine_ro
     assert {o["kind"] for o in req.options} == {"allow_once", "reject_once"}                  # nunca allow_always
     assert res["skp_sha256"] == sha(b"SKP-BYTES") and res["skp_bytes"] == 9
     assert res["inspection_result"]["verdict"] == "PASS" and res["inspection_result"]["visual_verdict"] == "PENDING_HUMAN"
-    assert res["run_id"].startswith("lx-") and res["run_id"].endswith("-room_001") and res["mode"] == "real"
+    assert res["run_id"].startswith("lx-") and res["run_id"].endswith("-room_001") and res["mode"] == "test-runner"
     assert [e[1]["status"] for e in events if e[0] == "tool_update"][-1] == "completed"
     prov = json.loads((engine_root / "runs" / "local-executor" / "_studio" / f"{res['request_id']}.json").read_text())
     assert prov["skp_sha256"] == res["skp_sha256"] and prov["model_digest"].startswith("46e0c10c")
@@ -285,3 +288,90 @@ def test_an_engine_that_cannot_start_is_failed_and_does_not_block(engine_root, t
     assert res["status"] == "failed" and res["error"]["code"] == "ENGINE_LAUNCH_FAILED"
     engine.mode = "ok"
     assert tool.run(call({"fixture_ref": "room_alt_5x3"}), ctx(Perm()))["status"] == "completed"
+
+
+def test_provenance_and_permission_carry_the_studio_commit(engine_root, tmp_path):
+    perm = Perm()
+    tool = make(engine_root, tmp_path, studio_head=lambda: {"commit": "s" * 40, "dirty": False})
+    res = tool.run(call(), ctx(perm))
+    assert res["studio_commit"] == "s" * 40 and perm.requests[0].tool_call["rawInput"]["studio_commit"] == "s" * 40
+    assert res["mode"] == "test-runner"                                      # runner injetado nunca se diz "real"
+
+
+def test_two_tool_instances_never_run_two_engines_at_once(engine_root, tmp_path):
+    gate, entered = threading.Event(), threading.Event()
+
+    class Blocking(FakeEngine):
+        def __call__(self, argv, cwd, env, timeout_s, log_path, on_start=None):
+            entered.set()
+            gate.wait(10)
+            return super().__call__(argv, cwd, env, timeout_s, log_path, on_start)
+    first, second = Blocking(), FakeEngine()
+    a, b = make(engine_root, tmp_path, first), make(engine_root, tmp_path, second)   # duas abas do Chat
+    out = {}
+    t = threading.Thread(target=lambda: out.setdefault("a", a.run(call(), ctx(Perm(), turn_id="ta"))))
+    t.start()
+    assert entered.wait(10)
+    res_b = b.run(call({"fixture_ref": "room_alt_5x3"}), ctx(Perm(), session="ollama-2", turn_id="tb"))
+    gate.set()
+    t.join(10)
+    assert res_b["error"]["code"] == "BUSY" and second.calls == [] and out["a"]["status"] == "completed"
+
+
+def test_a_running_row_without_pid_is_in_flight_while_recent(engine_root, tmp_path):
+    engine = FakeEngine()
+    tool = make(engine_root, tmp_path, engine)
+    tool.registry.insert({"request_id": "rq-other", "session_id": "x", "turn": 1, "call_digest": "d",
+                          "fixture_ref": "room_001", "fixture_hash": "h", "run_id": "lx-other", "status": "running",
+                          "result": {"status": "running"}}, now=1_790_000_000.0 - 5)
+    assert tool.run(call(), ctx(Perm()))["error"]["code"] == "BUSY" and engine.calls == []
+    old = make(engine_root, tmp_path, engine, clock_s=1_790_000_000.0 + 3600)
+    assert old.run(call(), ctx(Perm(), turn_id="later"))["status"] == "completed"   # velha e sem PID: falhou
+
+
+def test_a_new_studio_instance_reconciles_the_previous_unknown_run(engine_root, tmp_path):
+    first = make(engine_root, tmp_path, FakeEngine("timeout"))
+    unknown = first.run(call(), ctx(Perm()))
+    assert unknown["status"] == "unknown"
+    engine = FakeEngine()
+    second = make(engine_root, tmp_path, engine)                              # Studio reaberto, mesmo registro
+    assert second.run(call({"fixture_ref": "room_alt_5x3"}), ctx(Perm(), turn_id="n"))["error"]["code"] == "BUSY"
+    FakeEngine().write_run(engine_root / "runs" / "local-executor" / unknown["run_id"],
+                           engine_root / ALLOWED_FIXTURES["room_001"])
+    assert second.run(call({"fixture_ref": "room_alt_5x3"}), ctx(Perm(), turn_id="m"))["status"] == "completed"
+    assert second.registry.get(unknown["request_id"])["status"] == "completed"
+
+
+@pytest.mark.parametrize("mode, code", [("not_reopened", "INSPECTION_FAILED"), ("other_fixture", "FIXTURE_HASH_MISMATCH"),
+                                        ("skp_outside", "SKP_MISSING")])
+def test_more_engine_lies_are_failed(engine_root, tmp_path, mode, code):
+    res = make(engine_root, tmp_path, FakeEngine(mode)).run(call(), ctx(Perm()))
+    assert res["status"] == "failed" and res["error"]["code"] == code
+
+
+def test_unknown_is_shown_as_in_progress_not_failed(engine_root, tmp_path):
+    events = []
+    make(engine_root, tmp_path, FakeEngine("timeout")).run(call(), ctx(Perm(), events=events))
+    assert [e[1]["status"] for e in events if e[0] == "tool_update"][-1] == "in_progress"
+
+
+def test_cancel_while_waiting_for_permission_is_cancelled_not_denied(engine_root, tmp_path):
+    engine = FakeEngine()
+    c = ctx(Perm("never", on_ask=lambda _req: c.cancel.set()))
+    res = make(engine_root, tmp_path, engine).run(call(), c)
+    assert res["error"]["code"] == "CANCELLED" and engine.calls == []
+
+
+def test_symlinked_engine_root_is_refused(engine_root, tmp_path):
+    link = tmp_path / "apps" / "engine-link"
+    try:
+        link.symlink_to(engine_root, target_is_directory=True)
+    except OSError:
+        pytest.skip("sem privilegio para criar link simbolico nesta maquina")
+    with pytest.raises(SampleConfigError):
+        SketchUpSampleTool(link, engine_root / "runs", allowed_roots=(tmp_path / "apps",))
+
+
+def test_engine_env_keeps_the_sketchup_override_but_no_secrets():
+    env = filtered_env({"P2S_SKETCHUP_EXE": "D:/SU/SketchUp.exe", "GH_TOKEN": "x", "PATH": "p", "MY_API_KEY": "k"})
+    assert env["P2S_SKETCHUP_EXE"] == "D:/SU/SketchUp.exe" and "GH_TOKEN" not in env and "MY_API_KEY" not in env

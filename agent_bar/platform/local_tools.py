@@ -1,7 +1,7 @@
 """local_tools.py — ferramentas que o Studio publica para um modelo LOCAL (P2S-LOCAL-EXECUTOR-SKETCHUP-POC §3-§5).
 
 O modelo so PROPOE: o adaptador entrega aqui as `tool_calls` estruturadas que o Ollama devolveu no fim do turno, e o
-Studio decide. Regras deste modulo (cobradas por `tests/platform/test_local_tools.py`):
+Studio decide. Regras deste modulo (cobradas por `tests/platform/test_ollama_tools.py`):
 
 - so o campo estruturado `message.tool_calls` conta; texto que apenas PARECE JSON de ferramenta nunca vira chamada;
 - a chamada so e validada depois do turno completo (`done`): stream cortado = nenhuma chamada;

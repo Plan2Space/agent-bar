@@ -108,7 +108,8 @@ class OllamaAdapter(ProviderAdapter):
         self.tool_host = tool_host                                            # executor do Studio (None = Conversa)
         self.preferred_model = preferred_model
         self.on_permission = None                                             # canal de permissao do Chat (como o ACP)
-        self._tool_proof: str | None = None                                   # 1a chamada executada com sucesso
+        self._tool_proofs: dict[str, str] = {}                               # model@digest -> prova (chamada completed)
+        self._in_tool: set[str] = set()                                       # sessoes com ferramenta rodando agora
         self._turns: dict[str, int] = {}
         self.endpoint = endpoint.rstrip("/")
         self.opener = opener
@@ -173,10 +174,11 @@ class OllamaAdapter(ProviderAdapter):
     def _tool_capability(self, v: str | None) -> dict:
         if self.tool_host is None:
             return capability("UNSUPPORTED", "perfil Conversa: o Studio nao publica ferramentas para este adaptador", v)
-        if self._tool_proof is None:
+        if not self._tool_proofs:
             return capability("UNKNOWN", f"executor publicado ({', '.join(sorted(self.tool_host.names()))}); "
                                          "nenhuma chamada executada com sucesso ainda", v)
-        return capability("SUPPORTED", self._tool_proof, v)
+        proofs = "; ".join(self._tool_proofs[k] for k in sorted(self._tool_proofs))
+        return capability("SUPPORTED", f"so para {proofs}", v)
 
     # ------------------------------------------------------------------------------------------------ ciclo de vida
     def connect(self, timeout: float = 30.0) -> None:
@@ -224,10 +226,13 @@ class OllamaAdapter(ProviderAdapter):
             self._connected = False
             self._sessions.clear()
             self._history.clear()
+            tool_busy = bool(self._in_tool)
         for r in running:
             r["cancel"].set()
             self._close_resp(r)
-        self._pool.shutdown(wait=True, cancel_futures=True)
+        # ferramenta rodando (motor + SketchUp, minutos): nao esperar na thread da UI; o resultado ja e duravel no
+        # registro do executor e o turno termina sozinho (cancelado) quando o motor acabar
+        self._pool.shutdown(wait=not tool_busy, cancel_futures=True)
         self._pool = cf.ThreadPoolExecutor(max_workers=4, thread_name_prefix="ollama")
 
     def get_status(self) -> AdapterStatus:
@@ -273,6 +278,9 @@ class OllamaAdapter(ProviderAdapter):
     def create_session(self, request: SessionRequest) -> dict:
         self._need()
         model = request.model_id or self._default_model()
+        if model is None and self.tool_host is not None:
+            raise CapabilityUnsupported("tool_calls", "nenhum modelo local anuncia tools no /api/show; o Executor "
+                                                      "local precisa de um (ex.: llama3.1:8b)")
         if model is None or model not in self._models:
             raise ModelRejected(str(request.model_id or "nenhum modelo de conversa no servidor"))
         if self.tool_host is not None and self._models[model]["tools"] != "SUPPORTED":
@@ -405,6 +413,8 @@ class OllamaAdapter(ProviderAdapter):
             results.append(refusal_result(r))
             out.append({"role": "tool", "tool_name": r.name, "content": json.dumps(results[-1], ensure_ascii=False)})
         for c in calls:
+            with self._lock:
+                self._in_tool.add(sid)
             try:
                 res = self.tool_host.run(c, ctx)
             except Exception as exc:                                          # noqa: BLE001 - vira resultado tipado
@@ -412,9 +422,12 @@ class OllamaAdapter(ProviderAdapter):
                 res = {"status": "failed", "error": {"code": "EXECUTOR_ERROR", "message": type(exc).__name__}}
                 on_event(AgentEvent("tool_update", "", {"toolCallId": c.call_id, "status": "failed",
                                                          "content": _text(f"EXECUTOR_ERROR: {type(exc).__name__}")}))
-            if res.get("status") == "completed" and self._tool_proof is None:
-                self._tool_proof = (f"tool_call executado: {model}@{(ctx.model_digest or '?')[:12]} -> {c.name} "
-                                    f"(run {res.get('run_id')})")
+            finally:
+                with self._lock:
+                    self._in_tool.discard(sid)
+            key = f"{model}@{(ctx.model_digest or '?')[:12]}"
+            if res.get("status") == "completed" and key not in self._tool_proofs:
+                self._tool_proofs[key] = f"{key}: tool_call executado -> {c.name} (run {res.get('run_id')})"
             results.append(res)
             view = getattr(self.tool_host, "model_view", None)                 # o modelo recebe o essencial
             shown = view(res) if view is not None else res

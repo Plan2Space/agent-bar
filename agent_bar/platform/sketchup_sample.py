@@ -41,9 +41,9 @@ ALLOWED_FIXTURES = {                                                         # r
 OPTIONS = ({"optionId": "allow_once", "name": "Permitir uma vez", "kind": "allow_once"},
            {"optionId": "reject_once", "name": "Recusar", "kind": "reject_once"})
 STATUSES = ("accepted", "running", "completed", "failed", "unknown", "refused")
-ENV_KEYS = ("SYSTEMROOT", "WINDIR", "PATH", "PATHEXT", "TEMP", "TMP", "USERPROFILE", "APPDATA", "LOCALAPPDATA",
-            "PROGRAMDATA", "PROGRAMFILES", "PROGRAMFILES(X86)", "PROGRAMW6432", "COMMONPROGRAMFILES", "SYSTEMDRIVE",
-            "COMPUTERNAME", "USERNAME", "HOMEDRIVE", "HOMEPATH", "NUMBER_OF_PROCESSORS", "PROCESSOR_ARCHITECTURE", "OS")
+
+
+_ENGINE_LOCK = threading.Lock()                                              # uma amostra em voo por processo (todas as abas)
 
 
 @dataclass(frozen=True)
@@ -64,9 +64,10 @@ def sha256_file(path: Path) -> str:
 
 
 def filtered_env(base: Mapping[str, str]) -> dict[str, str]:
-    """So o que o Windows/SketchUp precisam: nenhum token, chave ou variavel do Studio chega ao motor."""
-    keep = {k.upper() for k in ENV_KEYS}
-    out = {k: v for k, v in base.items() if k.upper() in keep}
+    """Mesma lista permitida do ACP (`isolated_env`, falha fechado: nada com TOKEN/KEY/SECRET passa) + o que o motor
+    usa: P2S_SKETCHUP_EXE (SketchUp fora do caminho padrao)."""
+    from agent_bar.cockpit.acp import isolated_env
+    out = isolated_env(base, allow=("COMPUTERNAME", "PROGRAMW6432", "P2S_SKETCHUP_EXE"))
     out["PYTHONUTF8"] = "1"
     return out
 
@@ -97,7 +98,7 @@ def sketchup_running() -> bool:
         out = subprocess.run(["tasklist", "/FI", "IMAGENAME eq SketchUp.exe", "/FO", "CSV", "/NH"], capture_output=True,
                              timeout=20, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).stdout
     except (OSError, subprocess.SubprocessError):
-        return False
+        return True                                                          # sem como conferir: falha fechado
     return b'"sketchup.exe"' in out.lower()
 
 
@@ -184,6 +185,7 @@ class SketchUpSampleTool:
                  registry: RequestRegistry | None = None, runner: Runner = run_engine,
                  sketchup_busy: Callable[[], bool] = sketchup_running, head: Callable[[Path], dict | None] = git_head,
                  alive: Callable[[int, float | None], bool] = engine_alive,
+                 studio_head: Callable[[], dict | None] | None = None,
                  clock: Callable[[], float] = time.time, permission_timeout_s: float = 16 * 60,
                  engine_timeout_s: float = 15 * 60, base_env: Mapping[str, str] | None = None,
                  python: Path | str | None = None):
@@ -204,13 +206,14 @@ class SketchUpSampleTool:
         self.sketchup_busy = sketchup_busy
         self.head = head
         self.alive = alive
+        self.studio_head = studio_head or (lambda: git_head(Path(__file__).resolve().parents[2]))
+        self.mode = "real" if runner is run_engine else "test-runner"     # runner injetado nunca se diz "real"
         self.clock = clock
         self.permission_timeout_s = permission_timeout_s
         self.engine_timeout_s = engine_timeout_s
         self.base_env = dict(os.environ if base_env is None else base_env)
         venv = self.engine_root / ".venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
         self.python = Path(python) if python is not None else venv
-        self._busy = threading.Lock()
 
     @property
     def registry(self) -> RequestRegistry:
@@ -289,8 +292,9 @@ class SketchUpSampleTool:
 
     # -------------------------------------------------------------------------------------------- execucao
     def request_id(self, call: ToolCall, ctx: ToolContext) -> str:
-        """Estavel para a MESMA chamada do MESMO turno (retry), unico entre turnos e reinicios do Studio: o id de
-        sessao do Ollama recomeca em `ollama-1`, entao o turno entra pelo uuid que o Studio gera a cada envio."""
+        """Unico por chamada de cada envio (o turno entra pelo uuid do Studio: o id de sessao do Ollama recomeca em
+        `ollama-1` a cada Studio). Ele LIGA pedido, permissao, run e registro; nao e dedupe entre turnos. O que impede um
+        2o motor e o lock do processo + os pedidos em voo no registro duravel + o SketchUp ja aberto."""
         key = f"{ctx.session_id}|{ctx.turn_id}|{call.digest}"
         return "rq-" + hashlib.sha256(key.encode()).hexdigest()[:20]
 
@@ -324,6 +328,7 @@ class SketchUpSampleTool:
         run_id = f"lx-{stamp}-{rid[3:15]}-{ref}"
         run_dir = self.out_root / run_id
         head = self.head(self.engine_root)
+        studio = self.studio_head() or {}
         tool_call = {
             "toolCallId": call.call_id, "kind": "execute", "status": "pending",
             # o titulo aparece inteiro no cartao: modelo, acao e destino; o cartao corta o rawInput em 300 caracteres,
@@ -334,6 +339,7 @@ class SketchUpSampleTool:
                 "workspace_id": str(self.engine_root),
                 "impacto": "abre o SketchUp 2026; cria so a pasta do run; nao toca Suite 01 nem artifacts/",
                 "fixture_path": ALLOWED_FIXTURES[ref], "engine_commit": (head or {}).get("commit"),
+                "studio_commit": studio.get("commit"),
                 "request_id": rid, "run_id": run_id, "out_dir": str(run_dir), "model": ctx.model_id,
                 "model_digest": ctx.model_digest, "call_digest": call.digest, "model_tool_call": dict(call.raw),
             },
@@ -342,9 +348,11 @@ class SketchUpSampleTool:
         ctx.emit("tool_call", tool_call)
         choice = self._ask(ctx, tool_call)
         if choice != "allow_once":
-            why = "recusado pelo usuario" if choice else "permissao fechada, vencida ou indisponivel"
-            return self._refuse(call, ctx, rid, _error("PERMISSION_DENIED", why), fixture_ref=ref,
-                                fixture_hash=fixture_hash, run_id=run_id)
+            if ctx.cancel.is_set():
+                err = _error("CANCELLED", "turno cancelado enquanto esperava a permissao")
+            else:
+                err = _error("PERMISSION_DENIED", "recusado" if choice else "permissao fechada, vencida ou indisponivel")
+            return self._refuse(call, ctx, rid, err, fixture_ref=ref, fixture_hash=fixture_hash, run_id=run_id)
         if sha256_file(fixture) != fixture_hash:                             # a versao aprovada e a que roda
             return self._refuse(call, ctx, rid, _error("FIXTURE_CHANGED", "a fixture mudou depois da permissao"),
                                 fixture_ref=ref, fixture_hash=fixture_hash, run_id=run_id)
@@ -355,7 +363,7 @@ class SketchUpSampleTool:
         if not ok:
             return self._refuse(call, ctx, rid, _error("ENGINE_UNAVAILABLE", why), fixture_ref=ref,
                                 fixture_hash=fixture_hash, run_id=run_id)
-        if not self._busy.acquire(blocking=False):
+        if not _ENGINE_LOCK.acquire(blocking=False):
             return self._refuse(call, ctx, rid, _error("BUSY", "ja ha uma amostra em execucao"), fixture_ref=ref,
                                 fixture_hash=fixture_hash, run_id=run_id)
         try:
@@ -371,9 +379,9 @@ class SketchUpSampleTool:
             if run_dir.exists():
                 return self._refuse(call, ctx, rid, _error("RUN_EXISTS", f"{run_id} ja existe"), fixture_ref=ref,
                                     fixture_hash=fixture_hash, run_id=run_id)
-            return self._execute(call, ctx, rid, ref, fixture, fixture_hash, run_id, head)
+            return self._execute(call, ctx, rid, ref, fixture, fixture_hash, run_id, head, studio)
         finally:
-            self._busy.release()
+            _ENGINE_LOCK.release()
 
     def _ask(self, ctx: ToolContext, tool_call: dict) -> str | None:
         if ctx.on_permission is None:
@@ -395,10 +403,11 @@ class SketchUpSampleTool:
         return got[0] if got else None
 
     def _execute(self, call: ToolCall, ctx: ToolContext, rid: str, ref: str, fixture: Path, fixture_hash: str,
-                 run_id: str, head: dict | None) -> dict:
+                 run_id: str, head: dict | None, studio: dict) -> dict:
         base = {"request_id": rid, "run_id": run_id, "fixture_ref": ref, "fixture_hash": fixture_hash,
                 "engine_commit": (head or {}).get("commit"), "engine_dirty": (head or {}).get("dirty"),
-                "workspace_id": str(self.engine_root), "mode": "real", "model": ctx.model_id,
+                "workspace_id": str(self.engine_root), "mode": self.mode, "studio_commit": studio.get("commit"),
+                "studio_dirty": studio.get("dirty"), "model": ctx.model_id,
                 "model_digest": ctx.model_digest, "provider_version": ctx.provider_version,
                 "session_id": ctx.session_id, "turn": ctx.turn, "call_digest": call.digest}
         self.registry.insert({**base, "session_id": ctx.session_id, "turn": ctx.turn, "call_digest": call.digest,
@@ -441,7 +450,8 @@ class SketchUpSampleTool:
         prov.write_text(json.dumps(result, indent=2, ensure_ascii=False), encoding="utf-8")
         if call is not None and ctx is not None:
             ctx.emit("tool_update", {"toolCallId": call.call_id,
-                                     "status": "completed" if result["status"] == "completed" else "failed",
+                                     "status": {"completed": "completed", "unknown": "in_progress"}.get(
+                                         result["status"], "failed"),
                                      "content": _text(summary(result))})
 
     def read_run(self, run_dir: Path, fixture_hash: str) -> dict:
@@ -464,8 +474,9 @@ class SketchUpSampleTool:
             return {**out, "status": "failed", "error": {"code": "FIXTURE_HASH_MISMATCH", "message":
                     "o motor construiu outra versao da fixture"}}
         skp = next((a for a in man.get("artifacts") or [] if a.get("role") == "skp"), None)
-        spath = run_dir / str((skp or {}).get("path") or "")
-        if skp is None or not spath.is_file() or spath.stat().st_size == 0:
+        spath = (run_dir / str((skp or {}).get("path") or "")).resolve()
+        inside = spath.is_relative_to(run_dir.resolve())
+        if skp is None or not inside or not spath.is_file() or spath.stat().st_size == 0:
             return {**out, "status": "failed", "error": {"code": "SKP_MISSING", "message": ".skp ausente ou vazio"}}
         digest = sha256_file(spath)
         out.update(skp_path=f"{run_dir.name}/{spath.name}", skp_abs=str(spath), skp_sha256=digest,
@@ -502,7 +513,8 @@ class SketchUpSampleTool:
                     self._finish(None, None, prior["request_id"], result)
                     return {**result, "replayed": True}
             pid = result.get("engine_pid")
-            if pid and self.alive(int(pid), result.get("engine_created")):
+            young = not pid and self.clock() - float(prior.get("created_at") or 0) < self.engine_timeout_s
+            if young or (pid and self.alive(int(pid), result.get("engine_created"))):
                 result.update(status="unknown", error={"code": "RESULT_UNKNOWN", "message":
                               "o motor deste pedido ainda roda sem resultado final; nenhum novo run foi disparado"})
                 self.registry.update(prior["request_id"], "unknown", result, self.clock())
@@ -514,7 +526,7 @@ class SketchUpSampleTool:
         return {**result, "replayed": True}
 
     def _refuse(self, call: ToolCall, ctx: ToolContext, rid: str, err: dict, **extra: Any) -> dict:
-        result = {"status": "refused", "request_id": rid, "mode": "real", "error": err["error"], **extra}
+        result = {"status": "refused", "request_id": rid, "mode": self.mode, "error": err["error"], **extra}
         ctx.emit("tool_update", {"toolCallId": call.call_id, "title": f"Executor local (amostra): {TOOL_NAME}",
                                  "kind": "execute", "status": "failed", "content": _text(summary(result))})
         return result
