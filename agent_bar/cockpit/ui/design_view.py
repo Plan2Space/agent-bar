@@ -19,6 +19,7 @@ from pathlib import Path
 from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtGui import QIcon, QImageReader, QPixmap
 from PySide6.QtWidgets import (
+    QComboBox,
     QDialog,
     QFrame,
     QHBoxLayout,
@@ -203,10 +204,13 @@ class BigCard(QFrame):
         lay.addWidget(self.enlarge_btn, 0, Qt.AlignmentFlag.AlignLeft)
         lay.addStretch(1)                                                         # cartões alinhados pelo topo
         self.item: G.GalleryItem | None = None
+        self.image: G.GalleryImage | None = None
 
-    def fill(self, item: G.GalleryItem | None, lines: Sequence[str], empty: str = "") -> None:
+    def fill(self, item: G.GalleryItem | None, lines: Sequence[str], empty: str = "",
+             image: G.GalleryImage | None = None) -> None:
         self.item = item
-        img = G.primary_image(item) if item is not None else None
+        img = image or (G.primary_image(item) if item is not None else None)
+        self.image = img
         self.thumb.set_image(img.path if img else None, empty or "sem imagem com sha256 conferido")
         self.info.setText("\n".join(lines))
         self.enlarge_btn.setEnabled(img is not None)
@@ -239,8 +243,27 @@ class DesignView(QWidget):
         self.compared: tuple[G.GalleryItem, G.GalleryItem] | None = None
         self.compared_images: tuple[G.GalleryImage, G.GalleryImage] | None = None
         self.thumbs_loaded = False                                               # UX-14: miniaturas só sob demanda
+        self.camera: str | None = None                                           # UX-14b: None = preferida
+        self.references: list[tuple[str, G.GalleryItem]] = []
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
+        pick = QHBoxLayout()
+        cam_label = QLabel("Câmera")
+        cam_label.setStyleSheet(MUTED_CSS)
+        self.camera_box = QComboBox()
+        self.camera_box.setToolTip("O último render passa a ser o da câmera escolhida; comparar usa a mesma câmera")
+        ref_label = QLabel("Referência")
+        ref_label.setStyleSheet(MUTED_CSS)
+        self.reference_box = QComboBox()
+        self.reference_box.setToolTip("A referência vigente de cada categoria")
+        self._ref_label = ref_label
+        for w in (cam_label, self.camera_box, ref_label, self.reference_box):
+            pick.addWidget(w)
+        pick.addStretch(1)
+        lay.addLayout(pick)
+        self.camera_box.activated.connect(lambda _i: self._camera_chosen())
+        self.camera_box.currentIndexChanged.connect(lambda _i: self._camera_chosen())
+        self.reference_box.currentIndexChanged.connect(lambda _i: self._reference_chosen())
         cards = QHBoxLayout()
         cards.setContentsMargins(0, 0, 0, 0)
         self.cards = {"referência": BigCard("REFERÊNCIA"), "último": BigCard("ÚLTIMO RENDER"),
@@ -337,7 +360,28 @@ class DesignView(QWidget):
         self.items = list(items)
         self.evaluations_for = evaluations_for
         self.renders = [i for i in self.items if i.kind == "render"]               # já em ordem: mais recente primeiro
-        self.reference = G.reference_item(self.items)
+        self.references = G.current_references(self.items)
+        latest = G.reference_item(self.items)
+        self.reference = latest
+        self.reference_box.blockSignals(True)
+        self.reference_box.clear()
+        for cat, ref in self.references:
+            self.reference_box.addItem(cat, ref.item_id)
+        if latest is not None:
+            self.reference_box.setCurrentIndex(max(0, self.reference_box.findData(latest.item_id)))
+        self.reference_box.blockSignals(False)
+        many = len(self.references) > 1                                          # uma categoria: nada a escolher
+        self.reference_box.setVisible(many)
+        self._ref_label.setVisible(many)
+        self.camera_box.blockSignals(True)
+        self.camera_box.clear()
+        self.camera_box.addItem("preferida (r2_canto, perspectiva…)", None)
+        for cam in G.rendered_cameras(self.renders):
+            self.camera_box.addItem(cam, cam)
+        keep = self.camera_box.findData(self.camera) if self.camera else 0
+        self.camera_box.setCurrentIndex(keep if keep >= 0 else 0)
+        self.camera = self.camera_box.currentData()
+        self.camera_box.blockSignals(False)
         self._fill_cards()
         self._fill_history()
         self.compare.hide()
@@ -352,13 +396,14 @@ class DesignView(QWidget):
             self.cards["referência"].fill(ref, [ref.title or ref.item_id, ref.item_id,
                                                 "Referência estética: não é geometria validada.",
                                                 ref.provenance_text(), f"curadoria {ref.curation or '—'}"])
-        last = G.latest_render(self.renders)
+        last = G.latest_render(self.renders, camera=self.camera)
         if last is None:
-            self.cards["último"].fill(None, ["nenhum render do cômodo"], "nenhum render")
+            self.cards["último"].fill(None, ["nenhum render do cômodo" if not self.camera
+                                             else f"nenhum render da câmera {self.camera}"], "nenhum render")
         else:
-            img = G.primary_image(last)
+            img = (G.image_for_camera(last, self.camera) if self.camera else None) or G.primary_image(last)
             self.cards["último"].fill(last, [f"{last.when()} · {last.item_id}", G.camera_text(img),
-                                             *state_lines(last, self.evaluations_for(last))])
+                                             *state_lines(last, self.evaluations_for(last))], image=img)
         best = G.cards(self.items, self.evaluations_for)[2]
         if best.item is not None and not best.item.eligible(self.evaluations_for(best.item)):
             best = G.Card(best.role, None, "nenhum render elegível: candidato inelegível recusado")
@@ -427,12 +472,14 @@ class DesignView(QWidget):
     def selected(self) -> G.GalleryItem | None:
         li = self.history.currentItem()
         if li is None:                                                            # sem escolha: o último render
-            return G.latest_render(self.renders)
+            return G.latest_render(self.renders, camera=self.camera)
         return next((i for i in self.renders if i.item_id == li.data(Qt.ItemDataRole.UserRole)), None)
 
     def previous_of(self, item: G.GalleryItem) -> G.GalleryItem | None:
         idx = next((n for n, i in enumerate(self.renders) if i.item_id == item.item_id), None)
         rest = self.renders[idx + 1:] if idx is not None else []
+        if self.camera:                                                          # UX-14b: a versão anterior DESTA câmera
+            return next((i for i in rest if G.image_for_camera(i, self.camera) is not None), None)
         return next((i for i in rest if i.images), None)
 
     def _buttons(self) -> None:
@@ -448,6 +495,24 @@ class DesignView(QWidget):
         if it is not None and self.reference is not None:
             self._compare(it, self.reference)
 
+    def _camera_chosen(self) -> None:
+        cam = self.camera_box.currentData()
+        if cam == self.camera:
+            return
+        self.camera = cam
+        self.compare.hide()
+        self._fill_cards()
+        self._buttons()
+
+    def _reference_chosen(self) -> None:
+        rid = self.reference_box.currentData()
+        ref = next((r for _c, r in self.references if r.item_id == rid), None)
+        if ref is None or ref is self.reference:
+            return
+        self.reference = ref
+        self._fill_cards()
+        self._buttons()
+
     def compare_with_previous(self) -> None:
         it = self.selected()
         prev = self.previous_of(it) if it is not None else None
@@ -455,7 +520,7 @@ class DesignView(QWidget):
             self._compare(it, prev)
 
     def _compare(self, a: G.GalleryItem, b: G.GalleryItem) -> None:
-        img_a, img_b, note = G.comparison_pair(a, b)                           # mesma câmera dos dois lados, se houver
+        img_a, img_b, note = G.comparison_pair(a, b, camera=self.camera)       # a câmera escolhida, dos dois lados
         if img_a is None or img_b is None:
             return
         self.compared = (a, b)
@@ -476,7 +541,7 @@ class DesignView(QWidget):
         if self.compared and self.compared_images and self.compare.isVisibleTo(self) \
                 and self.compared[0].item_id == it.item_id:
             return it, self.compared_images[0], (self.compared[1], self.compared_images[1])
-        img = G.primary_image(it)
+        img = (G.image_for_camera(it, self.camera) if self.camera else None) or G.primary_image(it)
         return (it, img, None) if img is not None else None
 
     def _enlarge_item(self, item: G.GalleryItem | None) -> None:
