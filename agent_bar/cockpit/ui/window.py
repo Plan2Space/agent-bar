@@ -113,7 +113,8 @@ class CockpitWindow(QMainWindow):
         self.review.request_chat.connect(self.open_correction)               # S01C-F1-11: comentário da galeria
         gh = gh or GhClient()
         repos = repos or configured_repos(load_targets().org)
-        self.prs = PrsTab(gh, repos=repos)
+        self.prs = PrsTab(gh, repos=repos,                                     # UX-07: aprovação do núcleo
+                          approvals_fn=lambda: getattr(getattr(core, "snap", None), "approvals", None))
         self.actions = ActionsTab(gh, repos=repos)
         self.dev = DevTab(use_workspace=self._use_sandbox, **(dev_kwargs or {}))
         self.permissions = PermissionsTab(self.sessions.inbox, answer_fn=self.sessions.answer_permission,

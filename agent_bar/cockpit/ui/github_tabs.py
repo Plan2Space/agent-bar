@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
 from agent_bar import controls as ctl
 from agent_bar.cockpit.github import GhClient, GhError, checks_summary, review_prompt
 from agent_bar.cockpit.profiles import DEFAULT_APPS
+from agent_bar.cockpit.ui.approval_panel import ApprovalPanel
 from agent_bar.targets import load_targets
 
 COMBO_CSS = "QComboBox,QLineEdit{background:#26262c;color:#e6e6e6;border:1px solid #3a3a44;border-radius:5px;padding:2px 6px}"
@@ -97,9 +98,11 @@ class PrsTab(_GhTab):
     review_requested = Signal(str, str)                 # workspace, prompt
 
     def __init__(self, gh: GhClient | None = None, executor: ThreadPoolExecutor | None = None,
-                 repos: list[str] | None = None, apps_root: Path | None = None) -> None:
+                 repos: list[str] | None = None, apps_root: Path | None = None,
+                 approvals_fn: Callable[[], object] = lambda: None, approve_fn: Callable | None = None) -> None:
         super().__init__(gh, executor)
         self.apps_root = apps_root or DEFAULT_APPS
+        self.approvals_fn = approvals_fn                                       # UX-07: o "Aprovar" da Central mora aqui
         self.items: list[dict] = []
         self.current: dict | None = None
         self.current_diff = ""
@@ -138,6 +141,10 @@ class PrsTab(_GhTab):
             actions.addWidget(b)
         actions.addStretch(1)
         bl.addLayout(actions)
+        self.approval = ApprovalPanel(approvals_fn=lambda: self.approvals_fn(), report=self.status.setText,
+                                      **({"approve_fn": approve_fn} if approve_fn else {}))
+        self.approval_label, self.approve_btn = self.approval.label, self.approval.button
+        bl.addWidget(self.approval)
         self.detail = QTextBrowser()
         self.detail.setStyleSheet(TEXT_CSS)
         self.detail.setOpenExternalLinks(False)
@@ -187,6 +194,7 @@ class PrsTab(_GhTab):
             self.review_btn.setEnabled(True)
             self.detail.setHtml(self._detail_html(pr, diff))
             self.status.setText(f"#{pr.get('number')} · HEAD {pr.get('headRefOid', '?')}")
+            self.approval.show_for(self.repo(), int(pr.get("number") or 0))
 
     @staticmethod
     def _detail_html(pr: dict, diff: str) -> str:
@@ -219,6 +227,10 @@ class PrsTab(_GhTab):
             self.status.setText(f"sem checkout local de {self.repo()} em {self.apps_root}: revisão assistida indisponível")
             return
         self.review_requested.emit(str(ws), review_prompt(self.repo(), self.current, self.current_diff))
+
+    def shutdown(self) -> None:
+        self.approval.shutdown()
+        super().shutdown()
 
 
 class ActionsTab(_GhTab):
