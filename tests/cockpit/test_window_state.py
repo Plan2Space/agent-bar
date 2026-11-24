@@ -73,7 +73,9 @@ def cockpit(tmp_path, store):
     from agent_bar.cockpit.profiles import AgentProfile
     from agent_bar.cockpit.ui.window import CockpitWindow
     stub = Path(__file__).with_name("fake_acp_agent.py")
-    return CockpitWindow(repos=["o/r"], profiles_fn=lambda: [AgentProfile("stub", "Stub", (sys.executable, str(stub)))],
+    from agent_bar.cockpit.github import GhClient
+    gh = GhClient(exe=[sys.executable, str(Path(__file__).with_name("fake_gh.py"))])   # sem rede (C1)
+    return CockpitWindow(gh=gh, repos=["o/r"], profiles_fn=lambda: [AgentProfile("stub", "Stub", (sys.executable, str(stub)))],
                          workspaces_fn=lambda: [tmp_path], window_store=store)
 
 
