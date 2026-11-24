@@ -577,6 +577,9 @@ class ChatView(QWidget):
         self.client.prompt(text).add_done_callback(lambda f, g=gen: self._emit_done(g, "prompt", f))
 
     def stop(self) -> None:
+        for eid in list(self._perm_cards):                                   # nenhum cartão fica esperando um clique
+            if self.broker.is_open(eid):
+                self.broker.cancel(eid, "turno parado pelo Felipe")
         if self.client is not None:
             self.client.cancel()
         self.status.setText("cancelando…")

@@ -186,3 +186,32 @@ def test_if_the_audit_record_fails_the_request_goes_to_felipe_instead_of_being_a
     assert not any("selected:allow" in t for t in agent_texts(v))
     v.stop()
     wait(lambda: not v.busy)
+
+
+def test_stop_closes_the_open_permission_card_in_ask_mode(view, monkeypatch):
+    """Achado da PoC do executor local: depois de "Parar", o cartão ficava aberto esperando um clique."""
+    v, _asked, _ = view
+    monkeypatch.setenv(PM.ENV, PM.ASK)
+    v.send("perm")
+    assert wait(lambda: bool(v.transcript.findChildren(W.PermissionCard)))
+    eid = v.inbox.history()[0].id
+    assert v.broker.is_open(eid)
+    v.stop()
+    assert wait(lambda: not v.busy)
+    e = v.inbox.get(eid)
+    assert e.status == "CANCELLED" and not v.broker.is_open(eid)                  # o agente recebeu "cancelled"
+    card = v.transcript.findChildren(W.PermissionCard)[0]
+    assert "cancelado" in card.result.text() and not any(b.isEnabled() for b in card.buttons.values())
+
+
+def test_if_recording_an_irreversible_bypass_fails_it_also_goes_to_felipe(view, monkeypatch):
+    v, _asked, _ = view
+
+    def broken(*_a, **_k):
+        raise RuntimeError("disco cheio")
+    monkeypatch.setattr(v.inbox, "decide", broken)
+    v.send("permrm")
+    assert wait(lambda: bool(v.transcript.findChildren(W.PermissionCard)))
+    assert not any("selected:allow" in t for t in agent_texts(v))
+    v.stop()
+    wait(lambda: not v.busy)
