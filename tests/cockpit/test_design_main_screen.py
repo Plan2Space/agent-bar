@@ -146,3 +146,23 @@ def test_an_empty_room_says_so_without_a_wall_of_empty_cards(view):
     assert view.cards["último"].info.text() == "nenhum render do cômodo"
     assert "0 runs" in view.history_toggle.text() and not view.history_toggle.isEnabled()
     assert not view.cards["melhor"].isVisible()
+
+
+def test_the_big_images_follow_16_by_9_and_the_actions_stay_on_screen_at_1280x800(view, tmp_path):
+    """Visto no Windows: com a imagem esticada na altura, os estados, as ações e o histórico caíam abaixo da dobra."""
+    view.set_items(fourteen(tmp_path))
+    view.resize(1280, 760)
+    for _ in range(10):
+        _APP.processEvents()
+    for key in ("referência", "último"):
+        t = view.cards[key].thumb
+        assert abs(t.height() - round(t.width() * 9 / 16)) <= 2, (key, t.size())     # sem faixa vazia em cima/embaixo
+    for w in (view.cmp_ref_btn, view.history_toggle, view.comment_btn):
+        bottom = w.mapTo(view, w.rect().bottomLeft()).y()
+        assert bottom < view.height(), (w.text(), bottom, view.height())
+    view.resize(1280, 1300)                                                    # janela alta: a sobra não vira faixa
+    for _ in range(10):
+        _APP.processEvents()
+    for key in ("referência", "último"):
+        t = view.cards[key].thumb
+        assert abs(t.height() - round(t.width() * 9 / 16)) <= 2, (key, "alta", t.size())

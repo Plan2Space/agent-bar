@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QPushButton,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -112,14 +113,29 @@ class Thumb(QLabel):
     """Imagem clicável (amplia)."""
     clicked = Signal()
 
-    def __init__(self, min_size: QSize = THUMB) -> None:
+    def __init__(self, min_size: QSize = THUMB, aspect: float | None = None) -> None:
         super().__init__()
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.setMinimumSize(min_size)
+        self.aspect = aspect                                                   # UX-14: altura segue a largura (16:9)
+        if aspect:
+            pol = QSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+            pol.setHeightForWidth(True)
+            self.setSizePolicy(pol)
         self.setStyleSheet("background:#0e0e11;border:1px solid #2a2a30;color:#ff9a9b")
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.path: Path | None = None
         self._pix = QPixmap()
+
+    def hasHeightForWidth(self) -> bool:                                        # noqa: N802
+        return bool(self.aspect)
+
+    def heightForWidth(self, w: int) -> int:                                    # noqa: N802
+        return max(self.minimumHeight(), int(w / self.aspect)) if self.aspect else super().heightForWidth(w)
+
+    def sizeHint(self) -> QSize:                                               # noqa: N802
+        hint = super().sizeHint()
+        return QSize(hint.width(), self.heightForWidth(max(hint.width(), self.minimumWidth()))) if self.aspect else hint
 
     def set_image(self, path: Path | None, why: str = "") -> None:
         self.path = path
@@ -174,7 +190,7 @@ class BigCard(QFrame):
         lay.setContentsMargins(10, 8, 10, 8)
         self.title = QLabel(title)
         self.title.setStyleSheet(TITLE_CSS)
-        self.thumb = Thumb(CARD_THUMB)                                          # cede altura para a legenda
+        self.thumb = Thumb(CARD_THUMB, aspect=16 / 9)                           # imagem grande, sem faixa vazia
         self.info = QLabel("")
         self.info.setWordWrap(True)
         self.info.setStyleSheet(INFO_CSS)
@@ -182,9 +198,10 @@ class BigCard(QFrame):
         self.enlarge_btn = QPushButton("Ampliar")
         self.enlarge_btn.setStyleSheet(BTN_CSS)
         lay.addWidget(self.title)
-        lay.addWidget(self.thumb, 1)
+        lay.addWidget(self.thumb)
         lay.addWidget(self.info)
         lay.addWidget(self.enlarge_btn, 0, Qt.AlignmentFlag.AlignLeft)
+        lay.addStretch(1)                                                         # cartões alinhados pelo topo
         self.item: G.GalleryItem | None = None
 
     def fill(self, item: G.GalleryItem | None, lines: Sequence[str], empty: str = "") -> None:
@@ -233,7 +250,7 @@ class DesignView(QWidget):
             c.enlarge_btn.clicked.connect(lambda _=False, card=c: self._enlarge_item(card.item))
             c.thumb.clicked.connect(lambda card=c: self._enlarge_item(card.item))
         self.cards["melhor"].hide()                                               # só com avaliação válida e elegível
-        lay.addLayout(cards, 3)
+        lay.addLayout(cards)
         self.best_note = QLabel("")                                               # melhor render sem destaque: uma linha
         self.best_note.setWordWrap(True)
         self.best_note.setStyleSheet(MUTED_CSS)
@@ -303,6 +320,7 @@ class DesignView(QWidget):
         self.comment_status.setWordWrap(True)
         self.comment_status.setStyleSheet(MUTED_CSS)
         lay.addWidget(self.comment_status)
+        lay.addStretch(1)                                                         # tudo junto no topo
         self.comment_btn.clicked.connect(lambda: self.comment_requested.emit(self.comment.text()))
         self.comment.returnPressed.connect(lambda: self.comment_requested.emit(self.comment.text()))
         self.history_toggle.toggled.connect(self._toggle_history)
