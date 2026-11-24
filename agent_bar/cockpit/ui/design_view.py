@@ -19,6 +19,7 @@ from pathlib import Path
 from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtGui import QIcon, QImageReader, QPixmap
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QDialog,
     QFrame,
@@ -28,12 +29,14 @@ from PySide6.QtWidgets import (
     QListView,
     QListWidget,
     QListWidgetItem,
+    QPlainTextEdit,
     QPushButton,
     QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
 
+from agent_bar.cockpit import design_context as DC
 from agent_bar.cockpit import evaluations as V
 from agent_bar.cockpit import gallery as G
 from agent_bar.cockpit.ui.github_tabs import BTN_CSS
@@ -333,6 +336,24 @@ class DesignView(QWidget):
         cl.addLayout(panes, 1)
         self.compare.hide()
         lay.addWidget(self.compare, 2)
+        ctx = QHBoxLayout()                                                       # UX-13: a seleção como contexto do Chat
+        self.breadcrumb = QLabel("")
+        self.breadcrumb.setStyleSheet(MUTED_CSS)
+        self.breadcrumb.setAccessibleName("Seleção do Design")
+        self.attach_box = QCheckBox("Anexar esta seleção ao próximo prompt do Chat")
+        self.attach_box.setStyleSheet("QCheckBox{color:#cfcfd4;font-size:12px}")
+        self.attach_box.setToolTip("Desligado por padrão. O texto anexado é exatamente o do preview abaixo.")
+        ctx.addWidget(self.breadcrumb, 1)
+        ctx.addWidget(self.attach_box)
+        lay.addLayout(ctx)
+        self.attach_preview = QPlainTextEdit()
+        self.attach_preview.setReadOnly(True)
+        self.attach_preview.setAccessibleName("Texto anexado ao Chat")
+        self.attach_preview.setMaximumHeight(120)
+        self.attach_preview.setStyleSheet("QPlainTextEdit{background:#121215;color:#cfcfd4;border:1px solid #2a2a30;"
+                                          "font-family:Consolas,monospace;font-size:11px}")
+        self.attach_preview.hide()
+        lay.addWidget(self.attach_preview)
         row = QHBoxLayout()                                                       # S01C-F1-11: comentário → Chat
         self.comment = QLineEdit()
         self.comment.setPlaceholderText("Comente o que está na tela (ex.: gostei mais da iluminação anterior, mas quero "
@@ -352,6 +373,7 @@ class DesignView(QWidget):
         self.comment_btn.clicked.connect(lambda: self.comment_requested.emit(self.comment.text()))
         self.comment.returnPressed.connect(lambda: self.comment_requested.emit(self.comment.text()))
         self.history_toggle.toggled.connect(self._toggle_history)
+        self.attach_box.toggled.connect(lambda _on: self._refresh_context())
         self.cmp_ref_btn.clicked.connect(self.compare_with_reference)
         self.cmp_prev_btn.clicked.connect(self.compare_with_previous)
         self.enlarge_btn.clicked.connect(lambda: self._enlarge_item(self.selected()))
@@ -494,6 +516,27 @@ class DesignView(QWidget):
         self.cmp_prev_btn.setEnabled(ok and self.previous_of(it) is not None)  # type: ignore[arg-type]
         self.enlarge_btn.setEnabled(ok)
         self.tech_btn.setEnabled(it is not None)
+        self._refresh_context()
+
+    def context_text(self) -> str:
+        """O texto da seleção que está na tela (o mesmo do preview)."""
+        vis = self.visible()
+        if vis is None:
+            return ""
+        item, image, compared = vis
+        return DC.context_text(item, image, reference=self.reference, compared=compared)
+
+    def attach_text(self) -> str:
+        """O que o Chat anexa: vazio, a menos que o Felipe tenha marcado "Anexar"."""
+        return self.context_text() if self.attach_box.isChecked() else ""
+
+    def _refresh_context(self) -> None:
+        vis = self.visible()
+        self.breadcrumb.setText(DC.breadcrumb(vis[0], vis[1]) if vis else DC.breadcrumb(None, None))
+        on = self.attach_box.isChecked()
+        self.attach_preview.setVisible(on)
+        if on:
+            self.attach_preview.setPlainText(self.context_text())
 
     def compare_with_reference(self) -> None:
         it = self.selected()
@@ -537,6 +580,7 @@ class DesignView(QWidget):
         self.right.set_image(img_b.path)
         self.compare_label.setText("; ".join(t for t in (note, compare_label(a, b, img_a, img_b)) if t))
         self.compare.show()
+        self._refresh_context()                                                   # a comparação entra no contexto
 
     def visible(self) -> tuple[G.GalleryItem, G.GalleryImage, tuple[G.GalleryItem, G.GalleryImage] | None] | None:
         """O que está na tela: o run selecionado, o quadro mostrado e, se a comparação dele estiver aberta, o outro lado."""

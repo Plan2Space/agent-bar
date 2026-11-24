@@ -35,7 +35,7 @@ from agent_bar.cockpit.acp import (
     find_config,
     mode_is_safe,
 )
-from agent_bar.cockpit.library import compose_prompt
+from agent_bar.cockpit.library import SEPARATOR, compose_prompt
 from agent_bar.cockpit.permission_broker import PermissionBroker
 from agent_bar.cockpit.permission_inbox import InboxClosed, PermissionInbox
 from agent_bar.cockpit.store import Chat, ChatStore, data_dir
@@ -548,9 +548,16 @@ class ChatView(QWidget):
         self.input.clear()
         self.empty.setVisible(False)
         self._add(UserBubble(text))
-        context = self.context_provider() if self.context_provider else ""
+        raw = self.context_provider() if self.context_provider else ""
+        parts = [(n, t) for n, t in raw if t] if isinstance(raw, list) else ([("biblioteca", raw)] if raw else [])
+        context = SEPARATOR.join(t for _n, t in parts)                         # UX-13: Biblioteca e/ou Design
         if context:
-            self._add(Notice(f"biblioteca anexada ao prompt: {len(context)} caracteres (texto exato na aba Biblioteca)", "#4aa8ff"))
+            names = [n for n, _t in parts]
+            if names == ["biblioteca"]:
+                self._add(Notice(f"biblioteca anexada ao prompt: {len(context)} caracteres (texto exato na aba Biblioteca)", "#4aa8ff"))
+            else:
+                self._add(Notice(f"anexado ao prompt ({' + '.join(names)}): {len(context)} caracteres (texto exato no "
+                                 "preview de cada um)", "#4aa8ff"))
             self.chat.add("user", text, context_chars=len(context))
         else:
             self.chat.add("user", text)
