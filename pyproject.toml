@@ -26,6 +26,8 @@ pythonpath = ["."]
 # agente/provedor REAL custa tokens e depende da maquina: so roda com `-m real_agent` explicito (o -m da linha de
 # comando substitui este), nunca no CI de PR
 addopts = "-m 'not real_agent and not local_env'"
+# teste travado (> 4 min) despeja a pilha de TODAS as threads no log: o CI mata o job aos 15 min sem dizer onde
+faulthandler_timeout = 240
 markers = ["real_agent: usa provedor real (Claude, Codex, Ollama); opt-in com -m real_agent",
            "local_env: confere o ambiente desta maquina (o .venv do atalho); opt-in com -m local_env, fora do CI"]
 
