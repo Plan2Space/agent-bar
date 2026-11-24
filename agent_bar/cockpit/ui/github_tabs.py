@@ -28,6 +28,7 @@ from agent_bar import controls as ctl
 from agent_bar.cockpit.data_state import AO_VIVO, CACHE, DataState, failed, live
 from agent_bar.cockpit.github import GhClient, GhError, checks_summary, review_prompt
 from agent_bar.cockpit.profiles import DEFAULT_APPS
+from agent_bar.cockpit.ui.approval_panel import ApprovalPanel
 from agent_bar.targets import load_targets
 
 COMBO_CSS = "QComboBox,QLineEdit{background:#26262c;color:#e6e6e6;border:1px solid #3a3a44;border-radius:5px;padding:2px 6px}"
@@ -112,11 +113,13 @@ class PrsTab(_GhTab):
 
     def __init__(self, gh: GhClient | None = None, executor: ThreadPoolExecutor | None = None,
                  repos: list[str] | None = None, apps_root: Path | None = None,
-                 clock: Callable[[], float] = time.time) -> None:
+                 clock: Callable[[], float] = time.time, approvals_fn: Callable[[], object] = lambda: None,
+                 approve_fn: Callable | None = None) -> None:
         super().__init__(gh, executor)
         self.apps_root = apps_root or DEFAULT_APPS
         self.clock = clock
         self.all_repos = list(repos or [f"{load_targets().org}/agent-bar"])
+        self.approvals_fn = approvals_fn                                       # UX-07: o "Aprovar" da Central mora aqui
         self.items: list[dict] = []
         self.current: dict | None = None
         self.current_repo = ""
@@ -172,6 +175,10 @@ class PrsTab(_GhTab):
             actions.addWidget(b)
         actions.addStretch(1)
         bl.addLayout(actions)
+        self.approval = ApprovalPanel(approvals_fn=lambda: self.approvals_fn(), report=self.status.setText,
+                                      **({"approve_fn": approve_fn} if approve_fn else {}))
+        self.approval_label, self.approve_btn = self.approval.label, self.approval.button
+        bl.addWidget(self.approval)
         self.detail = QTextBrowser()
         self.detail.setStyleSheet(TEXT_CSS)
         self.detail.setOpenExternalLinks(False)
@@ -294,6 +301,7 @@ class PrsTab(_GhTab):
             self.review_btn.setToolTip("sem o diff do PR, a revisão assistida fica indisponível" if no_diff else "")
             self.detail.setHtml(self._detail_html(pr, diff, ci))
             self.status.setText(f"{repo}#{pr.get('number')} · HEAD {pr.get('headRefOid', '?')}")
+            self.approval.show_for(repo, int(pr.get("number") or 0))
 
     def on_error(self, tag: str, kind: str, msg: str) -> None:
         if tag == "detail":                                                    # #107: o PR anterior não fica na tela
@@ -301,6 +309,7 @@ class PrsTab(_GhTab):
             self.current, self.current_repo, self.current_diff = None, "", ""
             self.open_btn.setEnabled(False)
             self.review_btn.setEnabled(False)
+            self.approval.clear("Aprovação: detalhe do PR indisponível")           # nunca a do PR anterior
             self.detail.setHtml(f"<h3 style='color:#fff'>{html.escape(repo)}#{number}</h3>"
                                 f"<p style='color:#ff9a9b'>detalhe indisponível: [{html.escape(kind)}] "
                                 f"{html.escape(msg)}</p>")
@@ -375,6 +384,10 @@ class PrsTab(_GhTab):
             self.status.setText(f"sem checkout local de {self.repo()} em {self.apps_root}: revisão assistida indisponível")
             return
         self.review_requested.emit(str(ws), review_prompt(self.repo(), self.current, self.current_diff))
+
+    def shutdown(self) -> None:
+        self.approval.shutdown()
+        super().shutdown()
 
 
 class ActionsTab(_GhTab):
