@@ -3,14 +3,26 @@ from __future__ import annotations
 
 from html import escape
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QSizeF, Qt, QTimer
+from PySide6.QtGui import (
+    QColor,
+    QPyTextObject,
+    QTextCharFormat,
+    QTextCursor,
+    QTextDocument,
+    QTextFormat,
+)
 from PySide6.QtWidgets import (
+    QApplication,
     QDialog,
     QFrame,
     QHBoxLayout,
     QLabel,
+    QMenu,
     QPlainTextEdit,
     QPushButton,
+    QSizePolicy,
+    QTextBrowser,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -46,34 +58,213 @@ def content_text(content: object, limit: int = TOOL_CONTENT_LIMIT) -> str:
     return text
 
 
-class TextBlock(QLabel):
-    """Texto do agente (ou pensamento), acrescentado em lotes pelo flush coalescido."""
+# Acima disto a mensagem é mostrada como texto puro: o Markdown de uma mensagem gigante não pode travar a UI (R32).
+MARKDOWN_LIMIT = 20_000
+# Markdown do GitHub SEM HTML cru: o que o agente escrever como HTML aparece como texto, nunca é interpretado.
+MARKDOWN_FLAGS = (QTextDocument.MarkdownFeature.MarkdownDialectGitHub
+                  | QTextDocument.MarkdownFeature.MarkdownNoHTML)
+MESSAGE_ROLES = {
+    "agent": ("Agente", "QFrame#msg{background:transparent;border:0}", "color:#e6e6e6;font-size:13px"),
+    "thought": ("Pensamento", "QFrame#msg{background:transparent;border-left:2px solid #444}",
+                "color:#9a9aa8;font-style:italic;font-size:12px"),
+    "user": ("Você", "QFrame#msg{background:#24324a;border-radius:8px}", "color:#f0f0f0;font-size:13px"),
+}
+CODE_BG = "#121218"
+COPY_CSS = ("QToolButton{color:#9a9aa8;border:1px solid transparent;border-radius:4px;padding:0 6px;font-size:11px}"
+            "QToolButton:hover{color:#e6e6e6;border-color:#3a3a44;background:#2a2a30}")
 
-    def __init__(self, thought: bool = False) -> None:
+
+class _InertImageHandler(QPyTextObject):
+    """Substitui o tratador de imagem padrão do layout. O padrão, quando `loadResource` não devolve nada, abre o
+    arquivo ele mesmo (QImage::load — caminho UNC \\\\host vira acesso SMB) e guarda no cache do documento."""
+
+    def intrinsicSize(self, doc, pos, fmt):                                    # noqa: N802 (API do Qt)
+        return QSizeF(0, 0)
+
+    def drawObject(self, painter, rect, doc, pos, fmt):                        # noqa: N802 (API do Qt)
+        return None
+
+
+class InertDocument(QTextDocument):
+    """Documento do Chat: não carrega recurso nenhum, nem pelo `loadResource`, nem pelo tratador de imagem."""
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self._image_handler = _InertImageHandler(self)                         # referência: o layout não é dono
+        self.documentLayoutChanged.connect(self._register_handler)           # o QTextBrowser troca o layout
+        self._register_handler()
+
+    def _register_handler(self) -> None:
+        self.documentLayout().registerHandler(QTextFormat.ObjectTypes.ImageObject, self._image_handler)
+
+    def loadResource(self, kind, url):                                         # noqa: N802 (API do Qt)
+        return None
+
+
+class InertBrowser(QTextBrowser):
+    """QTextBrowser que NUNCA carrega recurso (#101, segurança): nenhum esquema (file:, UNC \\\\host — vazamento de
+    credencial NTLM —, http(s):, qrc:, data:, caminho relativo) e nenhum tipo (imagem, folha de estilo, HTML)."""
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.setDocument(InertDocument(self))
+
+    def loadResource(self, kind, url):                                         # noqa: N802 (API do Qt)
+        return None
+
+
+class MessageBlock(QFrame):
+    """Uma mensagem do Chat (UX-10): Markdown seguro num QTextBrowser, selecionável com o mouse, Ctrl+C, menu
+    Copiar e botão Copiar que copia o texto EXATO da mensagem (quebras de linha, crases e código preservados)."""
+
+    def __init__(self, role: str = "agent", text: str = "") -> None:
         super().__init__()
-        self.thought = thought
-        self.setWordWrap(True)
-        self.setTextFormat(Qt.TextFormat.PlainText)
-        self.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        self.setStyleSheet("color:#9a9aa8;font-style:italic;font-size:12px;padding:2px 6px;border-left:2px solid #444"
-                           if thought else "color:#e6e6e6;font-size:13px;padding:2px 2px")
+        self.role = role
+        label, frame_css, text_css = MESSAGE_ROLES[role]
+        self.setObjectName("msg")
+        self.setStyleSheet(frame_css)
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)   # nunca estica: sem vão no balão
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(9, 4, 9, 6)
+        lay.setSpacing(2)
+        head = QHBoxLayout()
+        self.who = QLabel(label)
+        self.who.setStyleSheet("color:#7d7d88;font-size:11px;background:transparent")
+        self.copy_btn = QToolButton()
+        self.copy_btn.setText("Copiar")
+        self.copy_btn.setToolTip("Copiar a mensagem inteira (texto exato, com quebras de linha e código)")
+        self.copy_btn.setStyleSheet(COPY_CSS)
+        self.copy_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.copy_btn.clicked.connect(self.copy_all)
+        head.addWidget(self.who)
+        head.addStretch(1)
+        head.addWidget(self.copy_btn)
+        lay.addLayout(head)
+        self.view = InertBrowser()                                             # nenhum recurso é carregado (#101)
+        self.view.setOpenLinks(False)                                          # link do agente não abre sozinho
+        self.view.setOpenExternalLinks(False)
+        self.view.setFrameShape(QFrame.Shape.NoFrame)
+        self.view.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.view.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.view.setLineWrapMode(QTextBrowser.LineWrapMode.WidgetWidth)
+        self.view.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.view.setStyleSheet(f"QTextBrowser{{background:transparent;{text_css};border:0}}")
+        self.view.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.view.customContextMenuRequested.connect(lambda pos: self.context_menu().exec(self.view.mapToGlobal(pos)))
+        lay.addWidget(self.view)
+        # a altura segue o documento sempre que ele se relayouta (o QTextBrowser faz isso depois do resize do quadro)
+        self.view.document().documentLayout().documentSizeChanged.connect(self._follow_size)
         self._text = ""
+        self._render_pending = False
+        if text:
+            self.append(text)
 
+    # ------------------------------------------------------------------------------------------------ texto
     def append(self, text: str) -> None:
+        """Acrescenta (streaming). A renderização é coalescida: vários lotes antes do próximo ciclo da UI = uma só."""
         self._text += text
-        self.setText(self._text)
+        if not self._render_pending:
+            self._render_pending = True
+            QTimer.singleShot(0, self, self.render)               # morre junto com o widget
 
     def full_text(self) -> str:
         return self._text
 
+    def render(self) -> None:
+        self._render_pending = False
+        doc = self.view.document()
+        if len(self._text) > MARKDOWN_LIMIT:
+            doc.setPlainText(self._text)                                       # gigante: texto puro, sem travar
+        else:
+            doc.setMarkdown(self._text, MARKDOWN_FLAGS)
+            self._inert_images()
+            self._style_code_blocks()
+        self._fit()
 
-class UserBubble(QLabel):
+    def _inert_images(self) -> None:
+        """Imagem em Markdown vira o texto "[imagem: alt]" (#101): o documento não guarda nenhuma referência a recurso."""
+        doc = self.view.document()
+        found: list[tuple[int, int, str]] = []
+        block = doc.begin()
+        while block.isValid():
+            it = block.begin()
+            while not it.atEnd():
+                frag = it.fragment()
+                if frag.isValid() and frag.charFormat().isImageFormat():
+                    fmt = frag.charFormat().toImageFormat()
+                    alt = str(fmt.property(QTextFormat.Property.ImageAltText) or "").strip() or "sem descrição"
+                    found.append((frag.position(), frag.length(), alt))
+                it += 1
+            block = block.next()
+        cur = QTextCursor(doc)
+        for pos, length, alt in reversed(found):
+            cur.setPosition(pos)
+            cur.setPosition(pos + length, QTextCursor.MoveMode.KeepAnchor)
+            cur.insertText(f"[imagem: {alt}]", QTextCharFormat())
+
+    def _style_code_blocks(self) -> None:
+        """Bloco de código com fundo próprio e quebra de linha: sem rolagem horizontal, linha longa não pode sumir."""
+        doc = self.view.document()
+        cur = QTextCursor(doc)
+        block = doc.begin()
+        while block.isValid():
+            fmt = block.blockFormat()
+            if fmt.hasProperty(QTextFormat.Property.BlockCodeFence) or fmt.nonBreakableLines():
+                fmt.setNonBreakableLines(False)
+                fmt.setBackground(QColor(CODE_BG))
+                fmt.setLeftMargin(6)
+                cur.setPosition(block.position())
+                cur.setBlockFormat(fmt)
+            block = block.next()
+
+    def _fit(self) -> None:
+        doc = self.view.document()
+        width = max(self.view.viewport().width(), 200)
+        doc.setTextWidth(width)
+        self.view.setFixedHeight(int(doc.size().height()) + 6)
+        self.updateGeometry()                                                  # o layout acompanha a altura nova
+
+    def _follow_size(self, size) -> None:
+        h = int(size.height()) + 6
+        if self.view.height() != h:
+            self.view.setFixedHeight(h)
+            self.updateGeometry()
+
+    def resizeEvent(self, e) -> None:                                           # noqa: N802
+        super().resizeEvent(e)
+        self._fit()
+
+    # ------------------------------------------------------------------------------------------------ copiar
+    def copy_all(self) -> None:
+        QApplication.clipboard().setText(self._text)
+        self.copy_btn.setText("Copiado ✓")
+        QTimer.singleShot(1500, self.copy_btn, lambda: self.copy_btn.setText("Copiar"))
+
+    def copy_selection(self) -> None:
+        self.view.copy()
+
+    def context_menu(self) -> QMenu:
+        m = QMenu(self)
+        sel = m.addAction("Copiar seleção", self.copy_selection)
+        sel.setShortcut("Ctrl+C")
+        sel.setEnabled(self.view.textCursor().hasSelection())
+        m.addAction("Copiar mensagem inteira", self.copy_all)
+        m.addSeparator()
+        m.addAction("Selecionar tudo", self.view.selectAll)
+        return m
+
+
+class TextBlock(MessageBlock):
+    """Texto do agente (ou pensamento), acrescentado em lotes pelo flush coalescido."""
+
+    def __init__(self, thought: bool = False) -> None:
+        super().__init__("thought" if thought else "agent")
+        self.thought = thought
+
+
+class UserBubble(MessageBlock):
     def __init__(self, text: str) -> None:
-        super().__init__(text)
-        self.setWordWrap(True)
-        self.setTextFormat(Qt.TextFormat.PlainText)
-        self.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        self.setStyleSheet("color:#f0f0f0;background:#24324a;border-radius:8px;padding:6px 9px;font-size:13px")
+        super().__init__("user", text)
 
 
 class Notice(QLabel):
