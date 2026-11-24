@@ -27,6 +27,31 @@ _APP = QApplication.instance() or QApplication([])
 STUB = Path(__file__).parent / "cockpit" / "fake_acp_agent.py"
 
 
+class NoSpawnClient:
+    """Cliente ACP que NÃO cria processo. Estes testes conferem a casca (janela, bandeja, barra), não o agente.
+
+    Causa do travamento do CI 3.11 no #116: o `open_cockpit` aquece o agente (`chat.ensure_client()`), e o fixture
+    criava de verdade o processo do agente de teste numa thread asyncio enquanto o teste bombeava eventos do Qt. No
+    Windows/3.11, com a captura de saída do pytest, isso travou a suíte (dump do faulthandler: a thread do ACP em
+    `_spawn_and_initialize`, o teste em `processEvents`). O pedido de conexão continua conferido, sem processo."""
+    made: list = []
+
+    def __init__(self, argv, cwd, **_kw):
+        NoSpawnClient.made.append(list(argv))
+        self.connects = 0
+
+    def connect(self, _session_id=None):
+        import concurrent.futures as cf
+        self.connects += 1
+        return cf.Future()                                                     # nunca conclui: nenhum agente aqui
+
+    def close(self):
+        import concurrent.futures as cf
+        f = cf.Future()
+        f.set_result(None)
+        return f
+
+
 @pytest.fixture
 def studio(tmp_path, monkeypatch):
     """Núcleo de verdade (sem rede: coleta trocada), Cockpit de verdade com o agente de teste, bandeja disponível."""
@@ -40,7 +65,7 @@ def studio(tmp_path, monkeypatch):
     shut: list = []
 
     def factory():
-        win = CockpitWindow(repos=["o/r"], workspaces_fn=lambda: [tmp_path / "ws"],
+        win = CockpitWindow(repos=["o/r"], workspaces_fn=lambda: [tmp_path / "ws"], client_factory=NoSpawnClient,
                             profiles_fn=lambda: [AgentProfile("stub", "Stub", (sys.executable, str(STUB)))])
         real = win.shutdown
         win.shutdown = lambda: (shut.append(1), real())[1]
@@ -48,6 +73,9 @@ def studio(tmp_path, monkeypatch):
     quits: list = []
     core = AppCore(cfg.Settings(local_interval_s=2), quit_fn=lambda: quits.append(1), tray_available=lambda: True,
                    cockpit_factory=factory)
+    NoSpawnClient.made.clear()
+    import threading
+    threads_before = set(threading.enumerate())
     core.start()
     before ={w for w in QApplication.topLevelWidgets() if w.isVisible()}
     try:
@@ -59,6 +87,21 @@ def studio(tmp_path, monkeypatch):
                 w.hide()
                 w.deleteLater()
         _APP.processEvents()
+        _assert_no_thread_left(threads_before)
+
+
+def _assert_no_thread_left(threads_before, timeout=5.0):
+    """Guarda: depois do `core.shutdown()`, nenhuma thread criada pelo teste continua viva (coletor, runtime do ACP)."""
+    import threading
+    import time
+    end = time.monotonic() + timeout
+    while True:
+        alive = [t for t in threading.enumerate() if t not in threads_before and t.is_alive()]
+        if not alive or time.monotonic() > end:
+            break
+        _APP.processEvents()
+        time.sleep(0.05)
+    assert alive == [], f"threads vivas depois do shutdown: {[t.name for t in alive]}"
 
 
 def new_windows(before) -> list:
@@ -75,6 +118,7 @@ def test_the_shortcut_opens_only_the_main_window_the_cockpit(studio):
     _APP.processEvents()
     assert bar is None and core.bar is None                                    # sem barra: nenhuma janela dela
     assert new_windows(before) == [core.cockpit]                               # uma janela principal só
+    assert NoSpawnClient.made and core.cockpit.chat.client.connects == 1       # o agente é aquecido, sem processo aqui
 
 
 def test_a_second_open_brings_the_same_cockpit_forward_and_never_the_central(studio):
