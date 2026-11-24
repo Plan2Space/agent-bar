@@ -52,6 +52,8 @@ def test_the_caption_rectangle_never_crosses_the_image_rectangle(view, w, h):
     for _ in range(15):
         _APP.processEvents()
     for name, card in view.cards.items():
+        if not card.isVisible():                                                  # UX-14: melhor só com destaque merecido
+            continue
         image, caption = card.thumb.geometry(), card.info.geometry()
         assert not image.intersects(caption), (name, w, h, image, caption)
         assert caption.top() > image.bottom(), (name, w, h)
@@ -70,6 +72,8 @@ def test_the_thumbnail_area_is_at_least_240x135_and_the_image_fills_it_keeping_i
     for _ in range(15):
         _APP.processEvents()
     for name, card in view.cards.items():
+        if not card.isVisible():                                                  # UX-14: melhor só com destaque merecido
+            continue
         area = card.thumb.size()
         assert area.width() >= 240 and area.height() >= 135, (name, w, h, area)
         pix = card.thumb.pixmap()

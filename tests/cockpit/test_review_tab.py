@@ -271,7 +271,7 @@ def test_design_gallery_is_the_main_page_and_shows_three_big_cards(tmp_path):
         assert "não é geometria validada" in ref.info.text() and "sintética" in ref.info.text()
         last = c["último"]
         assert last.item.item_id == UNPUB_FAIL and not last.thumb.pixmap().isNull()       # maior started_at
-        for piece in ("23/11 06:16 UTC", UNPUB_FAIL, "Geometria: PASS", "Render: FAIL", "Nota visual: sem avaliação"):
+        for piece in ("23/11 06:16 UTC", UNPUB_FAIL, "Geometria: PASS", "Render: FAIL", "Avaliação: sem avaliação"):
             assert piece in last.info.text(), piece
         best = c["melhor"]
         assert best.item is None and best.thumb.path is None
@@ -319,6 +319,7 @@ def test_history_gallery_is_newest_first_with_real_thumbnails_and_states(tmp_pat
         ids = [h.item(i).data(Qt.ItemDataRole.UserRole) for i in range(h.count())]
         renders = [i.item_id for i in tab.gallery_items() if i.kind == "render"]
         assert ids == renders and ids[0] == UNPUB_FAIL and R4B not in ids        # só renders, mais recente primeiro
+        tab.design.history_toggle.click()                                    # UX-14: miniaturas sob demanda
         assert all(not h.item(i).icon().isNull() for i in range(h.count()) if tab.gallery.get(ids[i]).images)
         first = h.item(0).text()
         assert first.startswith("23/11 06:16 UTC") and "câmera cama_3q · luz dia" in first and "visual: sem avaliação" in first
