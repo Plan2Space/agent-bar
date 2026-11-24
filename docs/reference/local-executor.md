@@ -18,9 +18,8 @@ Um perfil do Chat, **Executor local (amostra)**, ao lado de **Ollama (local)** (
    pelo modelo)"), não pelo modelo: no ensaio real o llama3.1:8b resumiu falha como sucesso. O resultado fica no
    histórico como papel `tool`, e o modelo o lê nos turnos seguintes.
 
-O executor sempre pede pelo canal de permissão do Chat (o mesmo do ACP): com o bypass do Studio (ordem do Felipe,
-2026-11-24) esse canal aprova sozinho e registra; com "pedir permissão" ligado, recusar, fechar ou deixar vencer = zero
-chamada ao motor. Um pedido = no máximo um run (registro em
+O executor sempre pede pelo canal de permissão do Chat (o mesmo do ACP) e não tem caminho próprio de aprovação: vale o
+que esse canal decidir e registrar. Recusar, fechar ou deixar vencer = zero chamada ao motor. Um pedido = no máximo um run (registro em
 `<saída>/_studio/requests.sqlite`; prazo vencido = "desconhecido", reconciliado pelo `run_id`, nunca re-executado).
 Não abre o SketchUp se outro SketchUp já estiver aberto. Uma rodada de ferramenta por turno.
 
