@@ -89,7 +89,9 @@ def permissions_row() -> HealthRow:
     return HealthRow("Permissões dos agentes", OK, [PM.label(mode), "cada aprovação automática fica registrada (Inbox, "
                                                    "Notificações), inclusive irreversível, marcada como tal"
                                                    if mode == PM.BYPASS else "cada ferramenta pede confirmação; "
-                                                   "irreversível pede o código"])
+                                                   "irreversível pede o código",
+                                                   "o que o próprio agente não pede (leituras) aparece só no Chat, "
+                                                   "não no registro"])
 
 
 def github_row(snap) -> HealthRow:

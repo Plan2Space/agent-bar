@@ -1,7 +1,8 @@
 """Permissões dos agentes em bypass por padrão e sempre (decisão do Felipe, 2026-11-24, literal: "CARA E ESSE NEGOCIO
 DE PERMITIR SO UMA VEZ NAO EXISTE DEIXA AS PERMISSOES DOS AGENTS BYPASS SEMPRE").
 
-- sessão nova do Claude ACP abre em bypassPermissions, sem o diálogo de modo arriscado;
+- a sessão do Claude ACP fica no modo do AGENTE que pede permissão (nunca o bypassPermissions dele, que não manda
+  session/request_permission e portanto não deixaria registro); quem aprova sozinho é o NOSSO broker;
 - pedido de permissão que ainda chegar é aprovado sem cartão nem diálogo, e REGISTRADO (Inbox: decidido por "bypass";
   Notificações: item informativo, não ACTION_REQUIRED);
 - o Chat e a Saúde dizem "permissões: bypass (sempre)";
@@ -132,13 +133,29 @@ def test_only_human_or_the_bypass_may_allow_an_irreversible_request(tmp_path):
         inbox.close()
 
 
-def test_a_new_acp_session_opens_in_bypass_without_the_risky_mode_dialog(view):
+def test_bypass_keeps_the_agent_in_its_asking_mode_so_every_tool_call_is_requested_allowed_and_recorded(view):
+    """MUST do fmmodesto (#114 @ 8437ce5): no bypassPermissions do próprio Claude Code nada passa pelo broker e nada é
+    registrado. A sessão fica no modo que pede; cada tool call gera request_permission, allow automático e registro."""
     v, _asked, modes = view
-    v.send("echo 1")
+    v.send("perm")
     assert wait(lambda: not v.busy and agent_texts(v))
-    assert v.client.modes.get("currentModeId") == "bypassPermissions"
+    assert v.client.modes.get("currentModeId") == "default"                       # o modo do agente que pede
+    assert agent_texts(v) == ["outcome=selected:allow"]                           # houve request_permission + allow
+    assert [(e.status, e.decided_by) for e in v.inbox.history()] == [("ALLOWED", "bypass")]
     assert modes == []                                                            # nenhum diálogo de modo arriscado
-    assert PM.label(PM.BYPASS) in v.status.text() or PM.label(PM.BYPASS) in v.permission_label.text()
+    assert v.permission_label.text() == PM.label(PM.BYPASS)
+
+
+def test_in_bypass_an_agent_that_opens_in_a_mode_that_never_asks_is_moved_to_the_asking_one(view, monkeypatch):
+    """O claude-agent-acp abre em "auto"; um agente poderia abrir no bypassPermissions dele. Nos dois casos a sessão
+    volta ao modo que pede, para nenhuma ferramenta rodar sem registro."""
+    v, _asked, _ = view
+    monkeypatch.setenv("AGENT_BAR_FAKE_START_MODE", "bypassPermissions")
+    v.send("perm")
+    assert wait(lambda: not v.busy and agent_texts(v))
+    assert v.client.modes.get("currentModeId") == "default"
+    assert agent_texts(v) == ["outcome=selected:allow"]                           # nunca "ran-without-request"
+    assert len(v.inbox.history()) == 1
 
 
 def test_ask_mode_brings_back_the_card(view, monkeypatch):

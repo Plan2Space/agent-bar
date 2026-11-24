@@ -122,8 +122,6 @@ class _Bridge(QObject):
     exited = Signal(int, object)
 
 
-BYPASS_MODE = "bypassPermissions"                       # modo ACP que não pede permissão
-
 class ChatView(QWidget):
     def __init__(self, store: ChatStore | None = None, runtime: AsyncRuntime | None = None, *,
                  client_factory: Callable[..., AcpClient] = AcpClient,
@@ -444,8 +442,9 @@ class ChatView(QWidget):
             on_update=lambda u, g=gen: self.bridge.update.emit(g, u),
             on_permission=lambda req, respond, g=gen: self.bridge.permission.emit(g, req, respond),
             on_exit=lambda code, g=gen: self.bridge.exited.emit(g, code),
-            stderr_path=data_dir() / "logs" / f"agent-{p.key}.stderr.log",
-            enforce_safe_mode=self.permission_mode_fn() != PM.BYPASS)      # bypass: não força o modo que pede
+            stderr_path=data_dir() / "logs" / f"agent-{p.key}.stderr.log")
+        # Bypass NÃO usa o bypassPermissions do agente: nele o Claude não manda session/request_permission e nada seria
+        # registrado. A sessão fica sempre no modo que pede; quem aprova sozinho, e registra, é o nosso broker.
         fut = self.client.connect(self.chat.session_id or None)
         fut.add_done_callback(lambda f, g=gen: self._emit_done(g, "connect", f))
 
@@ -502,17 +501,10 @@ class ChatView(QWidget):
         gen = self.gen
         self.client.set_mode(mode).add_done_callback(lambda f, g=gen, m=mode: self._emit_done(g, f"mode:{m}", f))
 
-    def _apply_bypass_mode(self) -> None:
-        """Bypass: a sessão abre no modo que não pede permissão, se o agente o anuncia; sem o diálogo de modo arriscado
-        (a escolha já é do Felipe). Em "pedir", nada muda."""
-        mode = self.permission_mode_fn()
-        self.permission_label.setText(PM.label(mode))
-        ids = {str(m.get("id")) for m in self._modes.get("availableModes") or [] if isinstance(m, dict)}
-        if mode != PM.BYPASS or BYPASS_MODE not in ids or self.chat.mode == BYPASS_MODE or self.client is None:
-            return
-        gen = self.gen
-        self.client.set_mode(BYPASS_MODE).add_done_callback(
-            lambda f, g=gen: self._emit_done(g, f"mode:{BYPASS_MODE}", f))
+    def _show_permission_mode(self) -> None:
+        """Mostra o modo de permissão do Studio. Em bypass a sessão do agente continua no modo que pede (o broker
+        responde allow e registra cada pedido); nada a trocar no agente."""
+        self.permission_label.setText(PM.label(self.permission_mode_fn()))
 
     def _select_mode(self, mode: str) -> None:
         idx = self.mode_box.findData(mode)
@@ -614,7 +606,7 @@ class ChatView(QWidget):
                 self.status.setText("bloqueado: agente sem modo que peça permissão")
                 return
             self.status.setText(f"conectado · {self.profile().label} · sessão {self.chat.session_id}")
-            self._apply_bypass_mode()
+            self._show_permission_mode()
             if self.pending_prompt:
                 text, self.pending_prompt = self.pending_prompt, None
                 self._prompt(text)
