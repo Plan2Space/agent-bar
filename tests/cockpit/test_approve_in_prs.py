@@ -184,3 +184,57 @@ def test_a_failed_pr_detail_never_keeps_the_previous_prs_approval_button(make, m
     assert wait(lambda: "indisponível" in tab.detail.toPlainText())
     assert not tab.approve_btn.isEnabled() and tab.approval.row is None
     assert "indisponível" in tab.approval_label.text()
+
+
+# MUST do fmmodesto (#111 @ b1452ae, pullrequestreview-6037606668): o painel limpa e desliga o botão em TODA troca de
+# seleção, refresh ou erro, e só reabilita depois de reler o PR selecionado AGORA. Um teste por caminho.
+
+def test_refreshing_the_list_turns_the_previous_prs_approval_off(make):
+    tab = make(board())
+    assert tab.approve_btn.isEnabled()
+    tab.refresh()
+    assert not tab.approve_btn.isEnabled() and tab.approval.row is None          # já no pedido, antes da resposta
+    assert wait(lambda: tab.tree.topLevelItemCount() == 2 and tab.current is None)
+    assert not tab.approve_btn.isEnabled() and "#7" not in tab.approval_label.text()
+
+
+def test_selecting_another_pr_turns_the_approval_off_while_its_detail_loads(make):
+    tab = make(board())
+    assert tab.approve_btn.isEnabled()
+    tab.tree.setCurrentItem(tab.tree.topLevelItem(1))                             # PR 8: o detalhe ainda não chegou
+    assert not tab.approve_btn.isEnabled() and tab.approval.row is None
+    assert "#8" in tab.approval_label.text() and "#7" not in tab.approval_label.text()
+
+
+def test_a_list_error_turns_the_approval_off(make):
+    tab = make(board())
+    assert tab.approve_btn.isEnabled()
+    tab.on_error("list", "gh", "HTTP 502")                                        # a releitura da lista falhou
+    assert not tab.approve_btn.isEnabled() and tab.approval.row is None
+
+
+def test_a_late_detail_of_a_pr_no_longer_selected_never_reenables_its_approval(make):
+    tab = make(board())
+    tab.tree.setCurrentItem(tab.tree.topLevelItem(1))                             # o 8 passa a ser o selecionado
+    tab.on_result("detail", (REPO, {"number": 7, "headRefOid": SHA, "url": "u"}, "diff", ([], "")))   # resposta velha do 7
+    assert not tab.approve_btn.isEnabled() and tab.approval.row is None
+
+
+def test_the_approval_label_names_the_pr_and_when_the_board_was_read(make):
+    b = board()
+    b.collected_at = "2026-11-24T10:07:00Z"
+    tab = make(b)
+    text = tab.approval_label.text()
+    assert f"{REPO}#7" in text and "10:07" in text
+
+
+def test_a_new_list_turns_the_approval_off_and_drops_the_detail_still_in_flight(make):
+    """Selecionou um PR depois do "Atualizar"; a lista nova chega e limpa a árvore. O painel não fica com aquele PR, e
+    o detalhe que ainda chegar dele não reabilita nada (nenhum PR selecionado)."""
+    tab = make(board())
+    assert tab.approve_btn.isEnabled()
+    rows = [(REPO, {"number": 7, "title": "feat: coisa"}), (REPO, {"number": 8, "title": "x"})]
+    tab.on_result("list", (rows, {}))
+    assert not tab.approve_btn.isEnabled() and tab.approval.row is None
+    tab.on_result("detail", (REPO, {"number": 7, "headRefOid": SHA, "url": "u"}, "diff", ([], "")))
+    assert not tab.approve_btn.isEnabled() and tab.approval.row is None

@@ -91,7 +91,9 @@ class ApprovalPanel(QWidget):
             return
         self.row = row
         sha7 = row.head_sha[:7]
-        text = f"Aprovação: {row.state} · {row.risk or 'risco ?'} · HEAD {sha7} · CI {row.ci_state}"
+        read = (board.collected_at or "")[11:16]                               # "2026-11-24T10:07:00Z" -> 10:07 (UTC)
+        text = (f"Aprovação de {repo}#{number}: {row.state} · {row.risk or 'risco ?'} · HEAD {sha7} · CI {row.ci_state}"
+                + (f" (lido às {read} UTC)" if read else ""))
         if self.observe_only():
             text += " · instância somente leitura: aprovação desativada"
         elif not row.can_approve and row.blocked_reason:
