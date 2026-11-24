@@ -278,3 +278,16 @@ def test_executor_without_any_tool_model_says_so():
             a.create_session(SessionRequest())
         assert "tools" in str(exc.value)
         a.disconnect()
+
+
+def test_tool_capability_is_per_model(server):
+    models = {"chat-a": {"capabilities": ["completion", "tools"]}, "chat-b": {"capabilities": ["completion", "tools"]}}
+    with FakeOllama(models) as s:
+        a = OllamaAdapter(s.endpoint, tool_host=Host())
+        a.connect()
+        s.tool_script = {"calls": [call()]}
+        sid = a.create_session(SessionRequest(model_id="chat-a"))["session_id"]
+        a.send_prompt(sid, "crie", lambda e: None).result(timeout=15)
+        assert a.tool_calls_for("chat-a")["state"] == "SUPPORTED"
+        assert a.tool_calls_for("chat-b")["state"] == "UNKNOWN"              # prova de um nao vale para o outro
+        a.disconnect()

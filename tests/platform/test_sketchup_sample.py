@@ -375,3 +375,17 @@ def test_symlinked_engine_root_is_refused(engine_root, tmp_path):
 def test_engine_env_keeps_the_sketchup_override_but_no_secrets():
     env = filtered_env({"P2S_SKETCHUP_EXE": "D:/SU/SketchUp.exe", "GH_TOKEN": "x", "PATH": "p", "MY_API_KEY": "k"})
     assert env["P2S_SKETCHUP_EXE"] == "D:/SU/SketchUp.exe" and "GH_TOKEN" not in env and "MY_API_KEY" not in env
+
+
+def test_inbox_operation_keeps_model_and_digest_within_its_limit(engine_root, tmp_path):
+    from agent_bar.cockpit.permission_inbox import OP_LIMIT, describe
+    perm = Perm()
+    make(engine_root, tmp_path).run(call(), ctx(perm))
+    op = describe(perm.requests[0].tool_call)[0]
+    assert len(op) <= OP_LIMIT and '"model": "llama3.1:8b"' in op and '"model_digest": "46e0c10c' in op
+    assert '"request_id": "rq-' in op
+
+
+def test_studio_commit_outside_git_is_explicitly_unknown(engine_root, tmp_path):
+    res = make(engine_root, tmp_path, studio_head=lambda: None).run(call(), ctx(Perm()))
+    assert res["studio_commit"] == "desconhecido (fora de um checkout git)"

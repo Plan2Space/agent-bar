@@ -180,6 +180,17 @@ class OllamaAdapter(ProviderAdapter):
         proofs = "; ".join(self._tool_proofs[k] for k in sorted(self._tool_proofs))
         return capability("SUPPORTED", f"so para {proofs}", v)
 
+    def tool_calls_for(self, model_id: str) -> dict:
+        """Capacidade `tool_calls` de UM modelo (SPEC §3.6/§11): SUPPORTED so se aquele model@digest ja executou uma
+        chamada `completed` neste adaptador; a prova de um modelo nunca vale para outro."""
+        v = self.version
+        if self.tool_host is None:
+            return capability("UNSUPPORTED", "perfil Conversa: o Studio nao publica ferramentas", v)
+        key = f"{model_id}@{(self._digests.get(model_id) or '?')[:12]}"
+        if key in self._tool_proofs:
+            return capability("SUPPORTED", self._tool_proofs[key], v)
+        return capability("UNKNOWN", f"{key}: nenhuma chamada executada com sucesso por este modelo", v)
+
     # ------------------------------------------------------------------------------------------------ ciclo de vida
     def connect(self, timeout: float = 30.0) -> None:
         if self._connected:

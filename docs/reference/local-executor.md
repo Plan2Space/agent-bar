@@ -35,7 +35,13 @@ Não abre o SketchUp se outro SketchUp já estiver aberto. Uma rodada de ferrame
 Preflight sem abrir o SketchUp: `python -m agent_bar.platform.sketchup_sample` (JSON `ready`/`reason`).
 O perfil aparece indisponível, com o motivo, enquanto o preflight falhar.
 
+Fechar a aba ou trocar de agente durante o build não congela a janela: o motor termina sozinho e o resultado fica no
+registro. Sair do Studio nesse momento deixa o processo invisível até o motor acabar (no máximo o prazo do motor, 15
+min); reabrir o Studio não espera por isso e o registro reconcilia o run.
+
 ## Capacidade honesta
 
 `tool_calls` do adaptador Ollama: `UNSUPPORTED` no perfil Conversa; `UNKNOWN` no Executor até uma chamada terminar
-`completed`; só então `SUPPORTED`, com a prova (modelo@digest → ferramenta → run).
+`completed`; só então `SUPPORTED`, com a prova (modelo@digest → ferramenta → run). Por modelo:
+`OllamaAdapter.tool_calls_for(modelo)` diz `SUPPORTED` só para o `modelo@digest` que executou; outro modelo continua
+`UNKNOWN`.

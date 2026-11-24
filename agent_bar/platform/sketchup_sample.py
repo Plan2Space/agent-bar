@@ -328,7 +328,7 @@ class SketchUpSampleTool:
         run_id = f"lx-{stamp}-{rid[3:15]}-{ref}"
         run_dir = self.out_root / run_id
         head = self.head(self.engine_root)
-        studio = self.studio_head() or {}
+        studio = self.studio_head() or {"commit": "desconhecido (fora de um checkout git)", "dirty": None}
         tool_call = {
             "toolCallId": call.call_id, "kind": "execute", "status": "pending",
             # o titulo aparece inteiro no cartao: modelo, acao e destino; o cartao corta o rawInput em 300 caracteres,
@@ -338,10 +338,11 @@ class SketchUpSampleTool:
                 "tool": TOOL_NAME, "fixture_ref": ref, "expected_fixture_version": fixture_hash,
                 "workspace_id": str(self.engine_root),
                 "impacto": "abre o SketchUp 2026; cria so a pasta do run; nao toca Suite 01 nem artifacts/",
-                "fixture_path": ALLOWED_FIXTURES[ref], "engine_commit": (head or {}).get("commit"),
-                "studio_commit": studio.get("commit"),
-                "request_id": rid, "run_id": run_id, "out_dir": str(run_dir), "model": ctx.model_id,
-                "model_digest": ctx.model_digest, "call_digest": call.digest, "model_tool_call": dict(call.raw),
+                # o Inbox guarda 600 caracteres: modelo, digest e request_id entram antes do que pode ser cortado
+                "model": ctx.model_id, "model_digest": ctx.model_digest, "request_id": rid,
+                "run_id": run_id, "fixture_path": ALLOWED_FIXTURES[ref], "engine_commit": (head or {}).get("commit"),
+                "studio_commit": studio.get("commit"), "out_dir": str(run_dir),
+                "call_digest": call.digest, "model_tool_call": dict(call.raw),
             },
             "locations": [{"path": str(run_dir)}],
         }
