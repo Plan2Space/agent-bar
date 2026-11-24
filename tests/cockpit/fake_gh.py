@@ -37,6 +37,10 @@ def main() -> int:
         sys.stderr.write("To get started with GitHub CLI, please run:  gh auth login\n")
         return 4
     sub = tuple(argv[:2])
+    repo = argv[argv.index("--repo") + 1] if "--repo" in argv else ""
+    if repo and repo in os.environ.get("FAKE_GH_FAIL_REPOS", "").split(","):     # UX-09: um repo que não responde
+        sys.stderr.write(f"GraphQL: Could not resolve to a Repository with the name '{repo}'.\n")
+        return 1
     out: object
     if sub == ("auth", "status"):
         sys.stdout.write("Logged in to github.com\n")
@@ -45,9 +49,15 @@ def main() -> int:
         out = PRS
     elif sub == ("pr", "view"):
         n = int(argv[2])
+        if str(n) in os.environ.get("FAKE_GH_FAIL_VIEW", "").split(","):        # UX-09: o detalhe deste PR falha
+            sys.stderr.write("HTTP 502: Bad Gateway\n")
+            return 1
         out = {**next(p for p in PRS if p["number"] == n), "body": "Corpo do PR", "comments": [
             {"author": {"login": "fmmodesto"}, "body": "parece bom"}]}
     elif sub == ("pr", "diff"):
+        if os.environ.get("FAKE_GH_FAIL_DIFF"):                # UX-09: a cota REST acabou
+            sys.stderr.write("HTTP 403: API rate limit exceeded for user ID 1.\n")
+            return 1
         size = int(os.environ.get("FAKE_GH_DIFF_SIZE", "0") or 0)
         sys.stdout.write("diff --git a/x.py b/x.py\n+print('oi')\n" + "+" * size)
         return 0

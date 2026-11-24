@@ -38,7 +38,9 @@ PR_DETAIL_FIELDS = PR_FIELDS + ",body,comments"
 RUN_FIELDS = "databaseId,displayTitle,workflowName,headBranch,headSha,status,conclusion,event,createdAt,url"
 DIFF_LIMIT = 60_000
 LOG_LIMIT = 200_000
-DEFAULT_REPOS = ("agent-bar", "agent-runtime", "engineering-specs", "sketchup-mcp-next", "claude-engineering-skills")
+# Os 8 repos do Plan2Space (D-VS-7 / VS-I2, UX-09): a lista padrão quando o `gh` não lista a org.
+DEFAULT_REPOS = ("agent-bar", "agent-runtime", "claude-engineering-skills", "design-library", "engineering-specs",
+                 "evidence", "sketchup-mcp", "sketchup-mcp-next")
 
 
 class GhError(Exception):

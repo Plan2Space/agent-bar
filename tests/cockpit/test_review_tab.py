@@ -281,20 +281,30 @@ def test_design_gallery_is_the_main_page_and_shows_three_big_cards(tmp_path):
         dispose(tab)
 
 
-def test_best_card_never_shows_an_invalid_unpublished_or_unruled_render(tmp_path):
+def test_best_card_never_shows_an_invalid_unpublished_or_unruled_render(tmp_path, monkeypatch):
     from agent_bar.cockpit import gallery as G
-    from tests.cockpit.gallery_fixture import OK_RENDER, PLANT, PUB_OK, R4, ROOM, build_negatives
+    from tests.cockpit.gallery_fixture import (
+        CAL,
+        CAL_KEY,
+        OK_RENDER,
+        PLANT,
+        PUB_OK,
+        R4,
+        ROOM,
+        build_negatives,
+    )
+    monkeypatch.setattr(G, "APPROVED_CALIBRATIONS", frozenset({CAL_KEY}))            # #100: calibração de teste
     tab = _gallery_tab(tmp_path)
     try:
         for evaluated in (OK_RENDER, R4):                                       # não publicado; FAIL
-            tab.evaluations_for = lambda item, e=evaluated: ["avaliação"] if item.item_id == e else []
+            tab.evaluations_for = lambda item, e=evaluated: [CAL] if item.item_id == e else []
             tab._fill_gallery()
             best = tab.design.cards["melhor"]
             assert best.item is None and best.info.text().startswith("Nenhum render elegível")   # há avaliação
             assert "nenhum render elegível" in best.info.text() and best.thumb.path is None
         ev, engine, dl = build_negatives(tmp_path / "neg")
         g = G.build_gallery(E.load_catalog(ev, expected={}), engine, dl, rooms=[(PLANT, ROOM)])
-        tab.design.set_items(g.of(PLANT, ROOM), lambda item: ["avaliação"] if item.item_id == PUB_OK else [])
+        tab.design.set_items(g.of(PLANT, ROOM), lambda item: [CAL] if item.item_id == PUB_OK else [])
         best = tab.design.cards["melhor"]                                        # elegível existe, regra ainda não
         assert best.item is None and "S01C-F1-07" in best.info.text()
     finally:

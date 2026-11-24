@@ -293,17 +293,83 @@ def _one(gh: Gh, repo: str, number: int, approvers: Mapping[str, Sequence[str]],
     return row
 
 
+@dataclass
+class ApprovalMemo:
+    """C2 (cota REST): o que já foi lido, por PR, com a chave (HEAD, updatedAt, evidência); o login; e até quando o
+    REST está suspenso por cota esgotada. Vive no Worker (um por processo)."""
+    rows: dict = field(default_factory=dict)          # (repo, n) -> (chave, PrApproval)
+    login: str | None = None
+    rest_blocked_until: float | None = None
+
+
+def _rate_limited(text: object) -> bool:
+    low = str(text or "").lower()
+    return "rate limit" in low
+
+
+def _rest_reset(gh: Gh, fallback: float) -> float:
+    """Quando a cota volta (gh api rate_limit não gasta cota). Ilegível = `fallback`."""
+    rc, out = gh(["api", "rate_limit"])
+    try:
+        return float(json.loads(out)["resources"]["core"]["reset"]) if rc == 0 else fallback
+    except (ValueError, TypeError, KeyError):
+        return fallback
+
+
 def collect_approvals(gh: Gh, prs: Iterable[tuple[str, int]], approvers: Approvers | Sequence[str] | None = None, runs=None,
-                      store_path: Path | None = None, max_prs: int = 12, reviewer: str | None = None, now=None) -> ApprovalBoard:
+                      store_path: Path | None = None, max_prs: int = 12, reviewer: str | None = None, now=None,
+                      memo: ApprovalMemo | None = None, versions: Mapping[tuple[str, int], tuple[str, str, str]] | None = None,
+                      clock: Callable[[], float] | None = None) -> ApprovalBoard:
+    """Sem `memo`, como sempre: lê tudo. Com `memo` e `versions` (HEAD, updatedAt, estado do CI da fila), só relê o PR
+    cuja chave (HEAD, updatedAt, CI, evidência do motor) mudou (o updatedAt não muda quando um check termina); o login é lido uma vez; no 403 de cota, o REST para até o reset e a
+    linha diz isso (aprovação indisponível, nunca dado velho sem rótulo). A regra de aprovação é a mesma (`_one`)."""
     import datetime as _dt
+    import time as _time
     reviewer = reviewer or os.environ.get("AGENT_BAR_REVIEWER") or DEFAULT_REVIEWER
     approvers = approvers_from_env() if approvers is None else by_level(approvers, reviewer)
-    rc, out = gh(["api", "user", "--jq", ".login"])
-    login = out.strip() if rc == 0 else None
+    t = (clock or _time.time)()
+    blocked = bool(memo and memo.rest_blocked_until and t < memo.rest_blocked_until)
+
+    def blocked_text() -> str:
+        until = _time.strftime("%H:%M", _time.gmtime(memo.rest_blocked_until or t))  # type: ignore[union-attr]
+        return f"cota REST do GitHub esgotada até {until} UTC: leitura adiada"
+
+    error = None
+    if memo is not None and memo.login:
+        login = memo.login
+    elif blocked:
+        login, error = None, blocked_text()
+    else:
+        rc, out = gh(["api", "user", "--jq", ".login"])
+        login = out.strip() if rc == 0 else None
+        error = None if rc == 0 else f"gh api user rc={rc}: {out[:120]}"
+        if memo is not None and rc == 0:
+            memo.login = login
+        elif memo is not None and _rate_limited(out):
+            memo.rest_blocked_until, blocked = _rest_reset(gh, t + 900), True
+            error = blocked_text()
     at = (now or _dt.datetime.now(_dt.timezone.utc)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    board = ApprovalBoard(login=login, approvers=approvers, error=None if rc == 0 else f"gh api user rc={rc}: {out[:120]}",
-                          reviewer=reviewer, collected_at=at)
-    board.rows = [_one(gh, repo, n, approvers, login, runs, store_path, reviewer) for repo, n in list(prs)[:max_prs]]
+    board = ApprovalBoard(login=login, approvers=approvers, error=error, reviewer=reviewer, collected_at=at)
+    for repo, n in list(prs)[:max_prs]:
+        ref = (repo, n)
+        key = None
+        if versions and ref in versions:
+            head, updated, checks = versions[ref]
+            key = (head, updated, checks, evidence_for(repo, head, runs) if head else None)
+        cached = memo.rows.get(ref) if memo is not None else None
+        if cached is not None and key is not None and cached[0] == key:
+            board.rows.append(cached[1])                                     # nada mudou: zero REST
+            continue
+        if blocked:
+            board.rows.append(PrApproval(repo, n, blocked_reason=blocked_text()))
+            continue
+        row = _one(gh, repo, n, approvers, login, runs, store_path, reviewer)
+        if memo is not None and _rate_limited(row.blocked_reason):
+            memo.rest_blocked_until, blocked = _rest_reset(gh, t + 900), True
+            row = PrApproval(repo, n, blocked_reason=blocked_text())
+        elif memo is not None and key is not None and not row.blocked_reason.startswith("leitura do GitHub falhou"):
+            memo.rows[ref] = (key, row)
+        board.rows.append(row)
     return board
 
 
