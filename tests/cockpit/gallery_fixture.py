@@ -212,3 +212,7 @@ def build_all(tmp: Path) -> tuple[Path, Path, Path]:
     ev = build_evidence(tmp / "ev")
     publish_render4(ev)
     return ev, build_engine(tmp / "engine"), build_library(tmp / "dl", tmp / "assets")
+
+# Avaliação de um avaliador com calibração aprovada, SÓ para teste (#100): o registro real começa vazio.
+CAL_KEY = ("teste", "avaliador-calibrado", "c" * 64)
+CAL = {"evaluator": {"provider": CAL_KEY[0], "model": CAL_KEY[1], "digest": CAL_KEY[2]}, "confidence": "normal"}
