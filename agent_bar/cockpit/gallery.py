@@ -242,13 +242,22 @@ class Gallery:
 
 # ------------------------------------------------------------------------------- cartões e histórico (S01C-F1-04)
 NO_EVALUATION = "sem avaliação"
-UNCALIBRATED_ONLY = "só avaliações sem calibração (S01C-F1-06)"
+UNCALIBRATED_ONLY = "só avaliações sem calibração aprovada (S01C-F1-06)"
+# Calibrações APROVADAS e registradas (S01C-F1-06), por (provedor, modelo, digest). D-S01C-2: só avaliador daqui conta
+# para ELEGÍVEL. Vazio: a F1-06 ainda não aprovou nenhuma calibração, então hoje nenhuma avaliação torna um run elegível.
+APPROVED_CALIBRATIONS: frozenset[tuple[str, str, str]] = frozenset()
+
+
+def _evaluator_key(evaluation: object) -> tuple[str, str, str]:
+    ev = evaluation.get("evaluator") if isinstance(evaluation, dict) else getattr(evaluation, "evaluator", None)
+    ev = ev if isinstance(ev, dict) else {}
+    return str(ev.get("provider") or ""), str(ev.get("model") or ""), str(ev.get("digest") or "")
 
 
 def uncalibrated(evaluation: object) -> bool:
-    """Avaliação de confiança baixa (avaliador sem calibração aprovada, D-S01C-2): aparece, mas não conta para ELEGÍVEL."""
-    conf = evaluation.get("confidence") if isinstance(evaluation, dict) else getattr(evaluation, "confidence", None)
-    return conf == "baixa"
+    """Avaliador sem calibração aprovada registrada (D-S01C-2, #100): a avaliação aparece, mas não conta para ELEGÍVEL.
+    Não depende da confiança declarada: confiança "normal" sem calibração também não conta."""
+    return _evaluator_key(evaluation) not in APPROVED_CALIBRATIONS
 BEST_RULE_PENDING = "inconclusivo: regra de melhor render ainda não implementada (S01C-F1-07)"
 
 
@@ -592,7 +601,7 @@ def build_gallery(catalog: E.Catalog | None, engine: Path | None = None, library
 
 
 __all__ = ["ENGINE", "IMPORTED", "NO_EVALUATION", "PUBLISHED", "REFERENCE", "SKP_UNCHECKED", "SOURCES",
-           "UNCALIBRATED_ONLY", "uncalibrated",
+           "APPROVED_CALIBRATIONS", "UNCALIBRATED_ONLY", "uncalibrated",
            "UNPUBLISHED_BLOCK", "UNPUBLISHED_NOTE", "Card", "Gallery", "GalleryImage", "GalleryItem", "build_gallery",
            "CAMERA_PREFERENCE", "LIGHTING_PREFERENCE", "camera_of", "camera_rank", "camera_text",
            "caption", "cards", "comparison_pair", "engine_dir", "file_sha256", "latest_render", "library_dir", "load_engine",

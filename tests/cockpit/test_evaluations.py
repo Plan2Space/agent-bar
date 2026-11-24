@@ -397,17 +397,36 @@ def test_a_run_with_only_an_uncalibrated_low_confidence_evaluation_is_not_eligib
     assert len(evals) == 1
     assert not item.eligible(evals)
     assert item.eligibility(evals) == [G.UNCALIBRATED_ONLY]
-    assert G.UNCALIBRATED_ONLY == "só avaliações sem calibração (S01C-F1-06)"
+    assert G.UNCALIBRATED_ONLY == "só avaliações sem calibração aprovada (S01C-F1-06)"
     assert item.states(evals)["ELEGÍVEL"] == f"não: {G.UNCALIBRATED_ONLY}"
 
 
-def test_a_calibrated_normal_confidence_evaluation_still_counts(src):
+def test_today_no_evaluator_has_an_approved_calibration():
+    """#100 MUST: a F1-06 ainda não aprovou calibração nenhuma; o registro começa vazio."""
+    assert G.APPROVED_CALIBRATIONS == frozenset()
+
+
+def test_a_normal_confidence_evaluation_without_approved_calibration_does_not_count(src):
+    """#100 MUST: "sem calibração" não é só o prefixo do qwen; QUALQUER avaliador fora do registro não pesa."""
     g, ref, _ = src
-    item, ev = evaluate(g, ref, evaluator=CLAUDE)                                # confiança normal
+    item, ev = evaluate(g, ref, evaluator=CLAUDE)                                # confiança normal, mas sem calibração
     item.technical_blockers = lambda: []
-    assert ev.confidence == "normal" and item.eligible([ev.to_dict()])
+    assert ev.confidence == "normal"
+    assert not item.eligible([ev.to_dict()])
+    assert item.eligibility([ev.to_dict()]) == [G.UNCALIBRATED_ONLY]
+
+
+def test_only_an_evaluator_with_a_registered_approved_calibration_counts(src, monkeypatch):
+    g, ref, _ = src
+    item, ev = evaluate(g, ref, evaluator=CLAUDE)
+    item.technical_blockers = lambda: []
+    key = (CLAUDE.provider, CLAUDE.model, CLAUDE.digest)
+    monkeypatch.setattr(G, "APPROVED_CALIBRATIONS", frozenset({key}))
+    assert item.eligible([ev.to_dict()])
     _, low = evaluate(g, ref, evaluator=QWEN)
-    assert item.eligible([low.to_dict(), ev.to_dict()])                            # a baixa não atrapalha a normal
+    assert item.eligible([low.to_dict(), ev.to_dict()])                            # a não calibrada não atrapalha
+    other = {**ev.to_dict(), "evaluator": {**ev.to_dict()["evaluator"], "digest": "f" * 64}}
+    assert not item.eligible([other])                                              # outro digest = outra calibração
 
 
 def test_the_best_card_says_why_when_only_uncalibrated_evaluations_exist(src):
