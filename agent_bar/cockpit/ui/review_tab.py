@@ -597,7 +597,7 @@ class ReviewTab(QWidget):
             self.gallery_pane.show_image("", None, "selecione um item da galeria")
             return
         st = it.states()
-        lines = [f"{it.item_id} · fonte {it.source} ({it.source_label})", *it.notes,
+        lines = [f"{it.item_id} · {G.source_line(it)}", *it.notes,
                  *(f"{k}: {v}" for k, v in st.items())]
         if it.camera_file:
             lines.append(f"câmeras/render spec: {it.camera_file}")

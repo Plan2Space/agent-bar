@@ -405,6 +405,11 @@ def test_without_a_readable_evidence_an_engine_run_never_claims_it_was_not_publi
         if it.kind == "render":
             assert G.UNCHECKED_BLOCK in why
         assert source_text(it) == f"motor: {G.UNCHECKED_NOTE}"
+        # #105 MUST: o rótulo da fonte (legendas, tabela, detalhe) também não afirma "não publicado"
+        assert it.source_label == G.UNCHECKED_LABEL == "motor, publicação não conferida"
+        assert G.UNCHECKED_LABEL in G.caption(it) and "não publicado" not in G.caption(it)
+        assert G.source_line(it) == f"fonte {G.UNCHECKED_LABEL}"                     # detalhe da Revisão visual
+        assert "NAO_PUBLICADO" not in G.source_line(it)                               # nem a constante crua
 
 
 def test_with_a_readable_evidence_an_unpublished_engine_run_still_says_not_published(tmp_path):
@@ -413,3 +418,10 @@ def test_with_a_readable_evidence_an_unpublished_engine_run_still_says_not_publi
     eng = [i for i in g.of(PLANT, ROOM) if i.source == G.ENGINE]
     assert eng and all(i.publication_checked for i in eng)
     assert all(source_text(i) == f"motor: {G.UNPUBLISHED_NOTE}" and G.UNPUBLISHED_NOTE in i.notes for i in eng)
+
+
+def test_the_unchecked_label_is_only_for_engine_runs():
+    for src in (G.PUBLISHED, G.REFERENCE):
+        it = G.GalleryItem(src, PLANT, ROOM, "x", "render")
+        it.publication_checked = False                                                # nunca acontece, mas não vaza
+        assert it.source_label == G.SOURCE_LABEL[src]

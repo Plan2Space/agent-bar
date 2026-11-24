@@ -47,6 +47,7 @@ UNPUBLISHED_NOTE = "não publicado, não validado pelo verify.py"
 UNPUBLISHED_BLOCK = "não publicado: aparece e pode ser comparado, mas não pode ser o melhor render validado (VS-R1a)"
 # Sem evidence legível não dá para saber se o run do motor foi publicado: nunca afirmar "não publicado" nesse caso.
 UNCHECKED_NOTE = "publicação não conferida (evidence indisponível)"
+UNCHECKED_LABEL = "motor, publicação não conferida"        # #105: rótulo da fonte sem o evidence
 UNCHECKED_BLOCK = ("publicação não conferida: o evidence não pôde ser lido; aparece e pode ser comparado, mas não pode "
                    "ser o melhor render validado")
 SKP_UNCHECKED = "skp não conferido"
@@ -158,6 +159,8 @@ class GalleryItem:
 
     @property
     def source_label(self) -> str:
+        if self.source == ENGINE and not self.publication_checked:              # #105: não afirma "não publicado"
+            return UNCHECKED_LABEL
         return SOURCE_LABEL.get(self.source, self.source)
 
     def when(self) -> str:
@@ -325,6 +328,11 @@ def comparison_pair(a: GalleryItem, b: GalleryItem) -> tuple[GalleryImage | None
         return first, other, ""
     return first, other, (f"sem câmera em comum: {b.item_id} não tem {camera_of(first.key)[0]}; "
                           f"comparando câmeras diferentes")
+
+
+def source_line(item: GalleryItem) -> str:
+    """A fonte no detalhe da Revisão visual: só o rótulo honesto (a constante crua MOTOR_NAO_PUBLICADO afirmaria demais)."""
+    return f"fonte {item.source_label}"
 
 
 def caption(item: GalleryItem) -> str:
@@ -596,8 +604,8 @@ def build_gallery(catalog: E.Catalog | None, engine: Path | None = None, library
 
 
 __all__ = ["ENGINE", "IMPORTED", "NO_EVALUATION", "PUBLISHED", "REFERENCE", "SKP_UNCHECKED", "SOURCES",
-           "UNCHECKED_BLOCK", "UNCHECKED_NOTE", "UNPUBLISHED_BLOCK", "UNPUBLISHED_NOTE",
+           "UNCHECKED_BLOCK", "UNCHECKED_LABEL", "UNCHECKED_NOTE", "UNPUBLISHED_BLOCK", "UNPUBLISHED_NOTE",
            "Card", "Gallery", "GalleryImage", "GalleryItem", "build_gallery",
            "CAMERA_PREFERENCE", "LIGHTING_PREFERENCE", "camera_of", "camera_rank", "camera_text",
            "caption", "cards", "comparison_pair", "engine_dir", "file_sha256", "latest_render", "library_dir", "load_engine",
-           "load_references", "primary_image", "publication_note", "reference_item", "trend_text", "visual_text"]
+           "load_references", "primary_image", "publication_note", "reference_item", "source_line", "trend_text", "visual_text"]
