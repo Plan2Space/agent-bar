@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import os
 import sys
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -36,9 +37,34 @@ def test_claude_connected_and_executor_ready_are_two_separate_rows():
     assert rows["Claude conectado"].state == H.OK and "Claude: logado" in rows["Claude conectado"].lines[0]
     ex = rows["Executor pronto"]
     assert ex.state == H.WARN and ex.lines == ["não: nenhuma sessão do Chat aberta"]          # conectado ≠ pronto
-    chat = SimpleNamespace(client=object(), status=SimpleNamespace(text=lambda: "conectado · Claude · sessão s-1"))
-    ex = by_name(H.health_rows(core(snap()), chat=chat))["Executor pronto"]
+    ex = by_name(H.health_rows(core(snap()), chat=chat_with("claude", tools={"Read"})))["Executor pronto"]
     assert ex.state == H.OK and "ferramentas MCP: não conferidas aqui" in ex.lines                # nada afirmado sem prova
+
+
+def chat_with(key, adapter="acp", tools=(), status="conectado · sessão s-1", demo=False):
+    prof = SimpleNamespace(key=key, label={"claude": "Claude Code (ACP)", "ollama": "Ollama (local)"}.get(key, "Agente de teste"),
+                           adapter=adapter, demo=demo)
+    return SimpleNamespace(client=object(), status=SimpleNamespace(text=lambda: status), profile=lambda: prof,
+                           tools_observed=set(tools))
+
+
+@pytest.mark.parametrize("chat", [chat_with("stub"), chat_with("ollama", adapter="ollama"), chat_with("demo", demo=True),
+                                  chat_with("stub", tools={"Read"}), chat_with("claude", demo=True, tools={"Read"})],
+                         ids=["teste", "ollama", "demo", "teste-com-tool", "claude-demo"])
+def test_a_test_agent_or_ollama_is_never_a_ready_executor(chat):
+    """Pedido do Felipe: não confundir conectividade com capacidade de execução. Agente sem ferramentas não é executor."""
+    ex = by_name(H.health_rows(core(snap()), chat=chat))["Executor pronto"]
+    assert ex.state == H.NOT_EXECUTOR and ex.state != H.OK
+    assert "não é executor (sem ferramentas)" in ex.lines[0]
+
+
+def test_claude_acp_is_ready_only_after_the_session_shows_tools_and_mcp_never_counts():
+    ex = by_name(H.health_rows(core(snap()), chat=chat_with("claude")))["Executor pronto"]
+    assert ex.state == H.WARN and any("nenhuma ferramenta" in line for line in ex.lines)       # conectado, sem prova
+    ex = by_name(H.health_rows(core(snap()), chat=chat_with("claude", tools={"Read"}, status="conectando…")))["Executor pronto"]
+    assert ex.state != H.OK                                                                     # sessão não está pronta
+    ok = by_name(H.health_rows(core(snap()), chat=chat_with("claude", tools={"Read", "Bash"})))["Executor pronto"]
+    assert ok.state == H.OK and "ferramentas usadas nesta sessão: 2 (Bash, Read)" in ok.lines
 
 
 def test_each_row_carries_its_observed_state_never_a_default_ok():
@@ -102,6 +128,7 @@ def test_settings_is_a_tab_of_the_main_window_with_health_and_diagnostic(window)
     assert set(QtWidgets.QApplication.topLevelWidgets()) - before == set()           # nenhuma janela nova
     assert row_names(win.settings)[:4] == ["agent-runtime", "P2S Studio", "Claude conectado", "Executor pronto"]
     assert "] Executor pronto" in win.settings.diag_text.toPlainText()
+    assert "[ok] Executor pronto" not in win.settings.diag_text.toPlainText()       # o agente de teste não executa
 
 
 def test_a_5000_character_alert_does_not_grow_the_window(window):
@@ -152,3 +179,32 @@ def test_the_core_hands_itself_to_the_cockpit_it_opens(monkeypatch):
     c = C.AppCore(cfg.Settings(), quit_fn=lambda: None, tray_available=lambda: False)
     c.open_cockpit()
     assert got["core"] is c
+
+
+def test_the_real_chat_records_the_tools_its_session_used_and_a_new_session_starts_empty(tmp_path, monkeypatch):
+    from PySide6.QtCore import QCoreApplication, QEvent
+
+    from agent_bar.cockpit.profiles import AgentProfile
+    from agent_bar.cockpit.store import ChatStore
+    from agent_bar.cockpit.ui.chat_sessions import ChatSessions
+    monkeypatch.setenv("AGENT_BAR_COCKPIT_DATA", str(tmp_path / "data"))
+    (tmp_path / "ws").mkdir()
+    stub = str(Path(__file__).with_name("fake_acp_agent.py"))
+    s = ChatSessions(store=ChatStore(tmp_path / "data"), profiles_fn=lambda: [AgentProfile("stub", "Stub", (sys.executable, stub))],
+                     workspaces_fn=lambda: [tmp_path / "ws"])
+    try:
+        view = s.current()
+        view.send("tools")
+        end = time.monotonic() + 15
+        while time.monotonic() < end and (view.busy or not view.tools_observed):
+            _APP.processEvents()
+            time.sleep(0.01)
+        assert view.tools_observed                                                    # a sessão usou ferramenta
+        ex = H.executor_row(view)
+        assert ex.state == H.NOT_EXECUTOR                                             # ...mas o agente de teste não é executor
+        view.reconnect()
+        assert view.tools_observed == set()                                           # cliente novo: nada herdado
+    finally:
+        s.shutdown()
+        s.deleteLater()
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)

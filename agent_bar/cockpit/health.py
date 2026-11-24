@@ -10,6 +10,8 @@ import platform
 from dataclasses import dataclass, field
 
 OK, WARN, BAD, UNKNOWN = "ok", "atenção", "falha", "desconhecido"
+NOT_EXECUTOR = "não é executor"                    # cinza: conectado, mas o agente não executa ferramentas
+EXECUTOR_KEYS = frozenset({"claude"})              # perfis que executam ferramentas (Claude Code via ACP)
 
 
 @dataclass(frozen=True)
@@ -48,16 +50,34 @@ def claude_rows(snap, chat) -> list[HealthRow]:
     else:
         c = snap.claude
         conn = HealthRow("Claude conectado", _level_state(c.level), [c.line()])
-    client = getattr(chat, "client", None) if chat is not None else None
+    return [conn, executor_row(chat)]
+
+
+def executor_row(chat) -> HealthRow:
+    """OK só quando a sessão é de um agente que executa ferramentas (Claude ACP), está pronta e já mostrou
+    ferramentas nesta sessão. Agente de teste, demonstração ou Ollama: "não é executor". MCP não conferido nunca conta."""
+    name = "Executor pronto"
     if chat is None:
-        ex = HealthRow("Executor pronto", UNKNOWN, ["Cockpit sem Chat"])
-    elif client is None:
-        ex = HealthRow("Executor pronto", WARN, ["não: nenhuma sessão do Chat aberta"])
-    else:
-        status = chat.status.text() if hasattr(chat, "status") else "sessão aberta"
-        ex = HealthRow("Executor pronto", OK if "conectado" in status or "pronto" in status else WARN,
-                       [f"sessão do Chat: {status}", "ferramentas MCP: não conferidas aqui"])
-    return [conn, ex]
+        return HealthRow(name, UNKNOWN, ["Cockpit sem Chat"])
+    if getattr(chat, "client", None) is None:
+        return HealthRow(name, WARN, ["não: nenhuma sessão do Chat aberta"])
+    status = chat.status.text() if hasattr(chat, "status") else "sessão aberta"
+    prof = chat.profile() if callable(getattr(chat, "profile", None)) else None
+    label = getattr(prof, "label", "agente desconhecido")
+    executor = (getattr(prof, "key", "") in EXECUTOR_KEYS and getattr(prof, "adapter", "") == "acp"
+                and not getattr(prof, "demo", False))
+    if not executor:
+        return HealthRow(name, NOT_EXECUTOR, [f"não: {label} não é executor (sem ferramentas)", f"sessão do Chat: {status}"])
+    mcp = "ferramentas MCP: não conferidas aqui"
+    if "conectado" not in status and "pronto" not in status:
+        return HealthRow(name, WARN, [f"não: sessão do Chat {status}", mcp])
+    tools = sorted(str(t) for t in getattr(chat, "tools_observed", ()) or ())
+    if not tools:
+        return HealthRow(name, WARN, [f"sessão do Chat: {status}",
+                                      "nenhuma ferramenta usada nesta sessão ainda (o ACP não lista ferramentas ao abrir)",
+                                      mcp])
+    shown = ", ".join(tools[:6]) + (" …" if len(tools) > 6 else "")
+    return HealthRow(name, OK, [f"sessão do Chat: {status}", f"ferramentas usadas nesta sessão: {len(tools)} ({shown})", mcp])
 
 
 def github_row(snap) -> HealthRow:
@@ -111,5 +131,6 @@ def diagnostic_text(core, rows: list[HealthRow]) -> str:
     return "\n".join(out)
 
 
-__all__ = ["BAD", "OK", "UNKNOWN", "WARN", "HealthRow", "app_row", "claude_rows", "diagnostic_text", "eventstore_row",
+__all__ = ["BAD", "EXECUTOR_KEYS", "NOT_EXECUTOR", "OK", "UNKNOWN", "WARN", "HealthRow", "app_row", "claude_rows",
+           "diagnostic_text", "eventstore_row", "executor_row",
            "github_row", "health_rows", "runtime_row", "sources_row"]

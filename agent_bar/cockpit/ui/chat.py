@@ -171,6 +171,7 @@ class ChatView(QWidget):
         self.pending_prompt: str | None = None
         self.chat: Chat = self.store.new()
         self.cards: dict[str, ToolCard] = {}
+        self.tools_observed: set[str] = set()          # ferramentas que ESTA sessão usou (UX-06: Executor pronto)
         self.plan_card: PlanCard | None = None
         self.text_block: TextBlock | None = None
         self.thought_block: TextBlock | None = None
@@ -413,6 +414,7 @@ class ChatView(QWidget):
             return
         self.gen += 1
         gen = self.gen
+        self.tools_observed = set()                                          # cliente novo: nada observado
         self._set_usage(None)                                                  # cliente novo: nada medido ainda
         self.no_safe_mode = False
         self._populate_config([])                                            # nada do agente anterior fica nos seletores
@@ -785,6 +787,8 @@ class ChatView(QWidget):
         elif u.kind in ("tool_call", "tool_call_update"):
             self.flush()
             tid = str(u.data.get("toolCallId", ""))
+            if u.kind == "tool_call":
+                self.tools_observed.add(str(u.data.get("title") or u.data.get("kind") or "ferramenta")[:60])
             if u.data.get("status") in ("completed", "failed"):             # resultado da execucao no inbox
                 try:
                     self.inbox.finish_tool_call(u.session_id, tid, str(u.data["status"]))
