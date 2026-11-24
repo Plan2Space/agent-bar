@@ -229,8 +229,7 @@ def test_window_review_opens_prefilled_chat_without_sending(gh, tmp_path, monkey
     win = CockpitWindow(gh=gh, repos=[REPO], profiles_fn=lambda: [AgentProfile("stub", "Stub", (sys.executable, str(stub)))],
                         workspaces_fn=lambda: [tmp_path / "other"])
     try:
-        assert [win.tabs.tabText(i) for i in range(win.tabs.count())] == ["Chat", "Permissões", "Notificações", "Fluxos", "Revisão visual", "Biblioteca", "PRs", "Actions", "Dev",
-                                                                       "Configurações"]   # UX-06
+        assert [win.tabs.tabText(i) for i in range(win.tabs.count())] == ["Chat", "Design", "PRs", "Notificações"]  # UX-07
         win.open_review(str(ws), "Revise o PR X#1")
         assert win.tabs.currentWidget() is win.sessions
         assert win.chat.workspace() == str(ws)

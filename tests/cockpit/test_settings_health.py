@@ -119,10 +119,10 @@ def row_names(tab):
 
 def test_settings_is_a_tab_of_the_main_window_with_health_and_diagnostic(window):
     win, c, _ = window
-    tabs = [win.tabs.tabText(i) for i in range(win.tabs.count())]
-    assert tabs[-1] == "Configurações" and win.settings.core is c
+    assert win.settings.core is c                                                   # UX-07: abre pela engrenagem
     before = set(QtWidgets.QApplication.topLevelWidgets())
-    win.tabs.setCurrentWidget(win.settings)
+    win.gear.click()
+    assert win.current_page() is win.settings
     win.settings.sections.setCurrentRow(1)                                          # Diagnóstico
     _APP.processEvents()
     assert set(QtWidgets.QApplication.topLevelWidgets()) - before == set()           # nenhuma janela nova

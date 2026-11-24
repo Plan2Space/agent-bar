@@ -5,11 +5,15 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
     QFrame,
+    QHBoxLayout,
     QLabel,
     QMainWindow,
+    QPushButton,
     QScrollArea,
     QSizePolicy,
+    QStackedWidget,
     QTabWidget,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -103,25 +107,17 @@ class CockpitWindow(QMainWindow):
         wf_kwargs = {k: chat_kwargs[k] for k in ("profiles_fn", "ask_permission") if k in chat_kwargs}
         self.workflows = WorkflowsTab(self.runtime, lambda: self.chat.workspace(), context_fn=self.library.context,
                                       specs_root=specs_root, **wf_kwargs)
-        self.tabs.addTab(self.sessions, "Chat")
-        self.tabs.addTab(self.workflows, "Fluxos")
         self.review = ReviewTab(**{"evaluation_store": EvaluationStore(protected=(evidence_dir(), engine_dir(), library_dir())),
                                    **(review_kwargs or {})})
-        self.tabs.addTab(self.review, "Revisão visual")
         self.review.packages.send_to_chat.connect(self.open_correction)
         self.review.request_chat.connect(self.open_correction)               # S01C-F1-11: comentário da galeria
-        self.tabs.addTab(self.library, "Biblioteca")
         gh = gh or GhClient()
         repos = repos or configured_repos(load_targets().org)
         self.prs = PrsTab(gh, repos=repos)
         self.actions = ActionsTab(gh, repos=repos)
-        self.tabs.addTab(self.prs, "PRs")
-        self.tabs.addTab(self.actions, "Actions")
         self.dev = DevTab(use_workspace=self._use_sandbox, **(dev_kwargs or {}))
-        self.tabs.addTab(self.dev, "Dev")
         self.permissions = PermissionsTab(self.sessions.inbox, answer_fn=self.sessions.answer_permission,
                                           is_open_fn=self.sessions.broker.is_open)  # um inbox e um broker para todas as abas
-        self.tabs.insertTab(1, self.permissions, "Permissões")
         self.center = NotificationCenter(self.sessions.inbox.path)          # F3: mesmo SQLite do Inbox
         # S01C-R3: toda imagem entregue a um agente fica registrada (tabela propria, mesmo SQLite) e aparece nas
         # Notificacoes; so publica aqui (thread-safe), a aba se atualiza pelo proprio timer
@@ -133,17 +129,40 @@ class CockpitWindow(QMainWindow):
         self.notifications = NotificationsTab(self.center, inbox=self.sessions.inbox, answer_fn=self.sessions.answer_permission,
                                               is_open_fn=self.sessions.broker.is_open)
         self.sessions.permission_listeners += [lambda _id: self.permissions.refresh(), lambda _id: self.notifications.refresh()]
-        self.tabs.insertTab(2, self.notifications, "Notificações")
-        self.tabs.setCornerWidget(self.notifications.bell, Qt.Corner.TopRightCorner)
+        # UX-07 (D-UX-2): exatamente 4 áreas principais, nessa ordem
+        for page, title in ((self.sessions, "Chat"), (self.review, "Design"), (self.prs, "PRs"),
+                            (self.notifications, "Notificações")):
+            self.tabs.addTab(page, title)
+        # Configurações → Avançado: o que saiu da navegação principal continua a um clique (VS-I1)
+        self.advanced = ScrollTabs()
+        self.advanced.setStyleSheet(TAB_CSS)
+        for page, title in ((self.workflows, "Fluxos"), (self.dev, "Dev"), (self.permissions, "Permissões"),
+                            (self.library, "Biblioteca"), (self.actions, "Actions")):
+            self.advanced.addTab(page, title)
+        corner = QWidget()                                                     # sino + engrenagem no canto das abas
+        cl = QHBoxLayout(corner)
+        cl.setContentsMargins(0, 0, 6, 0)
+        cl.setSpacing(4)
+        self.gear = QToolButton()
+        self.gear.setText("⚙")
+        self.gear.setToolTip("Configurações: Geral, Saúde do sistema, Diagnóstico e Avançado")
+        self.gear.setAccessibleName("Configurações")
+        self.gear.setStyleSheet("QToolButton{color:#cfcfd4;font-size:16px;border:0;padding:2px 6px}"
+                                "QToolButton:hover{color:#ffffff;background:#2a2a30;border-radius:4px}")
+        cl.addWidget(self.notifications.bell)
+        cl.addWidget(self.gear)
+        self.tabs.setCornerWidget(corner, Qt.Corner.TopRightCorner)
         self.notifications.bell.show()
-        self.notifications.bell.clicked.connect(lambda: self.tabs.setCurrentWidget(self.notifications))
+        self.notifications.bell.clicked.connect(lambda: self.show_page(self.notifications))
+        self.gear.clicked.connect(lambda: self.show_page(self.settings))
         self.notifications.open_link.connect(self.open_link)
         self.sessions.notify_fn = self._notify
-        self.sessions.visible_fn = lambda: self.isActiveWindow() and self.tabs.currentWidget() is self.sessions
+        self.sessions.visible_fn = lambda: self.isActiveWindow() and self.current_page() is self.sessions
         self.workflows.notify_fn = self._notify
         self.workflows.inbox = self.sessions.inbox                           # pedidos dos Fluxos no mesmo Inbox
         self.prs.review_requested.connect(self.open_review)
-        self.tabs.currentChanged.connect(self._tab_changed)
+        self.tabs.currentChanged.connect(lambda _i: self._page_shown(self.current_page()))
+        self.advanced.currentChanged.connect(lambda _i: self._page_shown(self.current_page()))
         # UX-04: abaixo do mínimo de uma aba (a Revisão visual pede ~1064×943 no Windows) a PÁGINA rola em vez de
         # espremer os widgets uns sobre os outros; a barra de abas nunca sai da janela
         body = QWidget()                                                       # UX-02: aviso do runtime acima das abas
@@ -156,7 +175,9 @@ class CockpitWindow(QMainWindow):
         self.runtime_banner.setStyleSheet("QLabel{background:#3a1d1f;color:#ffb4b4;border-bottom:1px solid #6b2a2e;"
                                           "padding:8px 12px;font-size:12px}")
         lay.addWidget(self.runtime_banner)
-        lay.addWidget(self.tabs, 1)
+        self.stack = QStackedWidget()                                          # áreas | Configurações
+        self.stack.addWidget(self.tabs)
+        lay.addWidget(self.stack, 1)
         self.setCentralWidget(body)
         self.set_runtime_pin(runtime_pin)
         # UX-05: barra de estado com a fonte, o commit e a hora da leitura do que a Revisão visual mostra
@@ -169,7 +190,27 @@ class CockpitWindow(QMainWindow):
         # UX-06: Configurações (Saúde do sistema, Diagnóstico) dentro da janela principal; a Central da barra não abre
         self.core = core
         self.settings = SettingsTab(core, chat_fn=lambda: self.chat, review=self.review)   # a sessão aberta AGORA
-        self.tabs.addTab(self.settings, "Configurações")
+        self.settings.add_section("Avançado", self.advanced)
+        self.settings.sections.currentRowChanged.connect(lambda _r: self._page_shown(self.current_page()))
+        page = QWidget()                                                       # Configurações: página da janela
+        pl = QVBoxLayout(page)
+        pl.setContentsMargins(0, 0, 0, 0)
+        pl.setSpacing(0)
+        head = QHBoxLayout()
+        head.setContentsMargins(10, 6, 10, 0)
+        self.settings_back = QPushButton("← Voltar")
+        self.settings_back.setStyleSheet("QPushButton{background:#2a2a30;color:#e6e6e6;border:1px solid #3a3a44;"
+                                         "border-radius:5px;padding:4px 12px}QPushButton:hover{background:#34343c}")
+        title = QLabel("Configurações")
+        title.setStyleSheet("color:#ffffff;font-size:15px;font-weight:600;padding-left:8px")
+        head.addWidget(self.settings_back)
+        head.addWidget(title)
+        head.addStretch(1)
+        pl.addLayout(head)
+        pl.addWidget(self.settings, 1)
+        self.settings_page = page
+        self.stack.addWidget(page)
+        self.settings_back.clicked.connect(lambda: self.stack.setCurrentWidget(self.tabs))
         self.setStyleSheet("QMainWindow{background:#16161a}")
         self._closed = False
         self.close_to_tray = None                                              # o núcleo liga (D-UX-1: fechar = bandeja)
@@ -194,13 +235,36 @@ class CockpitWindow(QMainWindow):
                             link="chat" if category in ("AGENT", "ERROR") else ("workflows" if category == "TASK" else ""))
         self.notifications.refresh()
 
+    def show_page(self, obj) -> None:
+        """Abre o objeto onde ele mora agora (UX-07): uma das 4 áreas, Configurações, ou Configurações → Avançado."""
+        if self.tabs.indexOf(obj) >= 0:
+            self.stack.setCurrentWidget(self.tabs)
+            self.tabs.setCurrentWidget(obj)
+        elif obj is self.settings:
+            self.stack.setCurrentWidget(self.settings_page)
+        elif self.advanced.indexOf(obj) >= 0:
+            self.stack.setCurrentWidget(self.settings_page)
+            self.settings.show_section("Avançado")
+            self.advanced.setCurrentWidget(obj)
+        else:
+            raise ValueError(f"objeto sem destino na navegação: {obj!r}")
+        self._page_shown(self.current_page())
+
+    def current_page(self):
+        """O objeto que o Felipe está vendo: a área atual, Configurações, ou a subpágina de Avançado."""
+        if self.stack.currentWidget() is self.tabs:
+            return self.tabs.currentWidget()
+        if self.settings.pages.currentWidget() is self.advanced:
+            return self.advanced.currentWidget()
+        return self.settings
+
     def open_link(self, link: str) -> None:
         """Leva a origem de uma notificacao: `permissions:<id>`, `chat`, `workflows`."""
         kind, _, ref = link.partition(":")
         target = {"permissions": self.permissions, "chat": self.sessions, "workflows": self.workflows}.get(kind)
         if target is None:
             return
-        self.tabs.setCurrentWidget(target)
+        self.show_page(target)
         if target is self.permissions and ref:
             self.permissions.select(ref)
 
@@ -209,8 +273,12 @@ class CockpitWindow(QMainWindow):
         """A conversa da aba de sessao atual (compatibilidade: o resto da janela fala com "o Chat")."""
         return self.sessions.current()
 
-    def _tab_changed(self, idx: int) -> None:
-        tab = self.tabs.widget(idx)
+    def _page_shown(self, tab) -> None:
+        """Primeira visita carrega (nas 4 áreas e em Avançado). Visita = a página visível MUDOU (o sinal da aba e o
+        `show_page` podem chegar juntos)."""
+        if tab is getattr(self, "_last_page", None):
+            return
+        self._last_page = tab
         if isinstance(tab, (PrsTab, ActionsTab)) and tab.req == 0:            # primeira visita: carrega
             tab.refresh()
         elif tab is self.library:                                            # workspace pode ter mudado no Chat
@@ -224,7 +292,7 @@ class CockpitWindow(QMainWindow):
 
     def open_correction(self, workspace: str, text: str) -> None:
         """F7.4: o pedido de correção vai para o Chat preenchido (no checkout do motor, se existir); o envio é manual."""
-        self.tabs.setCurrentWidget(self.sessions)
+        self.show_page(self.sessions)
         if workspace:
             self.chat.prefill(workspace, text)
         else:
@@ -232,7 +300,7 @@ class CockpitWindow(QMainWindow):
 
     def open_review(self, workspace: str, prompt: str) -> None:
         """Revisao assistida (R21): conversa nova no checkout do repo com o prompt pronto. Enviar e com o Felipe."""
-        self.tabs.setCurrentWidget(self.sessions)
+        self.show_page(self.sessions)
         self.chat.prefill(workspace, prompt)
 
     def shutdown(self) -> None:
