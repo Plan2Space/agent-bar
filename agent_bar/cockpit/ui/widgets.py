@@ -3,8 +3,15 @@ from __future__ import annotations
 
 from html import escape
 
-from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QColor, QTextCursor, QTextDocument, QTextFormat
+from PySide6.QtCore import QSizeF, Qt, QTimer
+from PySide6.QtGui import (
+    QColor,
+    QPyTextObject,
+    QTextCharFormat,
+    QTextCursor,
+    QTextDocument,
+    QTextFormat,
+)
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
@@ -67,6 +74,45 @@ COPY_CSS = ("QToolButton{color:#9a9aa8;border:1px solid transparent;border-radiu
             "QToolButton:hover{color:#e6e6e6;border-color:#3a3a44;background:#2a2a30}")
 
 
+class _InertImageHandler(QPyTextObject):
+    """Substitui o tratador de imagem padrão do layout. O padrão, quando `loadResource` não devolve nada, abre o
+    arquivo ele mesmo (QImage::load — caminho UNC \\\\host vira acesso SMB) e guarda no cache do documento."""
+
+    def intrinsicSize(self, doc, pos, fmt):                                    # noqa: N802 (API do Qt)
+        return QSizeF(0, 0)
+
+    def drawObject(self, painter, rect, doc, pos, fmt):                        # noqa: N802 (API do Qt)
+        return None
+
+
+class InertDocument(QTextDocument):
+    """Documento do Chat: não carrega recurso nenhum, nem pelo `loadResource`, nem pelo tratador de imagem."""
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self._image_handler = _InertImageHandler(self)                         # referência: o layout não é dono
+        self.documentLayoutChanged.connect(self._register_handler)           # o QTextBrowser troca o layout
+        self._register_handler()
+
+    def _register_handler(self) -> None:
+        self.documentLayout().registerHandler(QTextFormat.ObjectTypes.ImageObject, self._image_handler)
+
+    def loadResource(self, kind, url):                                         # noqa: N802 (API do Qt)
+        return None
+
+
+class InertBrowser(QTextBrowser):
+    """QTextBrowser que NUNCA carrega recurso (#101, segurança): nenhum esquema (file:, UNC \\\\host — vazamento de
+    credencial NTLM —, http(s):, qrc:, data:, caminho relativo) e nenhum tipo (imagem, folha de estilo, HTML)."""
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.setDocument(InertDocument(self))
+
+    def loadResource(self, kind, url):                                         # noqa: N802 (API do Qt)
+        return None
+
+
 class MessageBlock(QFrame):
     """Uma mensagem do Chat (UX-10): Markdown seguro num QTextBrowser, selecionável com o mouse, Ctrl+C, menu
     Copiar e botão Copiar que copia o texto EXATO da mensagem (quebras de linha, crases e código preservados)."""
@@ -94,7 +140,7 @@ class MessageBlock(QFrame):
         head.addStretch(1)
         head.addWidget(self.copy_btn)
         lay.addLayout(head)
-        self.view = QTextBrowser()
+        self.view = InertBrowser()                                             # nenhum recurso é carregado (#101)
         self.view.setOpenLinks(False)                                          # link do agente não abre sozinho
         self.view.setOpenExternalLinks(False)
         self.view.setFrameShape(QFrame.Shape.NoFrame)
@@ -131,8 +177,30 @@ class MessageBlock(QFrame):
             doc.setPlainText(self._text)                                       # gigante: texto puro, sem travar
         else:
             doc.setMarkdown(self._text, MARKDOWN_FLAGS)
+            self._inert_images()
             self._style_code_blocks()
         self._fit()
+
+    def _inert_images(self) -> None:
+        """Imagem em Markdown vira o texto "[imagem: alt]" (#101): o documento não guarda nenhuma referência a recurso."""
+        doc = self.view.document()
+        found: list[tuple[int, int, str]] = []
+        block = doc.begin()
+        while block.isValid():
+            it = block.begin()
+            while not it.atEnd():
+                frag = it.fragment()
+                if frag.isValid() and frag.charFormat().isImageFormat():
+                    fmt = frag.charFormat().toImageFormat()
+                    alt = str(fmt.property(QTextFormat.Property.ImageAltText) or "").strip() or "sem descrição"
+                    found.append((frag.position(), frag.length(), alt))
+                it += 1
+            block = block.next()
+        cur = QTextCursor(doc)
+        for pos, length, alt in reversed(found):
+            cur.setPosition(pos)
+            cur.setPosition(pos + length, QTextCursor.MoveMode.KeepAnchor)
+            cur.insertText(f"[imagem: {alt}]", QTextCharFormat())
 
     def _style_code_blocks(self) -> None:
         """Bloco de código com fundo próprio e quebra de linha: sem rolagem horizontal, linha longa não pode sumir."""

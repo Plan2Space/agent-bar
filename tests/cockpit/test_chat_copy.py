@@ -204,3 +204,74 @@ def test_the_view_height_matches_the_text_after_the_window_grows():
         assert abs(b.view.height() - (doc_h + 6)) <= 1, (b.view.height(), doc_h)    # sem vão sobrando
     finally:
         dispose(b)
+
+
+# ----------------------------------------------------------- #101 MUST (segurança): o Chat nunca carrega recurso
+def _image_fragments(b) -> list[str]:
+    from PySide6.QtGui import QTextFormat
+    names, blk = [], b.view.document().begin()
+    while blk.isValid():
+        it = blk.begin()
+        while not it.atEnd():
+            frag = it.fragment()
+            if frag.isValid() and frag.charFormat().isImageFormat():
+                names.append(frag.charFormat().toImageFormat().name())
+            it += 1
+        blk = blk.next()
+    return names
+
+
+@pytest.mark.parametrize("url", ["file:///{png}", r"\\attacker-host\share\a.png", "file://attacker-host/share/a.png",
+                                 "//attacker-host/share/a.png", "{png}", "http://example.invalid/a.png",
+                                 "https://example.invalid/a.png", "qrc:/a.png", "data:image/png;base64,iVBORw0KGgo="])
+def test_markdown_images_never_load_and_become_inert_text(tmp_path, url):
+    r"""`![x](file:...)`, UNC `\\host\share` (vazamento NTLM) e http: nenhum carregamento; a imagem vira texto."""
+    from PySide6.QtGui import QImage, QTextDocument
+    png = tmp_path / "a.png"
+    img = QImage(8, 8, QImage.Format.Format_RGB32)
+    img.fill(0xFF0000)
+    img.save(str(png))
+    url = url.format(png=png.as_posix())
+    asked: list[str] = []
+    b = block(text=f"antes ![x]({url}) depois")
+    try:
+        orig = type(b.view).loadResource
+        b.view.loadResource = lambda kind, u, _o=orig, _v=b.view: (asked.append(u.toString()), _o(_v, kind, u))[1]
+        b.render()
+        b.view.document().adjustSize()
+        _APP.processEvents()
+        assert _image_fragments(b) == []                                            # nada de imagem no documento
+        assert "[imagem: x]" in b.view.toPlainText() and "antes" in b.view.toPlainText()
+        from PySide6.QtCore import QUrl
+        assert not b.view.loadResource(QTextDocument.ResourceType.ImageResource, QUrl(url))   # e nunca carrega
+        assert not b.view.document().resource(QTextDocument.ResourceType.ImageResource, QUrl(url))
+        assert b.full_text() == f"antes ![x]({url}) depois"                          # Copiar segue exato
+    finally:
+        dispose(b)
+
+
+def test_the_chat_browser_refuses_every_resource_scheme():
+    from PySide6.QtCore import QUrl
+    from PySide6.QtGui import QTextDocument
+    b = block(text="oi")
+    try:
+        for u in ("file:///C:/Windows/win.ini", "//host/share/a.png", "http://x/a.png", "a.png", "qrc:/x.png"):
+            for kind in (QTextDocument.ResourceType.ImageResource, QTextDocument.ResourceType.StyleSheetResource,
+                         QTextDocument.ResourceType.HtmlResource):
+                assert not b.view.loadResource(kind, QUrl(u)), (u, kind)
+    finally:
+        dispose(b)
+
+
+def test_even_a_detached_chat_document_never_reads_a_local_image(tmp_path):
+    """O tratador de imagem padrão do Qt abre o arquivo sozinho quando o loadResource não devolve nada."""
+    from PySide6.QtCore import QUrl
+    from PySide6.QtGui import QImage, QTextDocument
+    png = tmp_path / "a.png"
+    img = QImage(8, 8, QImage.Format.Format_RGB32)
+    img.fill(0xFF0000)
+    img.save(str(png))
+    doc = W.InertDocument()
+    doc.setMarkdown(f"a ![x](file:///{png.as_posix()}) b", W.MARKDOWN_FLAGS)
+    doc.adjustSize()
+    assert not doc.resource(QTextDocument.ResourceType.ImageResource, QUrl(f"file:///{png.as_posix()}"))
