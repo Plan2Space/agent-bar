@@ -781,7 +781,7 @@ class ChatView(QWidget):
             return
         mode = self.permission_mode_fn()
         self.permission_label.setText(PM.label(mode))
-        if mode == PM.BYPASS and entry.policy != "IRREVERSIBLE":             # Felipe: bypass sempre, com registro
+        if mode == PM.BYPASS:                                               # Felipe: bypass sempre, com registro
             choice = req.strongest_once() or next((str(o["optionId"]) for o in req.options
                                                    if str(o.get("kind", "")).startswith("allow")), None)
             recorded = False
@@ -793,7 +793,10 @@ class ChatView(QWidget):
                     log.exception("auto-aprovação não gravada no inbox: o pedido vai para o Felipe")
             if recorded:
                 respond(choice)
-                self._add(Notice(f"permissão para “{entry.title}”: aprovada automaticamente (bypass)", "#3ddc84"))
+                what = ("operação IRREVERSÍVEL executada sem confirmação (bypass)" if entry.policy == "IRREVERSIBLE"
+                        else "aprovada automaticamente (bypass)")
+                self._add(Notice(f"permissão para “{entry.title}”: {what}",
+                                 "#ffb347" if entry.policy == "IRREVERSIBLE" else "#3ddc84"))
                 for fn in self.permission_listeners:
                     fn(entry.id)
                 return

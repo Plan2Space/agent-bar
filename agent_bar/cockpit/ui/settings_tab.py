@@ -87,8 +87,8 @@ class SettingsTab(QWidget):
         self.ask_toggle.setChecked(PM.current() == PM.ASK)
         self.ask_toggle.toggled.connect(lambda on: PM.set_mode(PM.ASK if on else PM.BYPASS))
         hint = QLabel("Desligado (padrão, decisão do Felipe): bypass sempre — o Studio aprova sozinho e registra cada "
-                      "aprovação no Inbox e em Notificações. Operação irreversível continua pedindo o código. Vale "
-                      "para sessões novas.")
+                      "aprovação no Inbox e em Notificações, inclusive operação irreversível (marcada como tal). "
+                      "Ligado: volta o pedido a cada ferramenta e o código das irreversíveis. Vale para sessões novas.")
         hint.setWordWrap(True)
         hint.setStyleSheet("color:#8f8f98;font-size:12px")
         gl.addWidget(self.ask_toggle)

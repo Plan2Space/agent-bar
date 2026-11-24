@@ -87,8 +87,9 @@ def permissions_row() -> HealthRow:
     from agent_bar.cockpit import permission_mode as PM
     mode = PM.current()
     return HealthRow("Permissões dos agentes", OK, [PM.label(mode), "cada aprovação automática fica registrada (Inbox, "
-                                                   "Notificações); operação irreversível continua pedindo o código"
-                                                   if mode == PM.BYPASS else "cada ferramenta pede confirmação"])
+                                                   "Notificações), inclusive irreversível, marcada como tal"
+                                                   if mode == PM.BYPASS else "cada ferramenta pede confirmação; "
+                                                   "irreversível pede o código"])
 
 
 def github_row(snap) -> HealthRow:

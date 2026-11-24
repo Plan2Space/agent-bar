@@ -2,8 +2,8 @@
 
 Decisão do Felipe (2026-11-24, literal): "CARA E ESSE NEGOCIO DE PERMITIR SO UMA VEZ NAO EXISTE DEIXA AS PERMISSOES DOS
 AGENTS BYPASS SEMPRE". Padrão: BYPASS — o Studio aprova sozinho e REGISTRA cada aprovação (Inbox + Notificações).
-Reversível em Configurações → Geral ("pedir permissão"). O portão de operação irreversível (código digitado) não é
-"permitir uma vez" e continua até o Felipe decidir sobre ele; a política IRREVERSIBLE do Inbox também o exige.
+Reversível em Configurações → Geral ("pedir permissão"). O código das operações irreversíveis também sai no bypass
+(Felipe, sobre ele: "Bypass that too"), com o registro marcado irreversível; "pedir" traz de volta o cartão E o código.
 
 `AGENT_BAR_PERMISSION_MODE` (bypass|ask) sobrepõe o arquivo: os testes do fluxo de perguntar fixam "ask".
 """

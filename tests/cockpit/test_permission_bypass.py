@@ -86,15 +86,50 @@ def test_a_permission_request_is_allowed_without_card_or_dialog_and_recorded(vie
     assert any("aprovada automaticamente (bypass)" in n.text() for n in v.transcript.findChildren(W.Notice))
 
 
-def test_an_irreversible_request_still_asks_for_the_code_until_felipe_decides(view):
+def test_in_bypass_an_irreversible_command_runs_without_the_code_and_is_recorded_as_irreversible(view):
+    """Felipe, sobre o código do irreversível: "Bypass that too"."""
     v, _asked, _ = view
     v.send("permrm")
-    assert wait(lambda: v.transcript.findChildren(W.PermissionCard) or not v.busy)
-    entries = v.inbox.history()
-    assert entries and entries[0].status == "PENDING"                            # não aprovado sozinho
-    assert not any("selected:allow" in t for t in agent_texts(v))                # o agente não recebeu allow
+    assert wait(lambda: not v.busy and agent_texts(v))
+    assert agent_texts(v) == ["outcome=selected:allow"]
+    assert v.transcript.findChildren(W.PermissionCard) == []
+    e = v.inbox.history()[0]
+    assert (e.policy, e.status, e.decided_by) == ("IRREVERSIBLE", "ALLOWED", "bypass")
+    assert any("IRREVERSÍVEL executada sem confirmação" in n.text() for n in v.transcript.findChildren(W.Notice))
+    from agent_bar.cockpit.notifications import NotificationCenter
+    center = NotificationCenter(":memory:")
+    try:
+        center.sync_permissions(v.inbox)
+        titles = [n.title for n in center.list()]
+        assert any(t.startswith("Irreversível executado sem confirmação") for t in titles), titles
+    finally:
+        center.close()
+
+
+def test_ask_mode_brings_back_the_irreversible_code(view, monkeypatch):
+    v, _asked, _ = view
+    monkeypatch.setenv(PM.ENV, PM.ASK)
+    v.send("permrm")
+    assert wait(lambda: bool(v.transcript.findChildren(W.PermissionCard)))
+    e = v.inbox.history()[0]
+    assert (e.policy, e.status) == ("IRREVERSIBLE", "PENDING")
+    assert not any("selected:allow" in t for t in agent_texts(v))
     v.stop()
     wait(lambda: not v.busy)
+
+
+def test_only_human_or_the_bypass_may_allow_an_irreversible_request(tmp_path):
+    from agent_bar.cockpit.permission_inbox import PermissionInbox
+    inbox = PermissionInbox(tmp_path / "p.sqlite")
+    try:
+        tc = {"toolCallId": "t1", "title": "Run rm", "kind": "execute", "rawInput": {"command": "rm -rf build"}}
+        e = inbox.record(tc, provider="stub", session_id="s", workspace=str(tmp_path))
+        assert e.policy == "IRREVERSIBLE"
+        with pytest.raises(PermissionError):
+            inbox.decide(e.id, "allow_once", by="policy")                          # nenhuma outra automação
+        assert inbox.decide(e.id, "allow_once", by="bypass").status == "ALLOWED"
+    finally:
+        inbox.close()
 
 
 def test_a_new_acp_session_opens_in_bypass_without_the_risky_mode_dialog(view):
