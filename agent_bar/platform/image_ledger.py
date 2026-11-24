@@ -37,7 +37,7 @@ from agent_bar.platform.adapter import AdapterError, ImagePayload, ProviderAdapt
 
 log = logging.getLogger("agent_bar.platform.image_ledger")
 
-PURPOSES = ("REFERENCE", "EVALUATION", "CORRECTION_PACKAGE", "CHAT")
+PURPOSES = ("REFERENCE", "EVALUATION", "CORRECTION_PACKAGE", "CHAT", "CALIBRATION")  # CALIBRATION: medir tokens por imagem
 STATUSES = ("RECORDED", "SENT", "NOT_SENT")
 SCHEMA_VERSION = 1
 

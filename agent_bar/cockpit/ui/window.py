@@ -3,10 +3,21 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QGuiApplication
-from PySide6.QtWidgets import QFrame, QMainWindow, QScrollArea, QTabWidget
+from PySide6.QtWidgets import (
+    QFrame,
+    QLabel,
+    QMainWindow,
+    QScrollArea,
+    QTabWidget,
+    QVBoxLayout,
+    QWidget,
+)
 
 from agent_bar.cockpit import window_state as WS
 from agent_bar.cockpit.acp import AsyncRuntime
+from agent_bar.cockpit.evaluations import EvaluationStore
+from agent_bar.cockpit.evidence import evidence_dir
+from agent_bar.cockpit.gallery import engine_dir, library_dir
 from agent_bar.cockpit.github import GhClient, configured_repos
 from agent_bar.cockpit.notifications import NotificationCenter, image_notification
 from agent_bar.cockpit.run_vision import RunVision
@@ -72,7 +83,7 @@ class ScrollTabs(QTabWidget):
 
 class CockpitWindow(QMainWindow):
     def __init__(self, gh: GhClient | None = None, repos: list[str] | None = None, discover_fn=None, specs_root=None,
-                 dev_kwargs: dict | None = None, review_kwargs: dict | None = None,
+                 dev_kwargs: dict | None = None, review_kwargs: dict | None = None, runtime_pin=None,
                  window_store: WS.WindowStateStore | None = None, **chat_kwargs) -> None:
         super().__init__()
         self.setWindowTitle("P2S Studio — Cockpit")
@@ -92,7 +103,8 @@ class CockpitWindow(QMainWindow):
                                       specs_root=specs_root, **wf_kwargs)
         self.tabs.addTab(self.sessions, "Chat")
         self.tabs.addTab(self.workflows, "Fluxos")
-        self.review = ReviewTab(**(review_kwargs or {}))
+        self.review = ReviewTab(**{"evaluation_store": EvaluationStore(protected=(evidence_dir(), engine_dir(), library_dir())),
+                                   **(review_kwargs or {})})
         self.tabs.addTab(self.review, "Revisão visual")
         self.review.packages.send_to_chat.connect(self.open_correction)
         self.review.request_chat.connect(self.open_correction)               # S01C-F1-11: comentário da galeria
@@ -132,9 +144,28 @@ class CockpitWindow(QMainWindow):
         self.tabs.currentChanged.connect(self._tab_changed)
         # UX-04: abaixo do mínimo de uma aba (a Revisão visual pede ~1064×943 no Windows) a PÁGINA rola em vez de
         # espremer os widgets uns sobre os outros; a barra de abas nunca sai da janela
-        self.setCentralWidget(self.tabs)
+        body = QWidget()                                                       # UX-02: aviso do runtime acima das abas
+        lay = QVBoxLayout(body)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(0)
+        self.runtime_banner = QLabel("")
+        self.runtime_banner.setWordWrap(True)
+        self.runtime_banner.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.runtime_banner.setStyleSheet("QLabel{background:#3a1d1f;color:#ffb4b4;border-bottom:1px solid #6b2a2e;"
+                                          "padding:8px 12px;font-size:12px}")
+        lay.addWidget(self.runtime_banner)
+        lay.addWidget(self.tabs, 1)
+        self.setCentralWidget(body)
+        self.set_runtime_pin(runtime_pin)
         self.setStyleSheet("QMainWindow{background:#16161a}")
         self._closed = False
+
+    def set_runtime_pin(self, st) -> None:
+        """Divergência comprovada do agent-runtime (instalado x pyproject x uv.lock): faixa vermelha na janela principal,
+        selecionável, com os SHAs e o comando. "Não deu para saber" não vira alarme (fica no log e em Notificações não)."""
+        bad = st is not None and st.ok is False
+        self.runtime_banner.setText(f"Runtime divergente: {st.message}" if bad else "")
+        self.runtime_banner.setVisible(bad)
 
     def _notify(self, category: str, title: str, body: str = "", session_id: str = "", dedupe_key: str | None = None,
                 state: str = "NEW") -> None:
