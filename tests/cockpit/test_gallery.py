@@ -396,3 +396,57 @@ def test_comparison_with_the_reference_never_claims_a_camera_pair():
     ref = _run("ref@v1", "r2", source=G.REFERENCE)
     a, b, note = G.comparison_pair(_run("rc5", "render_entardecer_close_banco", "render_entardecer_r2_canto"), ref)
     assert (a.key, b.key, note) == ("render_entardecer_r2_canto", "r2", "")
+
+
+# ------------------------------------------------ evidence ilegível: publicação não conferida, nunca "não publicado"
+def test_without_a_readable_evidence_an_engine_run_never_claims_it_was_not_published(tmp_path):
+    from agent_bar.cockpit.ui.design_view import source_text
+    _ev, engine, dl = build_all(tmp_path)
+    g = G.build_gallery(None, engine, dl, rooms=[(PLANT, ROOM)])                   # o evidence não pôde ser lido
+    eng = [i for i in g.of(PLANT, ROOM) if i.source == G.ENGINE]
+    assert eng
+    for it in eng:
+        assert not it.publication_checked
+        assert G.UNPUBLISHED_NOTE not in it.notes and G.UNCHECKED_NOTE in it.notes
+        why = it.eligibility(["avaliação"])
+        assert G.UNPUBLISHED_BLOCK not in why and not it.eligible(["avaliação"])    # continua fora do "melhor"
+        if it.kind == "render":
+            assert G.UNCHECKED_BLOCK in why
+        assert source_text(it) == f"motor: {G.UNCHECKED_NOTE}"
+        # #105 MUST: o rótulo da fonte (legendas, tabela, detalhe) também não afirma "não publicado"
+        assert it.source_label == G.UNCHECKED_LABEL == "motor, publicação não conferida"
+        assert G.UNCHECKED_LABEL in G.caption(it) and "não publicado" not in G.caption(it)
+        assert G.source_line(it) == f"fonte {G.UNCHECKED_LABEL}"                     # detalhe da Revisão visual
+        assert "NAO_PUBLICADO" not in G.source_line(it)                               # nem a constante crua
+
+
+def test_with_a_readable_evidence_an_unpublished_engine_run_still_says_not_published(tmp_path):
+    from agent_bar.cockpit.ui.design_view import source_text
+    g = gallery(tmp_path)
+    eng = [i for i in g.of(PLANT, ROOM) if i.source == G.ENGINE]
+    assert eng and all(i.publication_checked for i in eng)
+    assert all(source_text(i) == f"motor: {G.UNPUBLISHED_NOTE}" and G.UNPUBLISHED_NOTE in i.notes for i in eng)
+
+
+def test_the_unchecked_label_is_only_for_engine_runs():
+    for src in (G.PUBLISHED, G.REFERENCE):
+        it = G.GalleryItem(src, PLANT, ROOM, "x", "render")
+        it.publication_checked = False                                                # nunca acontece, mas não vaza
+        assert it.source_label == G.SOURCE_LABEL[src]
+
+
+# ---------------------------------------------- #105 MUST (re-revisão): legenda da comparação e contagem da galeria
+def test_compare_label_of_an_unchecked_engine_run_never_says_not_published():
+    from agent_bar.cockpit.ui.design_view import compare_label
+    a, b = _run("a", "r2_canto", source=G.ENGINE), _run("b", "r2_canto", source=G.ENGINE)
+    a.publication_checked = False
+    text = compare_label(a, b, a.images[0], b.images[0])
+    assert "não publicado" not in text and G.UNCHECKED_NOTE in text
+    b2 = _run("c", "r2_canto", source=G.ENGINE)                                    # conferido e não publicado
+    assert "run não publicado" in compare_label(b2, _run("d", "r2_canto", source=G.ENGINE), b2.images[0], b2.images[0])
+
+
+def test_the_gallery_counts_use_the_honest_engine_label():
+    items = [_run("a", "r2_canto", source=G.ENGINE), _run("b", "r2_canto", source=G.ENGINE), _run("p", "r2_canto")]
+    assert G.counts_text(items, publication_checked=False) == "publicado: 1 · motor, publicação não conferida: 2"
+    assert G.counts_text(items, publication_checked=True) == "publicado: 1 · motor, não publicado: 2"

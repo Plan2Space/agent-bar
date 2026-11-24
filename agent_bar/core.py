@@ -19,7 +19,8 @@ from collections.abc import Callable
 from pathlib import Path
 
 from PySide6.QtCore import QObject, Signal
-from PySide6.QtWidgets import QApplication, QSystemTrayIcon
+from PySide6.QtGui import QAction
+from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
 from agent_bar import collectors as col
 from agent_bar import controls as ctl
@@ -103,6 +104,8 @@ class AppCore(QObject):
         self.quit_fn = quit_fn or QApplication.quit
         self.cockpit_factory = cockpit_factory
         self.cockpit = None
+        self.bar_factory: Callable[[], object] | None = None                   # D-UX-1: a barra é opcional (o app injeta)
+        self.bar = None
         self.snap = None
         self.inbox: Inbox | None = None
         self._notice_url: str | None = None
@@ -112,7 +115,12 @@ class AppCore(QObject):
             self.tray.setIcon(QIcon(str(ICON)) if ICON.is_file() else QApplication.windowIcon())
             self.tray.setToolTip("P2S Studio")
             self.tray.messageClicked.connect(self._open_notice)
+            self.tray.activated.connect(lambda reason: self.open_cockpit()      # clique no ícone: o Cockpit volta
+                                        if reason == QSystemTrayIcon.ActivationReason.Trigger else None)
             self.tray.show()
+        self.tray_menu = self._build_tray_menu()                               # referência guardada: o Qt não é dono
+        if self.tray is not None:
+            self.tray.setContextMenu(self.tray_menu)
         self.notifier = InboxNotifier(show=self.notify_human, enabled=lambda: self.settings.notify_human)
         from agent_bar import runtime_pin
         self.runtime_pin = runtime_pin.check()
@@ -186,6 +194,38 @@ class AppCore(QObject):
             ctl.open_url(self._notice_url)
 
     # ------------------------------------------------------------------------------------------------ janelas
+    def _build_tray_menu(self) -> QMenu:
+        """Menu da bandeja (D-UX-1): o caminho de volta para o Cockpit fechado, a barra opcional e o único "Sair"."""
+        m = QMenu()
+        m.addAction("Abrir P2S Studio", self.open_cockpit)
+        self.bar_action = QAction("Barra flutuante (opcional)", m, checkable=True, checked=self.settings.bar_enabled)
+        self.bar_action.toggled.connect(self.set_bar_enabled)
+        m.addAction(self.bar_action)
+        m.addSeparator()
+        m.addAction("Sair do P2S Studio", self.shutdown)
+        return m
+
+    def set_bar_enabled(self, on: bool) -> None:
+        """Liga/desliga a barra flutuante e guarda a escolha. Desligar não para nada: coleta, bandeja e Cockpit seguem."""
+        on = bool(on)
+        self.settings.bar_enabled = on
+        try:
+            cfg.save(self.settings)
+        except OSError:                                                        # preferência não salva nunca derruba a UI
+            traceback.print_exc()
+        if self.bar_action.isChecked() != on:
+            self.bar_action.setChecked(on)
+        if on and self.bar is None and self.bar_factory is not None:
+            self.bar = self.bar_factory()
+        if self.bar is not None:
+            self.bar.setVisible(on)
+            if not on:
+                self.bar.details.hide()
+
+    def _close_to_tray(self) -> bool:
+        """D-UX-1: fechar o Cockpit manda para a bandeja. Sem bandeja não haveria caminho de volta: aí fechar encerra."""
+        return self.tray is not None and not self._closed
+
     def open_cockpit(self):
         """Abre (ou traz para a frente) o Cockpit: janela própria, mesmo processo (SPEC AGENT-BAR-COCKPIT-ACP, D2)."""
         win = self.cockpit
@@ -195,6 +235,8 @@ class AppCore(QObject):
             else:
                 from agent_bar.cockpit.ui.window import CockpitWindow
                 win = CockpitWindow(core=self, runtime_pin=self.runtime_pin)
+            win.close_to_tray = self._close_to_tray
+            win.quit_app = self.shutdown                                       # sem bandeja, fechar encerra o app inteiro
             self.cockpit = win
         win.show()
         win.raise_()
@@ -210,6 +252,11 @@ class AppCore(QObject):
         self._closed = True
         if self.cockpit is not None:                                           # encerra so os agentes ACP que o cockpit iniciou
             self.cockpit.shutdown()
+            if hasattr(self.cockpit, "hide"):                                  # nada fica na tela depois do "Sair"
+                self.cockpit.hide()
+        if self.bar is not None:
+            self.bar.details.hide()
+            self.bar.hide()
         self.worker.stop()
         if self.tray is not None:
             self.tray.hide()

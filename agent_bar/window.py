@@ -631,7 +631,24 @@ class Bar(QWidget):
         self.move(self._clamped(self.pos()))
         self._sync_details()
 
+    def _covered_by_cockpit(self) -> bool:
+        win = self.core.cockpit
+        return (win is not None and win.isVisible() and win.isActiveWindow()
+                and win.frameGeometry().intersects(self.frameGeometry()))
+
     def _keep_on_top(self) -> None:
+        """UX-03: com a barra ligada, ela não fica por cima do Cockpit aberto. Enquanto o Cockpit é a janela ativa e
+        ocupa o lugar dela, a barra se recolhe; volta sozinha quando o Felipe vai para outra janela."""
+        if self._covered_by_cockpit():
+            if self.isVisible():
+                self._yielded_to_cockpit = True
+                self.details.hide()
+                self.hide()
+            return
+        if getattr(self, "_yielded_to_cockpit", False):
+            self._yielded_to_cockpit = False
+            if self.settings.bar_enabled:
+                self.show()
         raise_topmost(int(self.winId()))
         if self.details.isVisible():
             raise_topmost(int(self.details.winId()))
@@ -675,7 +692,8 @@ class Bar(QWidget):
         m.addAction(h)
         m.addAction("Minimizar para icone", self.toggle_minimized)
         m.addSeparator()
-        m.addAction("Encerrar barra (fecha a barra inteira)", self.close_app)
+        m.addAction("Ocultar barra (o Cockpit e a coleta continuam)", lambda: self.core.set_bar_enabled(False))
+        m.addAction("Sair do P2S Studio (encerra tudo)", self.close_app)
         m.exec(e.globalPos())
 
     # ---------------------------------------------------------------------------------------------------- painel/estado
