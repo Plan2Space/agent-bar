@@ -22,7 +22,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--once-json", action="store_true", help="imprime o diagnostico da coleta e sai (sem GUI)")
     ap.add_argument("--screenshot", help="grava um PNG da barra (e do painel expandido) apos a 1a coleta e sai")
     ap.add_argument("--open-panel", action="store_true", help="abre o painel expandido ao iniciar (evidencia/teste)")
-    ap.add_argument("--cockpit", action="store_true", help="abre o cockpit ACP ao iniciar")
+    ap.add_argument("--cockpit", action="store_true", help="(compatibilidade) o Cockpit ja e a janela principal")
     ap.add_argument("--full", action="store_true", help="com --screenshot: grava tambem a Central completa (ARQ_full.png)")
     ns = ap.parse_args(argv)
     from agent_bar import startup
@@ -75,16 +75,17 @@ def _run_gui(ns: argparse.Namespace, log: logging.Logger) -> int:
                 return 0
         app.aboutToQuit.connect(instance.release)
     core = build_core(cfg.load())
-    bar = Bar(core.settings, core=core)
+    core.bar_factory = lambda: Bar(core.settings, core=core)
+    if ns.screenshot or ns.open_panel:                                         # evidência da própria barra
+        core.bar = core.bar_factory()
+    core.start()
+    bar = start_main(core, screenshot=bool(ns.screenshot))
     if instance is not None:
         holder["bar"], holder["core"] = bar, core                               # a instância única fala com o núcleo
-    core.start()
-    bar.show()
-    log.info("barra visivel em %s,%s (%sx%s)", bar.x(), bar.y(), bar.width(), bar.height())
-    if ns.open_panel:
+    log.info("janela principal: Cockpit; barra flutuante %s", "visivel" if bar is not None and bar.isVisible() else "desligada")
+    if ns.open_panel and bar is not None:                                      # evidência do painel: a barra aparece
+        bar.show()
         QTimer.singleShot(4000, bar.toggle_details)
-    if ns.cockpit:
-        QTimer.singleShot(1500, bar.action_cockpit)
     if ns.screenshot:
         def shot() -> None:
             bar.details.show()
@@ -103,6 +104,20 @@ def _run_gui(ns: argparse.Namespace, log: logging.Logger) -> int:
         delay = os.environ.get("AGENT_BAR_SCREENSHOT_DELAY_S", "7")                # coletas em fundo (aprovacoes) podem pedir mais tempo
         QTimer.singleShot(int(float(delay) * 1000) if delay.replace(".", "", 1).isdigit() else 7000, shot)
     return app.exec()
+
+
+def start_main(core, screenshot: bool = False):
+    """UX-03 (D-UX-1): o atalho abre o Cockpit, que é a janela principal. A barra flutuante só aparece se estiver ligada
+    (bandeja > Barra flutuante) ou para a captura de evidência dela; a Central legada nunca abre sozinha. Devolve a barra
+    (ou None)."""
+    if core.settings.bar_enabled and core.bar is None and core.bar_factory is not None:
+        core.bar = core.bar_factory()
+    bar = core.bar
+    if bar is not None and (core.settings.bar_enabled or screenshot):
+        bar.show()
+    if not screenshot:
+        core.open_cockpit()
+    return bar
 
 
 def build_core(settings):
@@ -161,19 +176,14 @@ def _quit_for_update(bar, log: logging.Logger, core=None) -> None:
 
 
 def _bring_forward(bar, log: logging.Logger, core=None) -> None:
-    """Segunda abertura: a barra existente aparece (sai de minimizada/escondida) e o painel abre. Sem barra, o Cockpit
-    do nucleo vem para a frente. Nada e iniciado ou parado."""
-    if bar is None:
-        if core is not None:
-            log.info("segunda abertura sem barra: trazendo o Cockpit para a frente")
-            core.open_cockpit()
-        return
-    log.info("segunda abertura: trazendo a barra existente para a frente")
-    bar.show()
-    bar.raise_()
-    bar.activateWindow()
-    if not bar.details.isVisible():
-        bar.toggle_details()
+    """Segunda abertura (UX-03): o Cockpit existente vem para a frente (sai da bandeja), e a barra só se estiver ligada.
+    A Central legada nunca abre. Nada e iniciado ou parado."""
+    if core is not None:
+        log.info("segunda abertura: trazendo o Cockpit existente para a frente")
+        core.open_cockpit()
+    if bar is not None and (core is None or core.settings.bar_enabled):
+        bar.show()
+        bar.raise_()
 
 
 if __name__ == "__main__":
