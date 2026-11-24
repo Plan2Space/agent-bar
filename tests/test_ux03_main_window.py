@@ -165,3 +165,22 @@ def test_the_tray_menu_survives_garbage_collection(studio):
 def _bar(core):
     from agent_bar.window import Bar
     return Bar(core.settings, core=core)
+
+
+def test_when_the_old_version_does_not_close_the_message_points_to_sair_not_to_the_bar(monkeypatch):
+    """§2.4: com a barra desligada por padrão, "Feche-a pelo menu da barra" não leva a lugar nenhum."""
+    import time as T
+    from types import SimpleNamespace
+
+    from PySide6.QtWidgets import QMessageBox
+    seen: list = []
+    monkeypatch.setattr(QMessageBox, "question", staticmethod(lambda *a, **k: QMessageBox.StandardButton.Yes))
+    monkeypatch.setattr(QMessageBox, "warning", staticmethod(lambda _p, _t, text, *a, **k: seen.append(text)))
+    clock = iter(range(0, 10_000, 5))
+    monkeypatch.setattr(T, "monotonic", lambda: next(clock))
+    monkeypatch.setattr(T, "sleep", lambda _s: None)
+    inst = SimpleNamespace(running_info=lambda: {"version": "a" * 40}, newer_available=lambda: True, version="b" * 40,
+                           send=lambda _m: None, acquire=lambda **_k: False)
+    ok = A._replace_older_instance(SimpleNamespace(processEvents=lambda: None), inst, None, None,  # noqa: SLF001
+                                   logging.getLogger("t"))
+    assert ok is False and seen and "Sair do P2S Studio" in seen[0] and "menu da barra" not in seen[0]

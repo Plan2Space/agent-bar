@@ -157,7 +157,7 @@ def _replace_older_instance(app, instance, activate, quit_for_update, log: loggi
         if instance.acquire(on_activate=activate, on_quit=quit_for_update, notify=False):
             return True
         time.sleep(0.25)
-    QMessageBox.warning(None, "P2S Studio", "A versão antiga não fechou em 20 s. Feche-a pelo menu da barra e abra de novo.")
+    QMessageBox.warning(None, "P2S Studio", "A versão antiga não fechou em 20 s. Use “Sair do P2S Studio” (ícone da bandeja) nela e abra de novo.")
     log.info("a instancia antiga nao fechou em 20 s; esta abertura sai")
     return False
 
