@@ -95,6 +95,7 @@ class OllamaAdapter(ProviderAdapter):
         self._sessions: dict[str, dict] = {}
         self._history: dict[str, list[dict]] = {}
         self._num_ctx: dict[str, int] = {}                                    # sid -> options.num_ctx pedido
+        self._digests: dict[str, str] = {}                                    # model_id -> digest do /api/tags
         self._running: dict[str, dict] = {}                                   # sid -> {"resp": ..., "cancel": Event}
         self._ids = itertools.count(1)
         self._lock = threading.Lock()
@@ -156,10 +157,13 @@ class OllamaAdapter(ProviderAdapter):
             raise ProviderUnavailable(f"servidor local nao respondeu em {self.endpoint}") from exc
         self.version = str(data.get("version") or "") or None
         models: dict[str, dict] = {}
+        digests: dict[str, str] = {}
         for m in tags.get("models") or []:
             name = str(m.get("name") or m.get("model") or "")
             if not name:
                 continue
+            if m.get("digest"):
+                digests[name] = str(m["digest"])                            # GET /api/tags: digest do blob instalado
             try:
                 show = self._post("/api/show", {"model": name})
             except (urllib.error.URLError, OSError, ValueError):
@@ -178,6 +182,7 @@ class OllamaAdapter(ProviderAdapter):
                 "source": "GET /api/tags + POST /api/show",
             }
         self._models = models
+        self._digests = {k: v for k, v in digests.items() if k in models}
         self._verified_at = datetime.now(UTC).isoformat(timespec="seconds")
         self._connected = True
 
@@ -215,6 +220,13 @@ class OllamaAdapter(ProviderAdapter):
 
     def _default_model(self) -> str | None:
         return next(iter(self._models), None)
+
+    def model_digest(self, model_id: str) -> str:
+        self._need()
+        d = self._digests.get(model_id)
+        if not d:
+            raise CapabilityUnsupported("model_digest", f"{model_id}: /api/tags sem digest")
+        return d
 
     # ------------------------------------------------------------------------------------------------ sessoes
     def create_session(self, request: SessionRequest) -> dict:

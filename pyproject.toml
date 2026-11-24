@@ -25,8 +25,9 @@ testpaths = ["tests"]
 pythonpath = ["."]
 # agente/provedor REAL custa tokens e depende da maquina: so roda com `-m real_agent` explicito (o -m da linha de
 # comando substitui este), nunca no CI de PR
-addopts = "-m 'not real_agent'"
-markers = ["real_agent: usa provedor real (Claude, Codex, Ollama); opt-in com -m real_agent"]
+addopts = "-m 'not real_agent and not local_env'"
+markers = ["real_agent: usa provedor real (Claude, Codex, Ollama); opt-in com -m real_agent",
+           "local_env: confere o ambiente desta maquina (o .venv do atalho); opt-in com -m local_env, fora do CI"]
 
 [tool.ruff]
 line-length = 100
