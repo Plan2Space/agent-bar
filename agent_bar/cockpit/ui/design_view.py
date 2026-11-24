@@ -70,7 +70,7 @@ def tech_text(item: G.GalleryItem) -> str:
 def source_text(item: G.GalleryItem) -> str:
     """Fonte do item; run do motor leva sempre o texto do VS-R1a."""
     if item.source == G.ENGINE:
-        return f"motor: {G.UNPUBLISHED_NOTE}"
+        return f"motor: {G.publication_note(item)}"
     if item.source == G.REFERENCE:
         return f"referência: {item.provenance_text()}"
     return item.source_label
@@ -93,8 +93,13 @@ def compare_label(a: G.GalleryItem, b: G.GalleryItem, img_a: G.GalleryImage, img
     if (a.source, b.source) == (G.PUBLISHED, G.PUBLISHED) and a.camera_file and a.camera_file == b.camera_file \
             and img_a.key == img_b.key:
         return f"mesma câmera {img_a.key} no mesmo arquivo de câmeras ({a.camera_file})"
-    why = ("run não publicado: câmera não conferida pelo verify.py (VS-R1a)" if G.ENGINE in (a.source, b.source)
-           else "arquivo de câmeras ou quadro diferente")
+    engine = [i for i in (a, b) if i.source == G.ENGINE]
+    if any(not i.publication_checked for i in engine):                          # #105: sem o evidence não dá para saber
+        why = f"{G.UNCHECKED_NOTE}: câmera não conferida pelo verify.py (VS-R1a)"
+    elif engine:
+        why = "run não publicado: câmera não conferida pelo verify.py (VS-R1a)"
+    else:
+        why = "arquivo de câmeras ou quadro diferente"
     same = f"mesmo nome de quadro {img_a.key}" if img_a.key == img_b.key else f"quadros {img_a.key} × {img_b.key}"
     return f"lado a lado, {same}; não é par de câmera conferido ({why})"
 

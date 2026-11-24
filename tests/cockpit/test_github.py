@@ -157,7 +157,7 @@ def test_prs_tab_lists_details_and_requests_review(gh, tmp_path):
     try:
         tab.refresh()
         assert wait(lambda: tab.tree.topLevelItemCount() == 2)
-        assert tab.tree.topLevelItem(1).text(1).startswith("[rascunho]")
+        assert tab.tree.topLevelItem(1).text(2).startswith("[rascunho]")
         tab.tree.setCurrentItem(tab.tree.topLevelItem(0))
         assert wait(lambda: tab.review_btn.isEnabled())
         assert "a" * 40 in tab.detail.toPlainText() and "parece bom" in tab.detail.toPlainText()

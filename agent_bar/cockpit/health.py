@@ -68,6 +68,11 @@ def executor_row(chat) -> HealthRow:
     label = getattr(prof, "label", "agente desconhecido")
     executor = (getattr(prof, "key", "") in EXECUTOR_KEYS and getattr(prof, "adapter", "") == "acp"
                 and not getattr(prof, "demo", False))
+    if getattr(prof, "adapter", "") == "ollama-executor":                  # P2S-LOCAL-EXECUTOR: uma ferramenta só
+        used = sorted(str(t) for t in getattr(chat, "tools_observed", ()) or ())
+        return HealthRow(name, NOT_EXECUTOR, [f"não: {label} executa só build_room_sample (amostra no SketchUp), "
+                                              "não é o Executor Claude", f"sessão do Chat: {status}",
+                                              f"ferramenta usada nesta sessão: {len(used)}"])
     if not executor:
         return HealthRow(name, NOT_EXECUTOR, [f"não: {label} não é executor (sem ferramentas)", f"sessão do Chat: {status}"])
     mcp = "ferramentas MCP: não conferidas aqui"
@@ -80,6 +85,18 @@ def executor_row(chat) -> HealthRow:
                                       mcp])
     shown = ", ".join(tools[:6]) + (" …" if len(tools) > 6 else "")
     return HealthRow(name, OK, [f"sessão do Chat: {status}", f"ferramentas usadas nesta sessão: {len(tools)} ({shown})", mcp])
+
+
+def permissions_row() -> HealthRow:
+    """Em que modo o Studio responde aos pedidos de permissão dos agentes (bypass é a decisão do Felipe)."""
+    from agent_bar.cockpit import permission_mode as PM
+    mode = PM.current()
+    return HealthRow("Permissões dos agentes", OK, [PM.label(mode), "cada aprovação automática fica registrada (Inbox, "
+                                                   "Notificações), inclusive irreversível, marcada como tal"
+                                                   if mode == PM.BYPASS else "cada ferramenta pede confirmação; "
+                                                   "irreversível pede o código",
+                                                   "o que o próprio agente não pede (leituras) aparece só no Chat, "
+                                                   "não no registro"])
 
 
 def github_row(snap) -> HealthRow:
@@ -118,8 +135,8 @@ def sources_row(review) -> HealthRow:
 def health_rows(core, chat=None, review=None, checkout_sha: str = "") -> list[HealthRow]:
     snap = getattr(core, "snap", None) if core is not None else None
     pin = getattr(core, "runtime_pin", None) if core is not None else None
-    rows = [runtime_row(pin), app_row(checkout_sha), *claude_rows(snap, chat), github_row(snap), eventstore_row(snap),
-            sources_row(review)]
+    rows = [runtime_row(pin), app_row(checkout_sha), *claude_rows(snap, chat), permissions_row(), github_row(snap),
+            eventstore_row(snap), sources_row(review)]
     return [replace(r, lines=[redact_secrets(line) for line in r.lines]) for r in rows]   # #106: nada de segredo na tela
 
 

@@ -130,8 +130,12 @@ class NotificationCenter:
                 body += f" · {e.result}"
             if e.repeat_note:
                 body += f" · repetido: {e.repeat_note}"
+            title = f"{verb.get(state, 'Permissão')}: {e.title}"
+            if e.policy == "IRREVERSIBLE" and e.decided_by == "bypass" and e.status == "ALLOWED":
+                title = f"Irreversível executado sem confirmação: {e.title}"          # bypass do Felipe
+                body += " · irreversível"
             before = self._state_of(f"permission:{e.id}")
-            self.publish("PERMISSION", f"{verb.get(state, 'Permissão')}: {e.title}", body=body, state=state,
+            self.publish("PERMISSION", title, body=body, state=state,
                          session_id=e.session_id, source=f"permission:{e.id}", link=f"permissions:{e.id}",
                          dedupe_key=f"permission:{e.id}")
             n += before != state

@@ -93,6 +93,9 @@ def ask(method: str, params: dict) -> dict:
     return _waiting.pop(rid, {})
 
 
+_mode: dict[str, str] = {}                               # modo corrente por sessao (o bypassPermissions nao pede)
+
+
 def handle_prompt(rid: int, params: dict) -> None:
     sid = params["sessionId"]
     text = " ".join(b.get("text", "") for b in params.get("prompt", []) if b.get("type") == "text").strip()
@@ -117,6 +120,12 @@ def handle_prompt(rid: int, params: dict) -> None:
         chunk(sid, json.dumps(sorted(os.environ)))
     elif word == "caps":
         chunk(sid, json.dumps(_caps, sort_keys=True))
+    elif word in ("perm", "permrm") and _mode.get(sid) == "bypassPermissions":
+        # como o Claude Code: no bypassPermissions do PROPRIO agente a ferramenta roda sem session/request_permission
+        tc = {"toolCallId": "t1", "title": "Run rm", "kind": "execute", "status": "pending"}
+        update(sid, {"sessionUpdate": "tool_call", **tc})
+        chunk(sid, "outcome=ran-without-request")
+        update(sid, {"sessionUpdate": "tool_call_update", "toolCallId": "t1", "status": "completed"})
     elif word in ("perm", "permrm"):
         tc = {"toolCallId": "t1", "title": "Run rm", "kind": "execute", "status": "pending"}
         if word == "permrm":                                 # pedido irreversivel de verdade (rm -rf)
@@ -218,6 +227,7 @@ def main() -> None:
             if state:                                        # sessoes "em disco": sobrevivem ao processo, ids unicos
                 new_sid = f"s-{os.getpid()}-{_sessions[0]}"
                 open(os.path.join(state, new_sid), "w").close()
+            _mode[new_sid] = os.environ.get("AGENT_BAR_FAKE_START_MODE", "default")
             send({"jsonrpc": "2.0", "id": rid, "result": {"sessionId": new_sid, "modes": {
                 "currentModeId": os.environ.get("AGENT_BAR_FAKE_START_MODE", "default"), "availableModes": available},
                 "configOptions": config_options()}})
@@ -233,6 +243,7 @@ def main() -> None:
             else:                                            # sem AGENT_BAR_FAKE_STATE_DIR: aceita qualquer id (legado)
                 send({"jsonrpc": "2.0", "id": rid, "result": {"configOptions": config_options()}})
         elif method == "session/set_mode":
+            _mode[params["sessionId"]] = params["modeId"]
             update(params["sessionId"], {"sessionUpdate": "current_mode_update", "currentModeId": params["modeId"]})
             send({"jsonrpc": "2.0", "id": rid, "result": {}})
         elif method == "session/prompt":

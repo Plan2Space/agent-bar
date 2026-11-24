@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from agent_bar.cockpit import permission_mode as PM
 from agent_bar.cockpit import profiles as prof
 from agent_bar.cockpit.acp import (
     AcpClient,
@@ -83,9 +84,12 @@ def _default_provider_client(profile, workspace: str, **kw):
     from agent_bar.cockpit.provider_client import ProviderClient
     from agent_bar.platform.discovery import discover
     from agent_bar.platform.ollama import OllamaAdapter
-    if profile.adapter != "ollama":
+    if profile.adapter not in ("ollama", "ollama-executor"):
         raise ValueError(f"adaptador desconhecido: {profile.adapter}")
     endpoint = next(p["endpoint"] for p in discover(which=lambda _n: None) if p["provider_id"] == "ollama")
+    if profile.adapter == "ollama-executor":                                 # P2S-LOCAL-EXECUTOR-SKETCHUP-POC
+        from agent_bar.platform.sketchup_sample import executor_adapter
+        return ProviderClient(executor_adapter(endpoint), **kw)
     return ProviderClient(OllamaAdapter(endpoint, timeout=30), **kw)
 
 
@@ -132,8 +136,10 @@ class ChatView(QWidget):
                  context_provider: Callable[[], str] | None = None,
                  provider_factory: Callable[..., object] | None = None,
                  inbox: PermissionInbox | None = None, broker: PermissionBroker | None = None,
-                 session_gate: Callable[[prof.AgentProfile], str | None] | None = None) -> None:
+                 session_gate: Callable[[prof.AgentProfile], str | None] | None = None,
+                 permission_mode_fn: Callable[[], str] | None = None) -> None:
         super().__init__()
+        self.permission_mode_fn = permission_mode_fn or PM.current           # Felipe: bypass sempre (reversível)
         self.context_provider = context_provider                          # F4: biblioteca (texto exato do preview)
         self.store = store or ChatStore()
         self.rt = runtime or AsyncRuntime("cockpit-chat")
@@ -300,7 +306,12 @@ class ChatView(QWidget):
         lay.addLayout(bottom)
         self.status = QLabel("desconectado")
         self.status.setStyleSheet("color:#8f8f98;font-size:11px")
-        lay.addWidget(self.status)
+        self.permission_label = QLabel(PM.label(self.permission_mode_fn()))  # o Felipe sabe em que modo está
+        self.permission_label.setStyleSheet("color:#8f8f98;font-size:11px")
+        status_row = QHBoxLayout()
+        status_row.addWidget(self.status, 1)
+        status_row.addWidget(self.permission_label)
+        lay.addLayout(status_row)
         self.send_btn.clicked.connect(self._send_or_stop)
         self.input.submit.connect(self._submit_from_keyboard)                 # Enter / Ctrl+Enter (F2 da UX v1)
         self.enter_box.toggled.connect(self._enter_pref_changed)
@@ -425,6 +436,7 @@ class ChatView(QWidget):
         if p.adapter != "acp":                                               # provedor da plataforma (F1/F2): mesmo Chat
             self.client = self.provider_factory(
                 p, ws, on_update=lambda u, g=gen: self.bridge.update.emit(g, u),
+                on_permission=lambda req, respond, g=gen: self.bridge.permission.emit(g, req, respond),
                 on_exit=lambda code, g=gen: self.bridge.exited.emit(g, code))
             fut = self.client.connect(None)
             fut.add_done_callback(lambda f, g=gen: self._emit_done(g, "connect", f))
@@ -435,6 +447,8 @@ class ChatView(QWidget):
             on_permission=lambda req, respond, g=gen: self.bridge.permission.emit(g, req, respond),
             on_exit=lambda code, g=gen: self.bridge.exited.emit(g, code),
             stderr_path=data_dir() / "logs" / f"agent-{p.key}.stderr.log")
+        # Bypass NÃO usa o bypassPermissions do agente: nele o Claude não manda session/request_permission e nada seria
+        # registrado. A sessão fica sempre no modo que pede; quem aprova sozinho, e registra, é o nosso broker.
         fut = self.client.connect(self.chat.session_id or None)
         fut.add_done_callback(lambda f, g=gen: self._emit_done(g, "connect", f))
 
@@ -490,6 +504,11 @@ class ChatView(QWidget):
                 return
         gen = self.gen
         self.client.set_mode(mode).add_done_callback(lambda f, g=gen, m=mode: self._emit_done(g, f"mode:{m}", f))
+
+    def _show_permission_mode(self) -> None:
+        """Mostra o modo de permissão do Studio. Em bypass a sessão do agente continua no modo que pede (o broker
+        responde allow e registra cada pedido); nada a trocar no agente."""
+        self.permission_label.setText(PM.label(self.permission_mode_fn()))
 
     def _select_mode(self, mode: str) -> None:
         idx = self.mode_box.findData(mode)
@@ -554,6 +573,9 @@ class ChatView(QWidget):
         self.client.prompt(text).add_done_callback(lambda f, g=gen: self._emit_done(g, "prompt", f))
 
     def stop(self) -> None:
+        for eid in list(self._perm_cards):                                   # nenhum cartão fica esperando um clique
+            if self.broker.is_open(eid):
+                self.broker.cancel(eid, "turno parado pelo Felipe")
         if self.client is not None:
             self.client.cancel()
         self.status.setText("cancelando…")
@@ -588,6 +610,7 @@ class ChatView(QWidget):
                 self.status.setText("bloqueado: agente sem modo que peça permissão")
                 return
             self.status.setText(f"conectado · {self.profile().label} · sessão {self.chat.session_id}")
+            self._show_permission_mode()
             if self.pending_prompt:
                 text, self.pending_prompt = self.pending_prompt, None
                 self._prompt(text)
@@ -755,6 +778,27 @@ class ChatView(QWidget):
             self._add(Notice(f"permissão para “{entry.title}”: {entry.status.lower()} por {entry.decided_by}",
                              "#3ddc84" if choice else "#ff9a9b"))
             return
+        mode = self.permission_mode_fn()
+        self.permission_label.setText(PM.label(mode))
+        if mode == PM.BYPASS:                                               # Felipe: bypass sempre, com registro
+            choice = req.strongest_once() or next((str(o["optionId"]) for o in req.options
+                                                   if str(o.get("kind", "")).startswith("allow")), None)
+            recorded = False
+            if choice:
+                try:
+                    self.inbox.decide(entry.id, "allow_once", by="bypass")      # auditoria: Inbox + Notificações
+                    recorded = True
+                except Exception:                                             # noqa: BLE001 - sem registro, pergunta
+                    log.exception("auto-aprovação não gravada no inbox: o pedido vai para o Felipe")
+            if recorded:
+                respond(choice)
+                what = ("operação IRREVERSÍVEL executada sem confirmação (bypass)" if entry.policy == "IRREVERSIBLE"
+                        else "aprovada automaticamente (bypass)")
+                self._add(Notice(f"permissão para “{entry.title}”: {what}",
+                                 "#ffb347" if entry.policy == "IRREVERSIBLE" else "#3ddc84"))
+                for fn in self.permission_listeners:
+                    fn(entry.id)
+                return
         if self.ask_permission is None:                                     # padrao: cartao nao modal (UX F4b)
             self.broker.register(entry.id, req, respond)
             card = PermissionCard(req, entry, lambda option, eid=entry.id: self.answer_permission(eid, option))

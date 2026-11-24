@@ -11,7 +11,13 @@ Tudo vem do servidor local, nada e presumido:
 
 Nao ha processo filho (o servidor e do usuario): `owned_pids()` vazio e `process_env()` None. O historico da sessao
 fica so na memoria do adaptador; o Ollama nao guarda sessao, entao `resume` e UNSUPPORTED. Ferramentas tambem ficam
-UNSUPPORTED aqui: o adaptador ainda nao executa tool calls (anunciar seria mentir).
+UNSUPPORTED aqui, salvo com um executor do Studio (`tool_host`, P2S-LOCAL-EXECUTOR-SKETCHUP-POC):
+- o Studio publica `tools` = so o que o `tool_host` declara; o perfil passa a listar so modelos que anunciam `tools`;
+- `message.tool_calls` e juntado no stream e so validado depois do `done` (stream cortado = nada executa); texto que
+  parece JSON de ferramenta nunca conta; inventada/malformada/duplicada e recusada sem chegar ao executor;
+- cada chamada aceita vai ao `tool_host.run` com sessao, turno, modelo e digest; o resultado volta ao modelo como
+  papel `tool` numa segunda rodada SEM `tools` (uma rodada de ferramenta por turno; nova chamada ali = TURN_LIMIT);
+- `tool_calls` fica UNKNOWN ate uma chamada terminar `completed` neste adaptador; so entao SUPPORTED, com a prova.
 """
 from __future__ import annotations
 
@@ -19,9 +25,11 @@ import base64
 import concurrent.futures as cf
 import itertools
 import json
+import logging
 import threading
 import urllib.error
 import urllib.request
+import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
@@ -43,9 +51,20 @@ from agent_bar.platform.adapter import (
 )
 from agent_bar.platform.contracts import all_capabilities, capability
 from agent_bar.platform.discovery import OLLAMA_DEFAULT
+from agent_bar.platform.local_tools import (
+    RefusedCall,
+    ToolContext,
+    normalize_tool_calls,
+    refusal_result,
+)
 from agent_bar.platform.usage import from_ollama_done
 
 Opener = Callable[..., Any]
+log = logging.getLogger("agent_bar.platform.ollama")
+
+
+def _text(s: str) -> list[dict]:
+    return [{"type": "content", "content": {"type": "text", "text": s}}]
 
 
 def effort_levels_from_show(show: dict) -> list[str]:
@@ -85,7 +104,13 @@ class OllamaAdapter(ProviderAdapter):
     supports_context_tokens = True                                            # options.num_ctx
 
     def __init__(self, endpoint: str = OLLAMA_DEFAULT, env: Any = None, opener: Opener = urllib.request.urlopen,
-                 timeout: float = 10.0):
+                 timeout: float = 10.0, tool_host: Any = None, preferred_model: str | None = None):
+        self.tool_host = tool_host                                            # executor do Studio (None = Conversa)
+        self.preferred_model = preferred_model
+        self.on_permission = None                                             # canal de permissao do Chat (como o ACP)
+        self._tool_proofs: dict[str, str] = {}                               # model@digest -> prova (chamada completed)
+        self._in_tool: set[str] = set()                                       # sessoes com ferramenta rodando agora
+        self._turns: dict[str, int] = {}
         self.endpoint = endpoint.rstrip("/")
         self.opener = opener
         self.timeout = timeout
@@ -126,7 +151,7 @@ class OllamaAdapter(ProviderAdapter):
             streaming=capability("SUPPORTED", f"{ev}: POST /api/chat stream=true", v),
             sessions=capability("SUPPORTED", "historico mantido pelo adaptador (o Ollama nao guarda sessao)", v),
             resume=capability("UNSUPPORTED", "o Ollama nao tem sessao no servidor", v),
-            tool_calls=capability("UNSUPPORTED", "o adaptador ainda nao executa tool calls", v),
+            tool_calls=self._tool_capability(v),
             cancel=capability("SUPPORTED", f"{ev}: fechar a resposta HTTP interrompe a geracao", v),
             model_select=capability("SUPPORTED", f"{ev}: GET /api/tags + POST /api/show", v),
             effort_select=capability("SUPPORTED" if thinking else "UNSUPPORTED",
@@ -145,6 +170,26 @@ class OllamaAdapter(ProviderAdapter):
             "capabilities": caps, "discovery_source": "endpoint configurado", "last_verified_at": self._verified_at,
             "cost_class": "local",
         }
+
+    def _tool_capability(self, v: str | None) -> dict:
+        if self.tool_host is None:
+            return capability("UNSUPPORTED", "perfil Conversa: o Studio nao publica ferramentas para este adaptador", v)
+        if not self._tool_proofs:
+            return capability("UNKNOWN", f"executor publicado ({', '.join(sorted(self.tool_host.names()))}); "
+                                         "nenhuma chamada executada com sucesso ainda", v)
+        proofs = "; ".join(self._tool_proofs[k] for k in sorted(self._tool_proofs))
+        return capability("SUPPORTED", f"so para {proofs}", v)
+
+    def tool_calls_for(self, model_id: str) -> dict:
+        """Capacidade `tool_calls` de UM modelo (SPEC §3.6/§11): SUPPORTED so se aquele model@digest ja executou uma
+        chamada `completed` neste adaptador; a prova de um modelo nunca vale para outro."""
+        v = self.version
+        if self.tool_host is None:
+            return capability("UNSUPPORTED", "perfil Conversa: o Studio nao publica ferramentas", v)
+        key = f"{model_id}@{(self._digests.get(model_id) or '?')[:12]}"
+        if key in self._tool_proofs:
+            return capability("SUPPORTED", self._tool_proofs[key], v)
+        return capability("UNKNOWN", f"{key}: nenhuma chamada executada com sucesso por este modelo", v)
 
     # ------------------------------------------------------------------------------------------------ ciclo de vida
     def connect(self, timeout: float = 30.0) -> None:
@@ -192,10 +237,13 @@ class OllamaAdapter(ProviderAdapter):
             self._connected = False
             self._sessions.clear()
             self._history.clear()
+            tool_busy = bool(self._in_tool)
         for r in running:
             r["cancel"].set()
             self._close_resp(r)
-        self._pool.shutdown(wait=True, cancel_futures=True)
+        # ferramenta rodando (motor + SketchUp, minutos): nao esperar na thread da UI; o resultado ja e duravel no
+        # registro do executor e o turno termina sozinho (cancelado) quando o motor acabar
+        self._pool.shutdown(wait=not tool_busy, cancel_futures=True)
         self._pool = cf.ThreadPoolExecutor(max_workers=4, thread_name_prefix="ollama")
 
     def get_status(self) -> AdapterStatus:
@@ -207,8 +255,14 @@ class OllamaAdapter(ProviderAdapter):
             raise NotConnected("ollama")
 
     # ------------------------------------------------------------------------------------------------ modelos
+    def _offered(self) -> dict[str, dict]:
+        """Com executor, so modelos que anunciam `tools` no /api/show (os outros ficam no perfil Conversa)."""
+        if self.tool_host is None:
+            return self._models
+        return {k: m for k, m in self._models.items() if m["tools"] == "SUPPORTED"}
+
     def list_models(self) -> list[dict]:
-        return [dict(m) for m in self._models.values()]
+        return [dict(m) for m in self._offered().values()]
 
     def list_effort_levels(self, model_id: str | None = None) -> list[str]:
         if not any(m["effort_levels"] for m in self._models.values()):
@@ -219,7 +273,10 @@ class OllamaAdapter(ProviderAdapter):
         return list(model["effort_levels"])
 
     def _default_model(self) -> str | None:
-        return next(iter(self._models), None)
+        offered = self._offered()
+        if self.preferred_model in offered:
+            return self.preferred_model
+        return next(iter(offered), None)
 
     def model_digest(self, model_id: str) -> str:
         self._need()
@@ -232,8 +289,13 @@ class OllamaAdapter(ProviderAdapter):
     def create_session(self, request: SessionRequest) -> dict:
         self._need()
         model = request.model_id or self._default_model()
+        if model is None and self.tool_host is not None:
+            raise CapabilityUnsupported("tool_calls", "nenhum modelo local anuncia tools no /api/show; o Executor "
+                                                      "local precisa de um (ex.: llama3.1:8b)")
         if model is None or model not in self._models:
             raise ModelRejected(str(request.model_id or "nenhum modelo de conversa no servidor"))
+        if self.tool_host is not None and self._models[model]["tools"] != "SUPPORTED":
+            raise CapabilityUnsupported("tool_calls", f"{model} nao anuncia tools no /api/show: use o perfil Conversa")
         levels = self._models[model]["effort_levels"]
         if request.effort is not None and request.effort not in levels:
             raise EffortRejected(f"{model} nao anuncia o esforco {request.effort!r} (anuncia {levels})")
@@ -272,7 +334,7 @@ class OllamaAdapter(ProviderAdapter):
                 raise SessionNotFound(session_id)
             if session_id in self._running:
                 raise PromptFailed("ja ha um turno em curso nesta sessao")
-            run = {"resp": None, "cancel": threading.Event()}
+            run = {"resp": None, "cancel": threading.Event(), "turn_id": uuid.uuid4().hex}
             self._running[session_id] = run
         rec = self._sessions[session_id]
         messages = [*self._history[session_id], {"role": "user", "content": text}]   # historico: so o texto
@@ -284,6 +346,13 @@ class OllamaAdapter(ProviderAdapter):
         think = think_param(rec["effort_accepted"])
         if think is not None:
             body["think"] = think
+        if self.tool_host is not None:
+            body["tools"] = self.tool_host.specs()
+            system = getattr(self.tool_host, "system_prompt", None)
+            if system is not None:                                            # descreve a ferramenta REAL; fora do historico
+                body["messages"] = [{"role": "system", "content": system()}, *body["messages"]]
+            with self._lock:
+                self._turns[session_id] = self._turns.get(session_id, 0) + 1
 
         def work() -> PromptResult:
             try:
@@ -294,7 +363,99 @@ class OllamaAdapter(ProviderAdapter):
         return self._pool.submit(work)
 
     def _stream(self, sid: str, run: dict, body: dict, messages: list[dict], on_event) -> PromptResult:
+        once = self._stream_once(run, body, on_event)
+        if once is None:
+            return PromptResult("cancelled")
+        confirmed, text, raw_calls = once
+        turn_msgs: list[dict] = [{"role": "assistant", "content": text}]
+        if self.tool_host is not None and raw_calls:
+            assistant = {"role": "assistant", "content": text, "tool_calls": raw_calls}
+            tool_msgs, results = self._run_tools(sid, run, body, raw_calls, on_event)
+            turn_msgs = [assistant, *tool_msgs]
+            final = getattr(self.tool_host, "final_text", None)
+            if final is not None:                                             # o Studio escreve o desfecho (motor), nao o modelo
+                text2 = final(results)
+                on_event(AgentEvent("text", text2))
+                turn_msgs.append({"role": "assistant", "content": text2})
+                self._remember(sid, messages, turn_msgs)
+                rec = self._sessions.get(sid) or {}
+                return PromptResult("cancelled" if run["cancel"].is_set() else "end_turn", str(confirmed),
+                                    rec.get("effort_accepted"))
+            follow = {k: v for k, v in body.items() if k != "tools"}             # 1 rodada de ferramenta por turno
+            follow["messages"] = [*body["messages"], assistant, *tool_msgs]
+            once = None if run["cancel"].is_set() else self._stream_once(run, follow, on_event)
+            if once is None:
+                self._remember(sid, messages, turn_msgs)                       # a ferramenta ja rodou: fica no historico
+                return PromptResult("cancelled")
+            confirmed, text2, again = once
+            for i, raw in enumerate(again):                                   # o modelo pediu de novo: nao executa
+                fn = raw.get("function") if isinstance(raw, dict) else None
+                name = str(fn.get("name") or "") if isinstance(fn, dict) else ""
+                cid = str(raw.get("id") or f"limit-{i}") if isinstance(raw, dict) else f"limit-{i}"
+                self._emit_refusal(RefusedCall(cid, name, "TURN_LIMIT",
+                                               "uma rodada de ferramenta por turno: chamada nao executada"), on_event)
+            turn_msgs.append({"role": "assistant", "content": text2})
+        elif raw_calls:
+            log.info("tool_calls ignorados: perfil Conversa nao publica ferramentas")
+        self._remember(sid, messages, turn_msgs)
+        rec = self._sessions.get(sid) or {}
+        return PromptResult("end_turn", str(confirmed), rec.get("effort_accepted"))
+
+    def _remember(self, sid: str, messages: list[dict], turn_msgs: list[dict]) -> None:
+        with self._lock:
+            if sid in self._history:                                         # so turno completo entra no historico
+                self._history[sid] = [*messages, *turn_msgs]
+
+    def _run_tools(self, sid: str, run: dict, body: dict, raw_calls: list, on_event) -> tuple[list[dict], list[dict]]:
+        """Valida as chamadas do turno e entrega as aceitas ao executor do Studio. Devolve (mensagens `tool`,
+        resultados na ordem: recusas primeiro, depois as executadas)."""
+        turn = self._turns.get(sid, 0)
+        calls, refused = normalize_tool_calls(raw_calls, self.tool_host.names(), turn)
+        model = str(body.get("model") or "")
+        ctx = ToolContext(session_id=sid, turn=turn, turn_id=str(run.get("turn_id") or uuid.uuid4().hex),
+                          model_id=model, model_digest=self._digests.get(model),
+                          provider_version=self.version, workspace=(self._sessions.get(sid) or {}).get("workspace"),
+                          on_permission=self.on_permission, cancel=run["cancel"],
+                          emit=lambda kind, data: on_event(AgentEvent(kind, str(data.get("title") or ""), dict(data))))
+        out: list[dict] = []
+        results: list[dict] = []
+        for r in refused:
+            self._emit_refusal(r, on_event)
+            results.append(refusal_result(r))
+            out.append({"role": "tool", "tool_name": r.name, "content": json.dumps(results[-1], ensure_ascii=False)})
+        for c in calls:
+            with self._lock:
+                self._in_tool.add(sid)
+            try:
+                res = self.tool_host.run(c, ctx)
+            except Exception as exc:                                          # noqa: BLE001 - vira resultado tipado
+                log.exception("executor falhou em %s", c.name)
+                res = {"status": "failed", "error": {"code": "EXECUTOR_ERROR", "message": type(exc).__name__}}
+                on_event(AgentEvent("tool_update", "", {"toolCallId": c.call_id, "status": "failed",
+                                                         "content": _text(f"EXECUTOR_ERROR: {type(exc).__name__}")}))
+            finally:
+                with self._lock:
+                    self._in_tool.discard(sid)
+            key = f"{model}@{(ctx.model_digest or '?')[:12]}"
+            if res.get("status") == "completed" and key not in self._tool_proofs:
+                self._tool_proofs[key] = f"{key}: tool_call executado -> {c.name} (run {res.get('run_id')})"
+            results.append(res)
+            view = getattr(self.tool_host, "model_view", None)                 # o modelo recebe o essencial
+            shown = view(res) if view is not None else res
+            content = shown if isinstance(shown, str) else json.dumps(shown, ensure_ascii=False, default=str)
+            out.append({"role": "tool", "tool_name": c.name, "content": content})
+        return out, results
+
+    @staticmethod
+    def _emit_refusal(r: RefusedCall, on_event) -> None:
+        on_event(AgentEvent("tool_update", "", {"toolCallId": r.call_id, "title": f"ferramenta recusada: {r.name or '?'}",
+                                                 "kind": "other", "status": "failed", "rawInput": dict(r.raw),
+                                                 "content": _text(f"{r.code}: {r.reason}")}))
+
+    def _stream_once(self, run: dict, body: dict, on_event) -> tuple[str, str, list] | None:
+        """Uma ida ao /api/chat. None = cancelado; (modelo confirmado, texto, tool_calls brutos do turno completo)."""
         text: list[str] = []
+        calls: list = []
         confirmed = None
         try:
             resp = self._post("/api/chat", body, stream=True, timeout=300)
@@ -302,12 +463,12 @@ class OllamaAdapter(ProviderAdapter):
             raise PromptFailed(f"HTTP {exc.code}{_ollama_error(exc)}") from None
         except (urllib.error.URLError, OSError) as exc:
             if run["cancel"].is_set():
-                return PromptResult("cancelled")
+                return None
             raise PromptFailed("servidor local nao respondeu") from exc
         run["resp"] = resp
         if run["cancel"].is_set():
             self._close_resp(run)
-            return PromptResult("cancelled")
+            return None
         try:
             for raw in resp:
                 if run["cancel"].is_set():
@@ -321,6 +482,8 @@ class OllamaAdapter(ProviderAdapter):
                 part = msg.get("message") or {}
                 if part.get("thinking"):
                     on_event(AgentEvent("thought", str(part["thinking"])))
+                if isinstance(part.get("tool_calls"), list):          # juntado; validado so apos o done
+                    calls.extend(part["tool_calls"])
                 if part.get("content"):
                     text.append(str(part["content"]))
                     on_event(AgentEvent("text", str(part["content"])))
@@ -337,15 +500,11 @@ class OllamaAdapter(ProviderAdapter):
                 raise PromptFailed("stream interrompido") from None
         finally:
             self._close_resp(run)
-        if run["cancel"].is_set() or confirmed is None:
-            if run["cancel"].is_set():
-                return PromptResult("cancelled")
+        if run["cancel"].is_set():
+            return None
+        if confirmed is None:
             raise PromptFailed("stream terminou sem done")
-        with self._lock:
-            if sid in self._history:                                         # so turno completo entra no historico
-                self._history[sid] = [*messages, {"role": "assistant", "content": "".join(text)}]
-        rec = self._sessions.get(sid) or {}
-        return PromptResult("end_turn", str(confirmed), rec.get("effort_accepted"))
+        return str(confirmed), "".join(text), calls
 
     @staticmethod
     def _close_resp(run: dict) -> None:

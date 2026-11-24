@@ -52,6 +52,8 @@ class Worker(QObject):
                                               placeholder=ApprovalBoard(error="coletando aprovações (primeira leitura)"),
                                               on_done=lambda: self._now.set(),
                                               on_error=lambda exc: ApprovalBoard(error=f"coleta de aprovações falhou: {type(exc).__name__}: {exc}"))
+        from agent_bar.approvals import ApprovalMemo
+        self._approval_memo = ApprovalMemo()                                   # C2: só relê o PR que mudou
         self._thread = threading.Thread(target=self._loop, name="agent-bar-collector", daemon=True)
 
     def start(self) -> None:
@@ -78,7 +80,8 @@ class Worker(QObject):
         while not self._stop.is_set():
             try:
                 self.snapshot.emit(col.collect_snapshot(cache=self._cache, backlog_cache=self._backlog, queue_cache=self._queue,
-                                                   approval_cache=self._approvals, claude_login=col.claude_login_state))
+                                                   approval_cache=self._approvals, claude_login=col.claude_login_state,
+                                                   approval_memo=self._approval_memo))
             except Exception:                                                  # noqa: BLE001 — coleta nunca derruba a UI
                 traceback.print_exc()
             self._now.wait(self.settings.local_interval_s)
