@@ -184,6 +184,10 @@ class ProviderAdapter(ABC):
     def list_effort_levels(self, model_id: str | None = None) -> list[str]:
         raise CapabilityUnsupported("effort_select")
 
+    def model_digest(self, model_id: str) -> str:
+        """Digest imutavel do modelo instalado (fora do Model v1). Sem fonte do provedor: CapabilityUnsupported."""
+        raise CapabilityUnsupported("model_digest")
+
     @abstractmethod
     def create_session(self, request: SessionRequest) -> dict:
         """Session v1. Esforco fora de `list_effort_levels(model)` -> EffortRejected; modelo fora de `list_models` ->
