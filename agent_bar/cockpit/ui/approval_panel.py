@@ -69,6 +69,13 @@ class ApprovalPanel(QWidget):
     def observe_only() -> bool:
         return os.environ.get("AGENT_BAR_OBSERVE_ONLY") == "1"
 
+    def clear(self, text: str) -> None:
+        """Sem PR legível: nada aprovável e nenhuma linha de outro PR na tela."""
+        self.row = None
+        self.button.setText("Aprovar")
+        self.button.setEnabled(False)
+        self.label.setText(text)
+
     def show_for(self, repo: str, number: int) -> None:
         board = self.approvals_fn()
         self.row = None

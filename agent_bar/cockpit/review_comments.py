@@ -92,7 +92,7 @@ def technical(item: G.GalleryItem) -> str:
 
 
 def _source(item: G.GalleryItem) -> str:
-    return f"motor: {G.UNPUBLISHED_NOTE}" if item.source == G.ENGINE else G.SOURCE_LABEL.get(item.source, item.source)
+    return f"motor: {G.publication_note(item)}" if item.source == G.ENGINE else G.SOURCE_LABEL.get(item.source, item.source)
 
 
 def _run_ref(item: G.GalleryItem) -> dict:

@@ -27,12 +27,13 @@ from PySide6.QtWidgets import (
 )
 
 from agent_bar.cockpit import health as H
+from agent_bar.cockpit import permission_mode as PM
 
 STATE_COLOR = {H.OK: "#3ddc84", H.WARN: "#f5c542", H.BAD: "#ff6b6d", H.UNKNOWN: "#8a8f98"}
 STATE_GLYPH = {H.OK: "●", H.WARN: "▲", H.BAD: "✖", H.UNKNOWN: "○"}
 BTN_CSS = ("QPushButton{background:#2a2a30;color:#e6e6e6;border:1px solid #3a3a44;border-radius:5px;padding:4px 10px}"
            "QPushButton:hover{background:#34343c}")
-SECTIONS = ("Saúde do sistema", "Diagnóstico")
+SECTIONS = ("Saúde do sistema", "Diagnóstico", "Geral")
 
 
 class SettingsTab(QWidget):
@@ -78,23 +79,35 @@ class SettingsTab(QWidget):
         dl.addLayout(row)
         dl.addWidget(self.diag_text, 1)
         self.pages.addWidget(diag)
-        # UX-07: Geral (preferências do app; a barra flutuante é opcional, D-UX-1)
-        general = QWidget()
+        general = QWidget()                                                  # Geral: preferências do app e permissões
         gl = QVBoxLayout(general)
         gl.setContentsMargins(4, 4, 4, 4)
+        # UX-07: a barra flutuante é opcional (D-UX-1)
         self.bar_toggle = QCheckBox("Barra flutuante (opcional)")
         self.bar_toggle.setStyleSheet("QCheckBox{color:#e6e6e6;font-size:13px}")
         self.bar_toggle.setChecked(bool(getattr(getattr(core, "settings", None), "bar_enabled", False)))
         self.bar_toggle.setEnabled(hasattr(core, "set_bar_enabled"))
         self.bar_toggle.toggled.connect(self._bar_toggled)
-        hint = QLabel("A barra mostra Claude, GitHub e PRs num canto da tela. Desligada, a coleta, a bandeja e os "
-                      "avisos continuam; o P2S Studio fecha para a bandeja e só “Sair do P2S Studio” encerra.")
+        bar_hint = QLabel("A barra mostra Claude, GitHub e PRs num canto da tela. Desligada, a coleta, a bandeja e os "
+                          "avisos continuam; o P2S Studio fecha para a bandeja e só “Sair do P2S Studio” encerra.")
+        bar_hint.setWordWrap(True)
+        bar_hint.setStyleSheet("color:#8f8f98;font-size:12px")
+        gl.addWidget(self.bar_toggle)
+        gl.addWidget(bar_hint)
+        # #114: permissões dos agentes (bypass por padrão, decisão do Felipe)
+        self.ask_toggle = QCheckBox("Pedir permissão antes de cada ferramenta dos agentes")
+        self.ask_toggle.setStyleSheet("QCheckBox{color:#e6e6e6;font-size:13px}")
+        self.ask_toggle.setChecked(PM.current() == PM.ASK)
+        self.ask_toggle.toggled.connect(lambda on: PM.set_mode(PM.ASK if on else PM.BYPASS))
+        hint = QLabel("Desligado (padrão, decisão do Felipe): bypass sempre — o Studio aprova sozinho e registra cada "
+                      "aprovação no Inbox e em Notificações, inclusive operação irreversível (marcada como tal). "
+                      "Ligado: volta o pedido a cada ferramenta e o código das irreversíveis. Vale para sessões novas.")
         hint.setWordWrap(True)
         hint.setStyleSheet("color:#8f8f98;font-size:12px")
-        gl.addWidget(self.bar_toggle)
+        gl.addWidget(self.ask_toggle)
         gl.addWidget(hint)
         gl.addStretch(1)
-        self.add_section("Geral", general)
+        self.pages.addWidget(general)                                        # "Geral" já está em SECTIONS (#114)
         lay.addWidget(self.sections)
         lay.addWidget(self.pages, 1)
         self.sections.currentRowChanged.connect(self.pages.setCurrentIndex)

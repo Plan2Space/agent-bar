@@ -172,3 +172,15 @@ def test_the_window_feeds_the_prs_area_from_the_core_snapshot(tmp_path, monkeypa
         w.shutdown()
         w.deleteLater()
         QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+
+
+def test_a_failed_pr_detail_never_keeps_the_previous_prs_approval_button(make, monkeypatch):
+    """UX-07b × UX-09: o PR 7 está aprovável; o detalhe do PR 8 falha → o "Aprovar no HEAD" do 7 não pode ficar ativo
+    como se fosse do 8."""
+    tab = make(board())
+    assert tab.approve_btn.isEnabled()
+    monkeypatch.setenv("FAKE_GH_FAIL_VIEW", "8")
+    tab.tree.setCurrentItem(tab.tree.topLevelItem(1))
+    assert wait(lambda: "indisponível" in tab.detail.toPlainText())
+    assert not tab.approve_btn.isEnabled() and tab.approval.row is None
+    assert "indisponível" in tab.approval_label.text()
