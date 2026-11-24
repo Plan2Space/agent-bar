@@ -132,6 +132,7 @@ class GalleryItem:
     synthetic: bool | None = None  # só REFERENCIA: imagem gerada (ex.: pelo ChatGPT), nunca foto real
     usage: str = ""              # só REFERENCIA: ex.: conceptual-only
     provenance: str = ""         # só REFERENCIA: registration.source_type / origin.kind
+    category: str = ""           # só REFERENCIA: categoria do manifest (suite, bed, layout...) — UX-14b
 
     @property
     def notes(self) -> list[str]:
@@ -292,20 +293,23 @@ def primary_image(item: GalleryItem) -> GalleryImage | None:
     return min(item.images, key=camera_rank, default=None)
 
 
-def comparison_pair(a: GalleryItem, b: GalleryItem) -> tuple[GalleryImage | None, GalleryImage | None, str]:
+def comparison_pair(a: GalleryItem, b: GalleryItem, camera: str | None = None
+                    ) -> tuple[GalleryImage | None, GalleryImage | None, str]:
     """Quadros para comparar `a` com `b` na MESMA câmera, quando os dois a têm.
 
     Percorre as câmeras de `a` na ordem fixa e pega a primeira que `b` também tem (mesma luz se houver, senão a luz
     preferida de `b`). Sem câmera em comum, ou com a referência (outra câmera por natureza, VS-R7), cada lado mostra o seu
-    quadro principal e a nota diz isso. A nota é vazia quando o par é a câmera preferida de `a`."""
-    first = primary_image(a)
+    quadro principal e a nota diz isso. A nota é vazia quando o par é a câmera preferida de `a`. Com `camera`
+    (UX-14b), a câmera escolhida na tela vem primeiro."""
+    first = (image_for_camera(a, camera) if camera else None) or primary_image(a)
     if b.source == REFERENCE or a.source == REFERENCE:
         return first, primary_image(b), ""
     by_cam: dict[tuple[str, bool], list[GalleryImage]] = {}
     for img in b.images:
         cam, _light, rendered = camera_of(img.key)
         by_cam.setdefault((cam, rendered), []).append(img)
-    for img in sorted(a.images, key=camera_rank):
+    order = sorted(a.images, key=lambda i: (camera_of(i.key)[0] != camera if camera else False, camera_rank(i)))
+    for img in order:
         cam, light, rendered = camera_of(img.key)
         if rendered != camera_of(first.key)[2]:                               # render só com render
             continue
@@ -327,9 +331,40 @@ def caption(item: GalleryItem) -> str:
     return f"{item.item_id} · {item.when()} · {item.source_label}{extra}"
 
 
-def latest_render(items: Iterable[GalleryItem]) -> GalleryItem | None:
-    """"Último render" = o run de render de maior `started_at` (VS-R3), seja qual for o veredito."""
-    renders = [i for i in items if i.kind == "render" and (i.started_at or i.day)]
+def rendered_cameras(items: Iterable[GalleryItem]) -> list[str]:
+    """Câmeras com quadro RENDERIZADO nos runs do cômodo (vista crua não conta), na ordem fixa de preferência."""
+    cams = {camera_of(img.key)[0] for i in items if i.kind == "render" for img in i.images if camera_of(img.key)[2]}
+    return sorted(cams, key=lambda c: (CAMERA_PREFERENCE.index(c) if c in CAMERA_PREFERENCE else len(CAMERA_PREFERENCE), c))
+
+
+def image_for_camera(item: GalleryItem | None, camera: str) -> GalleryImage | None:
+    """O quadro renderizado desta câmera no run (a luz preferida, se houver mais de uma). Sem render dela: None."""
+    if item is None:
+        return None
+    imgs = [img for img in item.images if camera_of(img.key)[0] == camera and camera_of(img.key)[2]]
+    return min(imgs, key=camera_rank, default=None)
+
+
+def current_references(items: Iterable[GalleryItem]) -> list[tuple[str, GalleryItem]]:
+    """A referência VIGENTE de cada categoria (a mais recente com imagem conferida), uma por categoria, sem
+    duplicação, em ordem alfabética da categoria (pedido literal do Felipe)."""
+    groups: dict[str, list[GalleryItem]] = {}
+    for i in items:
+        if i.source == REFERENCE:
+            groups.setdefault(i.category or "sem categoria", []).append(i)
+    out = []
+    for cat in sorted(groups):
+        ref = reference_item(groups[cat])
+        if ref is not None:
+            out.append((cat, ref))
+    return out
+
+
+def latest_render(items: Iterable[GalleryItem], camera: str | None = None) -> GalleryItem | None:
+    """"Último render" = o run de render de maior `started_at` (VS-R3), seja qual for o veredito. Com `camera`
+    (UX-14b): o último run que TEM render dessa câmera."""
+    renders = [i for i in items if i.kind == "render" and (i.started_at or i.day)
+               and (camera is None or image_for_camera(i, camera) is not None)]
     return max(renders, key=GalleryItem.sort_key, default=None)
 
 
@@ -535,7 +570,8 @@ def load_references(root: Path, plant: str, room: str) -> tuple[list[GalleryItem
                          curation=str((m.get("curation") or {}).get("state") or ""), title=str(m.get("title") or ""),
                          camera_file="", synthetic=syn if isinstance(syn, bool) else None,
                          usage=str(m.get("usage") or ""),
-                         provenance=str(reg.get("source_type") or (m.get("origin") or {}).get("kind") or ""))
+                         provenance=str(reg.get("source_type") or (m.get("origin") or {}).get("kind") or ""),
+                         category=str(m.get("category") or ""))
         asset = m.get("asset") or {}
         path, sha = Path(str(asset.get("path") or "")), str(asset.get("sha256") or "")
         got = file_sha256(path) if asset.get("path") else None
@@ -586,4 +622,4 @@ __all__ = ["ENGINE", "IMPORTED", "NO_EVALUATION", "PUBLISHED", "REFERENCE", "SKP
            "UNPUBLISHED_BLOCK", "UNPUBLISHED_NOTE", "Card", "Gallery", "GalleryImage", "GalleryItem", "build_gallery",
            "CAMERA_PREFERENCE", "LIGHTING_PREFERENCE", "camera_of", "camera_rank", "camera_text",
            "caption", "cards", "comparison_pair", "engine_dir", "file_sha256", "latest_render", "library_dir", "load_engine",
-           "load_references", "primary_image", "reference_item", "trend_text", "visual_text"]
+           "load_references", "primary_image", "rendered_cameras", "image_for_camera", "current_references", "reference_item", "trend_text", "visual_text"]
