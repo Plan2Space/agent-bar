@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QLabel, QMainWindow, QTabWidget, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QLabel, QMainWindow, QSizePolicy, QTabWidget, QVBoxLayout, QWidget
 
 from agent_bar.cockpit.acp import AsyncRuntime
 from agent_bar.cockpit.evaluations import EvaluationStore
@@ -102,8 +102,21 @@ class CockpitWindow(QMainWindow):
         lay.addWidget(self.tabs, 1)
         self.setCentralWidget(body)
         self.set_runtime_pin(runtime_pin)
+        # UX-05: barra de estado com a fonte, o commit e a hora da leitura do que a Revisão visual mostra
+        self.status_sources = QLabel("fontes ainda não lidas (abra a Revisão visual)")
+        self.status_sources.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)  # nunca alarga a janela
+        self.status_sources.setStyleSheet("color:#8f8f98;font-size:11px;padding:0 6px")
+        self.statusBar().setStyleSheet("QStatusBar{background:#141417;border-top:1px solid #26262c}")
+        self.statusBar().addWidget(self.status_sources, 1)
+        self.review.sources_changed.connect(self._sources_changed)
         self.setStyleSheet("QMainWindow{background:#16161a}")
         self._closed = False
+
+    def _sources_changed(self, text: str) -> None:
+        self.status_sources.setText(text)
+        self.status_sources.setToolTip(text.replace("  │  ", "\n"))
+        bad = any(st.status != "AO_VIVO" for st in self.review.data_states.values())
+        self.status_sources.setStyleSheet(f"color:{'#ffb4b4' if bad else '#8f8f98'};font-size:11px;padding:0 6px")
 
     def set_runtime_pin(self, st) -> None:
         """Divergência comprovada do agent-runtime (instalado x pyproject x uv.lock): faixa vermelha na janela principal,
