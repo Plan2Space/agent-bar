@@ -157,7 +157,7 @@ def test_prs_tab_lists_details_and_requests_review(gh, tmp_path):
     try:
         tab.refresh()
         assert wait(lambda: tab.tree.topLevelItemCount() == 2)
-        assert tab.tree.topLevelItem(1).text(1).startswith("[rascunho]")
+        assert tab.tree.topLevelItem(1).text(2).startswith("[rascunho]")
         tab.tree.setCurrentItem(tab.tree.topLevelItem(0))
         assert wait(lambda: tab.review_btn.isEnabled())
         assert "a" * 40 in tab.detail.toPlainText() and "parece bom" in tab.detail.toPlainText()
@@ -229,8 +229,7 @@ def test_window_review_opens_prefilled_chat_without_sending(gh, tmp_path, monkey
     win = CockpitWindow(gh=gh, repos=[REPO], profiles_fn=lambda: [AgentProfile("stub", "Stub", (sys.executable, str(stub)))],
                         workspaces_fn=lambda: [tmp_path / "other"])
     try:
-        assert [win.tabs.tabText(i) for i in range(win.tabs.count())] == ["Chat", "Permissões", "Notificações", "Fluxos", "Revisão visual", "Biblioteca", "PRs", "Actions", "Dev",
-                                                                       "Configurações"]   # UX-06
+        assert [win.tabs.tabText(i) for i in range(win.tabs.count())] == ["Chat", "Design", "PRs", "Notificações"]  # UX-07
         win.open_review(str(ws), "Revise o PR X#1")
         assert win.tabs.currentWidget() is win.sessions
         assert win.chat.workspace() == str(ws)

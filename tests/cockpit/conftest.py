@@ -70,3 +70,12 @@ def no_exception_in_qt_slots(monkeypatch):
     except ImportError:
         pass
     assert caught == [], "excecao em slot Qt durante o teste:\n" + "\n".join(caught)
+
+
+@pytest.fixture(autouse=True)
+def permission_mode_ask_unless_the_test_says_otherwise(monkeypatch):
+    """O produto abre em bypass (decisão do Felipe, 2026-11-24). Os testes do fluxo de PERGUNTAR (cartão, diálogo,
+    Permissões, Notificações) continuam valendo para o modo "pedir", que segue existindo como opção; por isso fixam
+    "ask" aqui. Os testes do bypass trocam o modo explicitamente (tests/cockpit/test_permission_bypass.py)."""
+    from agent_bar.cockpit import permission_mode as PM
+    monkeypatch.setenv(PM.ENV, PM.ASK)

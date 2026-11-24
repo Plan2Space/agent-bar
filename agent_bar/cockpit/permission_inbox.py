@@ -216,8 +216,8 @@ class PermissionInbox:
                 if row["decision"] == dec and row["status"] == status:
                     return self._entry(row)                                  # mesma decisao: nada muda
                 raise AlreadyDecided(f"{rid}: ja {row['status']} ({row['decision']})")
-            if row["policy"] == "IRREVERSIBLE" and status == "ALLOWED" and by != "human":
-                raise PermissionError("irreversivel so com decisao humana")
+            if row["policy"] == "IRREVERSIBLE" and status == "ALLOWED" and by not in ("human", "bypass"):
+                raise PermissionError("irreversivel so com decisao humana ou com o bypass do Felipe")
             self._db.execute("UPDATE requests SET status=?, decision=?, decided_by=?, decided_at=? WHERE id=?",
                              (status, dec, by, self.clock(), rid))
             return self.get(rid)

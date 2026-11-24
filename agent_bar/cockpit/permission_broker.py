@@ -102,6 +102,19 @@ class PermissionBroker:
             self._changed(eid)
         return [eid for eid, _ in gone]
 
+    def cancel(self, entry_id: str, why: str) -> bool:
+        """Um pedido aberto: CANCELLED no Inbox com o motivo e "cancelled" ao agente, uma vez. False se já não estava aberto."""
+        with self._lock:
+            o = self._open.pop(entry_id, None)
+        if o is None:
+            return False
+        try:
+            self.inbox.cancel_one(entry_id, why)
+        finally:
+            o.respond(None)
+            self._changed(entry_id)
+        return True
+
     def cancel_all(self, why: str) -> int:
         with self._lock:
             items = list(self._open.items())
