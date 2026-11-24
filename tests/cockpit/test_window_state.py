@@ -148,3 +148,23 @@ def test_at_the_minimum_size_the_tabs_and_the_chat_input_stay_inside_the_window(
 def test_the_whole_frame_including_the_title_bar_stays_above_the_taskbar():
     st = WS.restore(WS.WindowState(100, 600, 1200, 780), [MAIN])                # conteúdo cabe; com a barra de título não
     assert st.y + WS.FRAME_H + st.h <= MAIN.bottom
+
+
+def test_below_a_tabs_content_minimum_the_window_scrolls_instead_of_squeezing(tmp_path):
+    """A Revisão visual pede mais que 900×600: a janela encolhe, mas o conteúdo não é espremido (rola)."""
+    store = WS.WindowStateStore(tmp_path / "window.json")
+    win = cockpit(tmp_path, store)
+    try:
+        win.show()
+        win.resize(WS.MIN_W, WS.MIN_H)
+        for i in range(win.tabs.count()):
+            win.tabs.setCurrentIndex(i)
+            for _ in range(5):
+                _APP.processEvents()
+            page = win.tabs.currentWidget()
+            assert page.height() >= page.minimumSizeHint().height(), win.tabs.tabText(i)   # nunca espremida na altura
+            assert win.tabs.width() == win.scroll.viewport().width()                  # a largura acompanha a janela
+        assert (win.width(), win.height()) == (WS.MIN_W, WS.MIN_H)                    # a janela encolheu de verdade
+    finally:
+        win.shutdown()
+        dispose(win)

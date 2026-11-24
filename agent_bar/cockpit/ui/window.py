@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QGuiApplication
-from PySide6.QtWidgets import QMainWindow, QTabWidget
+from PySide6.QtWidgets import QFrame, QMainWindow, QScrollArea, QTabWidget
 
 from agent_bar.cockpit import window_state as WS
 from agent_bar.cockpit.acp import AsyncRuntime
@@ -26,6 +26,31 @@ from agent_bar.targets import load_targets
 TAB_CSS = ("QTabWidget::pane{border:0;background:#16161a}QTabBar::tab{background:#202026;color:#bdbdc4;padding:6px 14px;"
            "border-top-left-radius:6px;border-top-right-radius:6px;margin-right:2px}"
            "QTabBar::tab:selected{background:#2c2c34;color:#ffffff}")
+
+
+class VerticalScroll(QScrollArea):
+    """Rolagem só vertical: a largura acompanha a janela (a barra de abas e o Chat ficam sempre dentro dela) e a altura
+    nunca fica abaixo do mínimo da aba atual: abaixo dele a janela rola em vez de espremer widgets uns sobre os outros
+    (legenda por cima da imagem, histórico com 56 px)."""
+
+    def __init__(self, inner) -> None:
+        super().__init__()
+        self.setWidgetResizable(False)
+        self.setFrameShape(QFrame.Shape.NoFrame)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setWidget(inner)
+        inner.currentChanged.connect(lambda _i: self._fit())
+
+    def _fit(self) -> None:
+        inner = self.widget()
+        page = inner.currentWidget()
+        need = (page.minimumSizeHint().height() if page is not None else 0) + inner.tabBar().sizeHint().height() + 8
+        width = self.viewport().width()
+        inner.resize(width, max(self.viewport().height(), need))
+
+    def resizeEvent(self, e) -> None:                                           # noqa: N802
+        super().resizeEvent(e)
+        self._fit()
 
 
 class CockpitWindow(QMainWindow):
@@ -89,7 +114,10 @@ class CockpitWindow(QMainWindow):
         self.workflows.inbox = self.sessions.inbox                           # pedidos dos Fluxos no mesmo Inbox
         self.prs.review_requested.connect(self.open_review)
         self.tabs.currentChanged.connect(self._tab_changed)
-        self.setCentralWidget(self.tabs)
+        # UX-04: abaixo do mínimo de conteúdo de uma aba (a Revisão visual pede ~1064×943), a janela ROLA em vez de
+        # espremer os widgets uns sobre os outros; acima dele, as abas ocupam a janela inteira como antes
+        self.scroll = VerticalScroll(self.tabs)
+        self.setCentralWidget(self.scroll)
         self.setStyleSheet("QMainWindow{background:#16161a}")
         self._closed = False
 
