@@ -172,6 +172,8 @@ class CockpitWindow(QMainWindow):
         self.tabs.addTab(self.settings, "Configurações")
         self.setStyleSheet("QMainWindow{background:#16161a}")
         self._closed = False
+        self.close_to_tray = None                                              # o núcleo liga (D-UX-1: fechar = bandeja)
+        self.quit_app = None
 
     def _sources_changed(self, text: str) -> None:
         self.status_sources.setText(text)
@@ -306,9 +308,19 @@ class CockpitWindow(QMainWindow):
         return st
 
     def closeEvent(self, e) -> None:                                            # noqa: N802
+        """D-UX-1: com o núcleo e a bandeja, fechar ESCONDE (agentes, sessões e coleta seguem; o ícone da bandeja e o
+        atalho trazem a mesma janela de volta). Sem bandeja, fechar encerra o app pelo núcleo. Sozinha (testes,
+        compatibilidade), fecha como antes. Em todos os casos a geometria é salva antes (UX-04)."""
         if not self._closed:
             self.save_window()
-        self.shutdown()
+        if self.close_to_tray is not None and self.close_to_tray():
+            e.ignore()
+            self.hide()
+            return
+        if self.quit_app is not None:
+            self.quit_app()                                                    # núcleo: Cockpit, coleta, bandeja, processo
+        else:
+            self.shutdown()
         super().closeEvent(e)
 
 
