@@ -348,6 +348,18 @@ def comparison_pair(a: GalleryItem, b: GalleryItem) -> tuple[GalleryImage | None
                           f"comparando câmeras diferentes")
 
 
+def counts_text(items: Iterable[GalleryItem], publication_checked: bool = True) -> str:
+    """Contagem por fonte para a nota da galeria. Sem o evidence, o motor é "publicação não conferida" (#105)."""
+    items = list(items)
+    out = []
+    for s in SOURCES:
+        n = sum(1 for i in items if i.source == s)
+        if n:
+            label = UNCHECKED_LABEL if s == ENGINE and not publication_checked else SOURCE_LABEL[s]
+            out.append(f"{label}: {n}")
+    return " · ".join(out)
+
+
 def source_line(item: GalleryItem) -> str:
     """A fonte no detalhe da Revisão visual: só o rótulo honesto (a constante crua MOTOR_NAO_PUBLICADO afirmaria demais)."""
     return f"fonte {item.source_label}"
@@ -627,4 +639,4 @@ __all__ = ["ENGINE", "IMPORTED", "NO_EVALUATION", "PUBLISHED", "REFERENCE", "SKP
            "Card", "Gallery", "GalleryImage", "GalleryItem", "build_gallery",
            "CAMERA_PREFERENCE", "LIGHTING_PREFERENCE", "camera_of", "camera_rank", "camera_text",
            "caption", "cards", "comparison_pair", "engine_dir", "file_sha256", "latest_render", "library_dir", "load_engine",
-           "load_references", "primary_image", "publication_note", "reference_item", "source_line", "trend_text", "visual_text"]
+           "load_references", "primary_image", "publication_note", "reference_item", "source_line", "counts_text", "trend_text", "visual_text"]

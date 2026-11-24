@@ -641,12 +641,11 @@ class ReviewTab(QWidget):
             self.gallery_note.setText(f"galeria indisponível: {self.gallery_error}" if self.gallery_error else "")
             return
         items = self.gallery_items()
-        counts = {s: sum(1 for i in items if i.source == s) for s in G.SOURCES}
         errs = (f" · {len(self.gallery.errors)} aviso(s): " + "; ".join(self.gallery.errors[:3])
                 if self.gallery.errors else "")
         self.gallery_note.setText(
             "Do mais recente para o mais antigo. "
-            + " · ".join(f"{G.SOURCE_LABEL[s]}: {n}" for s, n in counts.items() if n)
+            + G.counts_text(items, publication_checked=self.catalog is not None)
             + ". Itens do motor: " + (G.UNPUBLISHED_NOTE if self.catalog is not None else G.UNCHECKED_NOTE)
             + ". Visível, verificado, elegível e melhor são estados "
             "separados; elegível = candidato a melhor render (F0 §4), não é veredito visual." + errs)

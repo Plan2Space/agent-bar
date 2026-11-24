@@ -433,3 +433,20 @@ def test_the_unchecked_label_is_only_for_engine_runs():
         it = G.GalleryItem(src, PLANT, ROOM, "x", "render")
         it.publication_checked = False                                                # nunca acontece, mas não vaza
         assert it.source_label == G.SOURCE_LABEL[src]
+
+
+# ---------------------------------------------- #105 MUST (re-revisão): legenda da comparação e contagem da galeria
+def test_compare_label_of_an_unchecked_engine_run_never_says_not_published():
+    from agent_bar.cockpit.ui.design_view import compare_label
+    a, b = _run("a", "r2_canto", source=G.ENGINE), _run("b", "r2_canto", source=G.ENGINE)
+    a.publication_checked = False
+    text = compare_label(a, b, a.images[0], b.images[0])
+    assert "não publicado" not in text and G.UNCHECKED_NOTE in text
+    b2 = _run("c", "r2_canto", source=G.ENGINE)                                    # conferido e não publicado
+    assert "run não publicado" in compare_label(b2, _run("d", "r2_canto", source=G.ENGINE), b2.images[0], b2.images[0])
+
+
+def test_the_gallery_counts_use_the_honest_engine_label():
+    items = [_run("a", "r2_canto", source=G.ENGINE), _run("b", "r2_canto", source=G.ENGINE), _run("p", "r2_canto")]
+    assert G.counts_text(items, publication_checked=False) == "publicado: 1 · motor, publicação não conferida: 2"
+    assert G.counts_text(items, publication_checked=True) == "publicado: 1 · motor, não publicado: 2"
