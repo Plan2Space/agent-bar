@@ -135,3 +135,14 @@ def test_an_engine_failure_is_never_shown_as_ready(server, tmp_path, cleanup):
     card = tool_card(view)
     assert card.state["status"] == "failed"
     assert "pronto" not in card.body.toPlainText() and "INSPECTION_FAILED" in card.body.toPlainText()
+
+
+def test_health_does_not_say_the_local_executor_has_no_tools(server, tmp_path, cleanup):
+    from agent_bar.cockpit.health import NOT_EXECUTOR, executor_row
+    view = build_view(server, tmp_path)
+    cleanup.append(view)
+    ask_and_answer(view, "allow_once")
+    row = executor_row(view)
+    assert row.state == NOT_EXECUTOR                                         # nao e o Executor Claude
+    text = " ".join(row.lines)
+    assert "sem ferramentas" not in text and "build_room_sample" in text
