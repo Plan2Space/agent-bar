@@ -13,6 +13,7 @@ from pathlib import Path
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QApplication,
+    QCheckBox,
     QHBoxLayout,
     QLabel,
     QListWidget,
@@ -77,6 +78,23 @@ class SettingsTab(QWidget):
         dl.addLayout(row)
         dl.addWidget(self.diag_text, 1)
         self.pages.addWidget(diag)
+        # UX-07: Geral (preferências do app; a barra flutuante é opcional, D-UX-1)
+        general = QWidget()
+        gl = QVBoxLayout(general)
+        gl.setContentsMargins(4, 4, 4, 4)
+        self.bar_toggle = QCheckBox("Barra flutuante (opcional)")
+        self.bar_toggle.setStyleSheet("QCheckBox{color:#e6e6e6;font-size:13px}")
+        self.bar_toggle.setChecked(bool(getattr(getattr(core, "settings", None), "bar_enabled", False)))
+        self.bar_toggle.setEnabled(hasattr(core, "set_bar_enabled"))
+        self.bar_toggle.toggled.connect(self._bar_toggled)
+        hint = QLabel("A barra mostra Claude, GitHub e PRs num canto da tela. Desligada, a coleta, a bandeja e os "
+                      "avisos continuam; o P2S Studio fecha para a bandeja e só “Sair do P2S Studio” encerra.")
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color:#8f8f98;font-size:12px")
+        gl.addWidget(self.bar_toggle)
+        gl.addWidget(hint)
+        gl.addStretch(1)
+        self.add_section("Geral", general)
         lay.addWidget(self.sections)
         lay.addWidget(self.pages, 1)
         self.sections.currentRowChanged.connect(self.pages.setCurrentIndex)
@@ -89,6 +107,21 @@ class SettingsTab(QWidget):
             review.sources_changed.connect(lambda _t: self.render())
         self.rows: list[H.HealthRow] = []
         self.render()
+
+    def add_section(self, name: str, widget: QWidget) -> int:
+        """Nova seção na lista lateral (Geral, Avançado). Devolve a linha dela."""
+        self.sections.addItem(name)
+        self.pages.addWidget(widget)
+        return self.sections.count() - 1
+
+    def show_section(self, name: str) -> None:
+        rows = [self.sections.item(i).text() for i in range(self.sections.count())]
+        if name in rows:
+            self.sections.setCurrentRow(rows.index(name))
+
+    def _bar_toggled(self, on: bool) -> None:
+        if hasattr(self.core, "set_bar_enabled"):
+            self.core.set_bar_enabled(on)
 
     # ------------------------------------------------------------------------------------------------ conteúdo
     @property

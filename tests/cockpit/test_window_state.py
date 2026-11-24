@@ -77,6 +77,11 @@ def cockpit(tmp_path, store):
                          workspaces_fn=lambda: [tmp_path], window_store=store)
 
 
+def all_pages(win) -> list:
+    return [win.sessions, win.review, win.prs, win.notifications, win.workflows, win.dev, win.permissions,
+            win.library, win.actions]
+
+
 def dispose(win):
     from PySide6.QtCore import QCoreApplication, QEvent
     win.deleteLater()
@@ -165,12 +170,11 @@ def test_below_a_tabs_content_minimum_the_window_scrolls_instead_of_squeezing(tm
     try:
         win.show()
         win.resize(WS.MIN_W, WS.MIN_H)
-        for i in range(win.tabs.count()):
-            win.tabs.setCurrentIndex(i)
+        for page in all_pages(win):                                                 # UX-07: as 4 áreas + Avançado
+            win.show_page(page)
             for _ in range(5):
                 _APP.processEvents()
-            page = win.tabs.currentWidget()
-            assert page.height() >= page.minimumSizeHint().height(), win.tabs.tabText(i)   # nunca espremida na altura
+            assert page.height() >= page.minimumSizeHint().height(), type(page).__name__   # nunca espremida na altura
             assert win.tabs.width() <= win.width()                                     # a barra de abas cabe na janela
         assert (win.width(), win.height()) == (WS.MIN_W, WS.MIN_H)                    # a janela encolheu de verdade
     finally:
@@ -262,12 +266,11 @@ def test_below_a_tabs_minimum_width_the_window_scrolls_instead_of_squeezing(tmp_
     try:
         win.show()
         win.resize(WS.MIN_W, WS.MIN_H)
-        for i in range(win.tabs.count()):
-            win.tabs.setCurrentIndex(i)
+        for page in all_pages(win):                                                 # UX-07: as 4 áreas + Avançado
+            win.show_page(page)
             for _ in range(5):
                 _APP.processEvents()
-            page = win.tabs.currentWidget()
-            assert page.width() >= page.minimumSizeHint().width(), win.tabs.tabText(i)   # nunca espremida na largura
+            assert page.width() >= page.minimumSizeHint().width(), type(page).__name__   # nunca espremida na largura
     finally:
         win.shutdown()
         dispose(win)

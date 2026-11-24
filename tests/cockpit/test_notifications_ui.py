@@ -108,7 +108,7 @@ def test_window_wires_bell_chat_and_links(tmp_path):
     win = CockpitWindow(repos=["o/r"], profiles_fn=lambda: [AgentProfile("stub", "Stub", (sys.executable, stub))],
                         workspaces_fn=lambda: [tmp_path / "ws"], ask_permission=lambda req, parent: "allow")
     try:
-        assert win.tabs.cornerWidget() is win.notifications.bell
+        assert win.notifications.bell.parent() is win.tabs.cornerWidget()                  # UX-07: sino + engrenagem
         win.chat.send("echo 2")                                              # janela nao ativa: fim de turno notifica
         end = time.monotonic() + 15
         while time.monotonic() < end and win.chat.busy:
