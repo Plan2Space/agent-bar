@@ -8,8 +8,10 @@ from __future__ import annotations
 
 import html
 import json
+import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from pathlib import Path
 
 from PySide6.QtCore import QObject, Qt, Signal
@@ -31,6 +33,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from agent_bar.cockpit import data_state as DS
 from agent_bar.cockpit import evaluations as V
 from agent_bar.cockpit import evidence as E
 from agent_bar.cockpit import gallery as G
@@ -54,6 +57,7 @@ GALLERY_COLUMNS = ["Data", "Fonte", "Tipo", "Run / referência", "Render", "Geom
 class _Bridge(QObject):
     loaded = Signal(int, object)
     gallery = Signal(int, object)
+    checkout = Signal(int, str, object)            # UX-05: geracao, fonte, Checkout
     vision_models = Signal(object)
     vision_done = Signal(object)
 
@@ -105,8 +109,13 @@ class ImagePane(QWidget):
         self._fit()
 
 
+SOURCES_OK_CSS = "color:#7d7d88;font-size:11px;padding:2px 0"
+SOURCES_BAD_CSS = "color:#ffb4b4;font-size:11px;padding:2px 0"
+
+
 class ReviewTab(QWidget):
     run_selected = Signal()                                                     # (a, b) mudou: relatório/pacotes ouvem
+    sources_changed = Signal(str)                                               # UX-05: linha das fontes (barra de estado)
     request_chat = Signal(str, str)                                             # workspace, pedido (o envio é manual)
 
     def __init__(self, root_fn: Callable[[], Path] = E.evidence_dir,
@@ -141,6 +150,10 @@ class ReviewTab(QWidget):
         self.bridge = _Bridge()
         self.bridge.loaded.connect(self._loaded)
         self.bridge.gallery.connect(self._gallery_loaded)
+        self.bridge.checkout.connect(self._checkout_read)
+        self.clock = time.time
+        self.data_states: dict[str, DS.DataState] = {}                          # evidence, motor, design-library
+        self._checkouts: dict[str, tuple[str, DS.Checkout]] = {}              # fonte -> (caminho, commit lido)
         self.bridge.vision_models.connect(self._vision_models_loaded)
         self.bridge.vision_done.connect(self._vision_finished)
         self.vision: RV.RunVision | None = None
@@ -165,6 +178,11 @@ class ReviewTab(QWidget):
         head.addStretch(4)
         head.addWidget(self.reload_btn)
         lay.addLayout(head)
+        self.sources_label = QLabel("fontes ainda não lidas")                   # UX-05: de onde vem e quão novo
+        self.sources_label.setWordWrap(True)
+        self.sources_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.sources_label.setStyleSheet(SOURCES_OK_CSS)
+        lay.addWidget(self.sources_label)
         # S01C-F1-04: a tela principal é a Galeria de design; o resto fica em Detalhes técnicos
         self.pages = QTabWidget()
         self.design = DesignView()
@@ -300,6 +318,7 @@ class ReviewTab(QWidget):
         self.req += 1
         rid = self.req
         self.source.setText(f"lendo {root} (validação pelo verify.py do checkout)…")
+        self._probe(rid, "evidence", root)
         fut = self.pool.submit(self.load_fn, root)
         fut.add_done_callback(lambda f, r=rid: self.bridge.loaded.emit(r, f.exception() or f.result()))
 
@@ -307,6 +326,7 @@ class ReviewTab(QWidget):
         if rid != self.req:
             return
         if isinstance(result, BaseException):
+            self._set_state("evidence", self.root_fn(), str(result))
             self.catalog, self.error = None, str(result)
             self.source.setText(f"<span style='color:#ff9a9b'>evidence indisponível: {html.escape(self.error)}</span>")
             self.source.setTextFormat(Qt.TextFormat.RichText)
@@ -316,6 +336,7 @@ class ReviewTab(QWidget):
             self._clear_pair()                                                # nada do par anterior fica na tela (F0 #43)
             self._load_gallery(rid, None)                                     # o motor e a design-library ainda valem
             return
+        self._set_state("evidence", result.root)  # type: ignore[union-attr]
         self._load_gallery(rid, result)  # type: ignore[arg-type]
         self.catalog, self.error = result, ""  # type: ignore[assignment]
         self.source.setTextFormat(Qt.TextFormat.PlainText)
@@ -541,11 +562,53 @@ class ReviewTab(QWidget):
                                                    if items else "<p>nada ausente</p>"))
         self.absent.setHtml("".join(out))
 
+    # ------------------------------------------------------------------------------------------------- fontes (UX-05)
+    def _probe(self, rid: int, name: str, path: Path) -> None:
+        """Commit e branch do checkout lido, fora da thread da UI."""
+        fut = self.pool.submit(DS.checkout, path)
+        fut.add_done_callback(lambda f, r=rid, n=name, p=str(path):
+                              self.bridge.checkout.emit(r, n, (p, f.exception() or f.result())))
+
+    def _checkout_read(self, rid: int, name: str, payload: object) -> None:
+        """O commit lido vale só para o estado DAQUELE caminho; um estado em cache guarda o commit da leitura que ele
+        mostra (o probe de um caminho novo, que falhou, nunca o troca)."""
+        if rid != self.req:
+            return
+        path, co = payload  # type: ignore[misc]
+        co = co if isinstance(co, DS.Checkout) else DS.Checkout(error=f"{type(co).__name__}: {co}")
+        self._checkouts[name] = (path, co)
+        st = self.data_states.get(name)
+        if st is not None and st.status != DS.CACHE and st.source == path:
+            self.data_states[name] = replace(st, checkout=co)
+        self._update_sources()
+
+    def _set_state(self, name: str, path: Path, error: str | None = None) -> None:
+        """Leitura que deu certo → AO_VIVO com a hora; falhou → CACHE (desatualizado desde) ou INDISPONIVEL."""
+        prev = self.data_states.get(name)
+        probed = self._checkouts.get(name)
+        co = probed[1] if probed and probed[0] == str(path) else None           # só o commit deste caminho
+        st = DS.failed(name, path, error, prev) if error else DS.live(name, path, self.clock(), co)
+        self.data_states[name] = st
+        self._update_sources()
+
+    def sources_text(self) -> str:
+        order = ("evidence", "motor", "design-library")
+        return "  │  ".join(self.data_states[n].line() for n in order if n in self.data_states)
+
+    def _update_sources(self) -> None:
+        text = self.sources_text() or "fontes ainda não lidas"
+        bad = any(st.status != DS.AO_VIVO for st in self.data_states.values())
+        self.sources_label.setStyleSheet(SOURCES_BAD_CSS if bad else SOURCES_OK_CSS)
+        self.sources_label.setText(text)
+        self.sources_changed.emit(text)
+
     # ------------------------------------------------------------------------------------------------- galeria
     def _load_gallery(self, rid: int, catalog: E.Catalog | None) -> None:
         if self.gallery_fn is None:
             return
         self.gallery_note.setText("lendo o motor e a design-library (somente leitura)…")
+        self._probe(rid, "motor", G.engine_dir())
+        self._probe(rid, "design-library", G.library_dir())
         fut = self.pool.submit(self.gallery_fn, catalog)
         fut.add_done_callback(lambda f, r=rid: self.bridge.gallery.emit(r, f.exception() or f.result()))
 
@@ -556,6 +619,8 @@ class ReviewTab(QWidget):
             self.gallery, self.gallery_error = None, f"{type(result).__name__}: {result}"
         else:
             self.gallery, self.gallery_error = result, ""  # type: ignore[assignment]
+        for name, path in (("motor", G.engine_dir()), ("design-library", G.library_dir())):
+            self._set_state(name, path, self.gallery_error or None)
         if self.catalog is None and self.gallery is not None and self.room_box.count() == 0:
             for plant, room in sorted({(i.plant, i.room) for i in self.gallery.items}):
                 self.room_box.addItem(f"{plant} / {room}", (plant, room))

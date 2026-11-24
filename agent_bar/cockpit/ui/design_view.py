@@ -39,6 +39,8 @@ from agent_bar.cockpit.ui.github_tabs import BTN_CSS
 
 NOT_EVALUATED = "Ainda não avaliado"
 THUMB = QSize(300, 169)
+# Área MÍNIMA da miniatura nos cartões (#102): a imagem cabe nela mantendo a proporção (16:10 → 216×135).
+CARD_THUMB = QSize(240, 135)
 CARD_CSS = "QFrame#card{background:#17171a;border:1px solid #2a2a30;border-radius:6px}"
 TITLE_CSS = "color:#e6e6ea;font-size:14px;font-weight:700"
 INFO_CSS = "color:#cfcfd4;font-size:12px"
@@ -156,7 +158,7 @@ class BigCard(QFrame):
         lay.setContentsMargins(10, 8, 10, 8)
         self.title = QLabel(title)
         self.title.setStyleSheet(TITLE_CSS)
-        self.thumb = Thumb(QSize(320, 180))
+        self.thumb = Thumb(CARD_THUMB)                                          # cede altura para a legenda
         self.info = QLabel("")
         self.info.setWordWrap(True)
         self.info.setStyleSheet(INFO_CSS)
@@ -175,6 +177,19 @@ class BigCard(QFrame):
         self.thumb.set_image(img.path if img else None, empty or "sem imagem com sha256 conferido")
         self.info.setText("\n".join(lines))
         self.enlarge_btn.setEnabled(img is not None)
+        self._fit_info()
+
+    def _fit_info(self) -> None:
+        """A legenda quebra em várias linhas e o QLabel informa ao layout o mínimo de uma linha só: o cartão ficava
+        menor que imagem + legenda e a legenda era desenhada por cima da imagem. O mínimo passa a ser a altura real."""
+        width = self.info.width() if self.info.width() > 50 else max(self.width() - 20, 200)
+        need = self.info.heightForWidth(width)
+        if need > 0 and self.info.minimumHeight() != need:
+            self.info.setMinimumHeight(need)
+
+    def resizeEvent(self, e) -> None:                                           # noqa: N802
+        super().resizeEvent(e)
+        self._fit_info()
 
 
 class DesignView(QWidget):
