@@ -125,7 +125,7 @@ def test_gui_is_frameless_topmost_with_claude_and_github_and_a_cockpit_button(tm
 
     from agent_bar import window as w
     app = QApplication.instance() or QApplication([])
-    bar = w.Bar(cfg.Settings())
+    bar = w.Bar(*_offline())                                         # C1: nenhum teste sobe a coleta real
     try:
         f = bar.windowFlags()
         assert f & Qt.WindowType.FramelessWindowHint and f & Qt.WindowType.WindowStaysOnTopHint
@@ -147,6 +147,13 @@ def test_every_subprocess_of_the_bar_is_created_without_a_console_window():
 
 
 # ---------------------------------------------------------------------------------------- botoes (GUI offscreen, um a um)
+def _offline():
+    """Settings + um núcleo que NUNCA inicia a coleta (sem `gh`, sem rede). O teste injeta o Snapshot."""
+    from agent_bar.core import AppCore
+    settings = cfg.Settings()
+    return settings, AppCore(settings, tray_available=lambda: False)
+
+
 @pytest.fixture()
 def gui(tmp_path):
     pytest.importorskip("PySide6.QtWidgets")
@@ -156,7 +163,7 @@ def gui(tmp_path):
 
     from agent_bar import window as w
     app = QApplication.instance() or QApplication([])
-    bar = w.Bar(cfg.Settings())
+    bar = w.Bar(*_offline())                                         # C1: nenhum teste sobe a coleta real
     bar.worker.snapshot.disconnect(bar.on_snapshot)                    # sem coleta de fundo: o teste injeta o Snapshot
     bar.worker.stop()
     yield bar, app, tmp_path
