@@ -176,7 +176,7 @@ class AppCore(QObject):
                 win = self.cockpit_factory()
             else:
                 from agent_bar.cockpit.ui.window import CockpitWindow
-                win = CockpitWindow()
+                win = CockpitWindow(core=self)
             self.cockpit = win
         win.show()
         win.raise_()
