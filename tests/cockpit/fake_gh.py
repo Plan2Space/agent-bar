@@ -37,6 +37,10 @@ def main() -> int:
         sys.stderr.write("To get started with GitHub CLI, please run:  gh auth login\n")
         return 4
     sub = tuple(argv[:2])
+    repo = argv[argv.index("--repo") + 1] if "--repo" in argv else ""
+    if repo and repo in os.environ.get("FAKE_GH_FAIL_REPOS", "").split(","):     # UX-09: um repo que não responde
+        sys.stderr.write(f"GraphQL: Could not resolve to a Repository with the name '{repo}'.\n")
+        return 1
     out: object
     if sub == ("auth", "status"):
         sys.stdout.write("Logged in to github.com\n")

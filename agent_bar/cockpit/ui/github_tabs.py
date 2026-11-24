@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import html
+import time
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
@@ -24,6 +25,7 @@ from PySide6.QtWidgets import (
 )
 
 from agent_bar import controls as ctl
+from agent_bar.cockpit.data_state import AO_VIVO, CACHE, DataState, failed, live
 from agent_bar.cockpit.github import GhClient, GhError, checks_summary, review_prompt
 from agent_bar.cockpit.profiles import DEFAULT_APPS
 from agent_bar.targets import load_targets
@@ -34,6 +36,7 @@ BTN_CSS = ("QPushButton{background:#2a2a30;color:#e6e6e6;border:1px solid #3a3a4
 TREE_CSS = ("QTreeWidget{background:#1a1a1f;color:#dcdce2;border:1px solid #2e2e36;font-size:12px}"
             "QTreeWidget::item:selected{background:#2c3a55}QHeaderView::section{background:#22222a;color:#aaa;border:0;padding:3px}")
 TEXT_CSS = "background:#121215;color:#d6d6dc;border:1px solid #2e2e36;font-size:12px"
+ALL = "*"                                                # "todos (N)" no seletor de repo (UX-09)
 REVIEW_COLOR = {"APPROVED": "#3ddc84", "CHANGES_REQUESTED": "#ff6b6d", "REVIEW_REQUIRED": "#ffc233"}
 
 
@@ -73,9 +76,13 @@ class _GhTab(QWidget):
             msg = err.message if isinstance(err, GhError) else str(err)
             self.status.setText(f"<span style='color:#ff9a9b'>[{kind}] {html.escape(msg)}</span>")
             self.status.setTextFormat(Qt.TextFormat.RichText)
+            self.on_error(tag, kind, msg)
             return
         self.status.setTextFormat(Qt.TextFormat.PlainText)
         self.on_result(tag, result)
+
+    def on_error(self, tag: str, kind: str, msg: str) -> None:
+        """Gancho: a falha já está na linha de estado; a subclasse decide o que fazer com o que está na tela."""
 
     def on_result(self, tag: str, result: object) -> None:                    # pragma: no cover - sobrescrito
         raise NotImplementedError
@@ -94,19 +101,38 @@ def _repo_box(repos: list[str]) -> QComboBox:
 
 
 class PrsTab(_GhTab):
+    """PRs abertos (UX-09): "todos (N)" por padrão, CI do PR dentro do PR e a hora da leitura (DataState do UX-05).
+
+    Regra travada por teste: erro do `gh` com a tabela anterior do MESMO recorte → a tabela fica e o cabeçalho diz
+    "desatualizado desde"; sem leitura anterior desse recorte → a tabela é limpa e diz "indisponível". Repo que falhou
+    dentro de "todos" aparece "não coletado", nunca como 0 PRs."""
+
     review_requested = Signal(str, str)                 # workspace, prompt
 
     def __init__(self, gh: GhClient | None = None, executor: ThreadPoolExecutor | None = None,
-                 repos: list[str] | None = None, apps_root: Path | None = None) -> None:
+                 repos: list[str] | None = None, apps_root: Path | None = None,
+                 clock: Callable[[], float] = time.time) -> None:
         super().__init__(gh, executor)
         self.apps_root = apps_root or DEFAULT_APPS
+        self.clock = clock
+        self.all_repos = list(repos or [f"{load_targets().org}/agent-bar"])
         self.items: list[dict] = []
         self.current: dict | None = None
+        self.current_repo = ""
         self.current_diff = ""
+        self.data_state: DataState | None = None
+        self.shown_key = ""                              # recorte cuja tabela está na tela
+        self._pending_key = ""
+        self.missing: dict[str, str] = {}                # repo -> motivo (não coletado na última leitura)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(10, 8, 10, 8)
         head = QHBoxLayout()
-        self.repo_box = _repo_box(repos or [f"{load_targets().org}/agent-bar"])
+        self.repo_box = QComboBox()
+        self.repo_box.setStyleSheet(COMBO_CSS)
+        if len(self.all_repos) > 1:
+            self.repo_box.addItem(f"todos ({len(self.all_repos)})", ALL)
+        for r in self.all_repos:
+            self.repo_box.addItem(r, r)
         self.refresh_btn = QPushButton("Atualizar")
         self.refresh_btn.setStyleSheet(BTN_CSS)
         cap = QLabel("Repositório")
@@ -116,15 +142,22 @@ class PrsTab(_GhTab):
         head.addWidget(self.refresh_btn)
         ro = QLabel("somente leitura: comentar, aprovar e mergear ficam no GitHub")
         ro.setStyleSheet("color:#6d6d75;font-size:11px")
-        head.addWidget(ro)
+        ro.setWordWrap(True)
+        head.addWidget(ro, 1)
         lay.addLayout(head)
+        self.fresh = QLabel("ainda não lido")                                   # fonte · hora da leitura · estado
+        self.fresh.setWordWrap(True)
+        self.fresh.setTextFormat(Qt.TextFormat.RichText)
+        self.fresh.setStyleSheet("color:#8f8f98;font-size:11px")
+        lay.addWidget(self.fresh)
         split = QSplitter(Qt.Orientation.Vertical)
         self.tree = QTreeWidget()
         self.tree.setStyleSheet(TREE_CSS)
-        self.tree.setHeaderLabels(["#", "Título", "Autor", "Revisão", "Checks", "Merge", "Branch"])
+        self.tree.setHeaderLabels(["#", "Repo", "Título", "Autor", "Revisão", "Checks", "Merge", "Branch"])
         self.tree.setRootIsDecorated(False)
         self.tree.setColumnWidth(0, 50)
-        self.tree.setColumnWidth(1, 360)
+        self.tree.setColumnWidth(1, 150)
+        self.tree.setColumnWidth(2, 340)
         split.addWidget(self.tree)
         bottom = QWidget()
         bl = QVBoxLayout(bottom)
@@ -141,6 +174,8 @@ class PrsTab(_GhTab):
         self.detail = QTextBrowser()
         self.detail.setStyleSheet(TEXT_CSS)
         self.detail.setOpenExternalLinks(False)
+        self.detail.setOpenLinks(False)                                          # link do run abre no navegador
+        self.detail.anchorClicked.connect(lambda url: ctl.open_url(url.toString()))
         bl.addWidget(self.detail, 1)
         split.addWidget(bottom)
         split.setSizes([260, 380])
@@ -153,43 +188,144 @@ class PrsTab(_GhTab):
         self.review_btn.clicked.connect(self.request_review)
 
     def repo(self) -> str:
+        """O repo do PR selecionado; sem seleção, o do recorte (vazio em "todos")."""
+        key = str(self.repo_box.currentData() or "")
+        return self.current_repo or ("" if key == ALL else key)
+
+    def key(self) -> str:
         return str(self.repo_box.currentData() or "")
 
+    def selected_repos(self) -> list[str]:
+        key = self.key()
+        return list(self.all_repos) if key == ALL else [key]
+
     def refresh(self) -> None:
-        repo = self.repo()
-        self.submit("list", lambda: self.gh.prs(repo))
+        self._pending_key = self.key()
+        repos = self.selected_repos()
+        self.submit("list", lambda: self._collect(repos))
+
+    def _collect(self, repos: list[str]) -> tuple[list[tuple[str, dict]], dict[str, str]]:
+        """Lê cada repo; falha de um repo vira "não coletado". Se TODOS falharem, a leitura falhou (erro tipado)."""
+        rows: list[tuple[str, dict]] = []
+        missing: dict[str, str] = {}
+        first: GhError | None = None
+        for repo in repos:
+            try:
+                rows += [(repo, pr) for pr in self.gh.prs(repo)]
+            except GhError as exc:
+                missing[repo] = exc.message
+                first = first or exc
+        if first is not None and len(missing) == len(repos):
+            raise first
+        return rows, missing
+
+    def _label(self, key: str) -> str:
+        return f"todos ({len(self.all_repos)})" if key == ALL else key
+
+    def _render_fresh(self) -> None:
+        st = self.data_state
+        if st is None:
+            self.fresh.setText("ainda não lido")
+            return
+        color = {AO_VIVO: "#8f8f98", CACHE: "#ffb347"}.get(st.status, "#ff9a9b")
+        parts = [f"<span style='color:{color}'>{html.escape(st.line())}</span>"]
+        if st.status == AO_VIVO:
+            n = len(self.items)
+            parts.append(f"{n} PR(s) aberto(s)" + (" nos repos coletados" if self.missing else ""))
+        if self.missing:
+            gone = "; ".join(f"{r.split('/')[-1]}: não coletado ({m[:120]})" for r, m in sorted(self.missing.items()))
+            parts.append(f"<span style='color:#ffb347'>{html.escape(gone)}</span>")
+        self.fresh.setText(" · ".join(parts))
 
     def _select(self, item: QTreeWidgetItem | None) -> None:
         if item is None:
             return
         number = int(item.data(0, Qt.ItemDataRole.UserRole))
-        repo = self.repo()
+        repo = str(item.data(1, Qt.ItemDataRole.UserRole) or "")
         self.review_btn.setEnabled(False)
-        self.submit("detail", lambda: (self.gh.pr(repo, number), self.gh.pr_diff(repo, number)))
+        self.submit("detail", lambda: self._load_detail(repo, number))
+
+    def _load_detail(self, repo: str, number: int) -> tuple[str, dict, str, tuple[list[dict], str]]:
+        pr = self.gh.pr(repo, number)
+        return repo, pr, self.gh.pr_diff(repo, number), self._pr_ci(repo, pr)
+
+    def _pr_ci(self, repo: str, pr: dict) -> tuple[list[dict], str]:
+        """As execuções do Actions do HEAD exato do PR (só leitura). Falha aqui não derruba o detalhe: vira o motivo."""
+        head, branch = str(pr.get("headRefOid") or ""), str(pr.get("headRefName") or "")
+        try:
+            runs = self.gh.runs(repo, branch=branch, limit=20) if branch else []
+        except GhError as exc:
+            return [], exc.message
+        return [r for r in runs if str(r.get("headSha") or "") == head], ""
 
     def on_result(self, tag: str, result: object) -> None:
         if tag == "list":
-            self.items = list(result or [])  # type: ignore[arg-type]
+            rows, missing = result  # type: ignore[misc]
+            self.items = [pr for _repo, pr in rows]
+            self.missing = dict(missing)
+            self.shown_key = self._pending_key
+            self.current, self.current_repo = None, ""
+            self.data_state = live("PRs", self._label(self.shown_key), self.clock())
             self.tree.clear()
-            for pr in self.items:
+            for repo, pr in rows:
                 rd = str(pr.get("reviewDecision") or "")
-                it = QTreeWidgetItem([str(pr.get("number")), ("[rascunho] " if pr.get("isDraft") else "") + str(pr.get("title", "")),
+                it = QTreeWidgetItem([str(pr.get("number")), repo.split("/")[-1],
+                                      ("[rascunho] " if pr.get("isDraft") else "") + str(pr.get("title", "")),
                                       str((pr.get("author") or {}).get("login", "")), rd.lower().replace("_", " ") or "—",
                                       checks_summary(pr.get("statusCheckRollup")), str(pr.get("mergeable", "")).lower(),
                                       f"{pr.get('headRefName', '')} → {pr.get('baseRefName', '')}"])
                 it.setData(0, Qt.ItemDataRole.UserRole, int(pr.get("number") or 0))
+                it.setData(1, Qt.ItemDataRole.UserRole, repo)
                 self.tree.addTopLevelItem(it)
-            self.status.setText(f"{len(self.items)} PR(s) abertos em {self.repo()}")
+            self._render_fresh()
+            self.status.setText("")
         elif tag == "detail":
-            pr, diff = result  # type: ignore[misc]
-            self.current, self.current_diff = pr, diff
+            repo, pr, diff, ci = result  # type: ignore[misc]
+            self.current, self.current_repo, self.current_diff = pr, repo, diff
             self.open_btn.setEnabled(bool(pr.get("url")))
             self.review_btn.setEnabled(True)
-            self.detail.setHtml(self._detail_html(pr, diff))
-            self.status.setText(f"#{pr.get('number')} · HEAD {pr.get('headRefOid', '?')}")
+            self.detail.setHtml(self._detail_html(pr, diff, ci))
+            self.status.setText(f"{repo}#{pr.get('number')} · HEAD {pr.get('headRefOid', '?')}")
+
+    def on_error(self, tag: str, kind: str, msg: str) -> None:
+        if tag != "list":
+            return
+        key = self._pending_key
+        if self.data_state is not None and self.shown_key == key:              # a tabela na tela é deste recorte
+            self.data_state = failed("PRs", self._label(key), msg, self.data_state)
+        else:                                                                   # nunca mostrar a de outro recorte
+            self.tree.clear()
+            self.items, self.missing, self.shown_key = [], {}, key
+            self.current, self.current_repo = None, ""
+            self.detail.clear()
+            self.open_btn.setEnabled(False)
+            self.review_btn.setEnabled(False)
+            self.data_state = failed("PRs", self._label(key), msg, None)
+        self._render_fresh()
 
     @staticmethod
-    def _detail_html(pr: dict, diff: str) -> str:
+    def _ci_html(pr: dict, ci: tuple[list[dict], str] | None) -> str:
+        e = html.escape
+        sha = str(pr.get("headRefOid") or "")[:7]
+        head = f"<h4>CI deste PR (Actions do HEAD {e(sha)})</h4>"
+        if ci is None:
+            return head + "<p>—</p>"
+        runs, err = ci
+        if err:
+            return head + f"<p style='color:#ff9a9b'>CI indisponível: {e(err)}</p>"
+        if not runs:
+            return head + f"<p>nenhuma execução do Actions para o HEAD {e(sha)}</p>"
+        rows = []
+        for r in runs:
+            state = str(r.get("conclusion") or r.get("status") or "")
+            color = {"success": "#3ddc84", "failure": "#ff6b6d", "cancelled": "#8a8f98"}.get(state, "#ffc233")
+            rows.append(f"<li>{e(str(r.get('workflowName', '')))} · <b style='color:{color}'>{e(state)}</b> · "
+                        f"{e(str(r.get('event', '')))} · {e(str(r.get('createdAt', '')))} · "
+                        f"<a href='{e(str(r.get('url', '')))}'>abrir</a></li>")
+        return head + f"<ul>{''.join(rows)}</ul>"
+
+    @classmethod
+    def _detail_html(cls, pr: dict, diff: str, ci: tuple[list[dict], str] | None = None) -> str:
         e = html.escape
         rd = str(pr.get("reviewDecision") or "")
         checks = "".join(f"<li>{e(str(c.get('name') or c.get('context') or '?'))}: "
@@ -201,13 +337,16 @@ class PrsTab(_GhTab):
                 f"<p>HEAD <code>{e(str(pr.get('headRefOid', '')))}</code> · {e(str(pr.get('headRefName', '')))} → "
                 f"{e(str(pr.get('baseRefName', '')))} · revisão <b style='color:{REVIEW_COLOR.get(rd, '#ccc')}'>{e(rd or '—')}</b>"
                 f" · merge {e(str(pr.get('mergeable', '')))}</p>"
-                f"<pre style='white-space:pre-wrap'>{e(str(pr.get('body') or '')[:4000])}</pre>"
+                + cls._ci_html(pr, ci) +
                 f"<h4>Checks</h4><ul>{checks or '<li>sem checks</li>'}</ul>"
+                f"<pre style='white-space:pre-wrap'>{e(str(pr.get('body') or '')[:4000])}</pre>"
                 f"<h4>Últimos comentários</h4>{comments or '<p>—</p>'}"
                 f"<h4>Diff</h4><pre style='font-family:Consolas,monospace;font-size:11px'>{e(diff[:20000])}</pre>")
 
     def local_checkout(self) -> Path | None:
         name = self.repo().split("/")[-1]
+        if not name:
+            return None
         p = self.apps_root / name
         return p.resolve() if (p / ".git").exists() else None
 
