@@ -10,7 +10,9 @@ set_config_option, config_options, modes), para o Chat conversar com provedor na
 - Trocar modelo ou esforco cria uma sessao nova no adaptador com o pedido; vale o que ela aceitar. Os turnos
   anteriores ficam na sessao antiga (o modelo novo nao os recebe) e o Chat avisa isso (`config_opens_new_session`);
   continuidade entre modelos e trabalho da F3.
-- Sem modos de permissao: o provedor local nao executa ferramentas (tool_calls UNSUPPORTED), `set_mode` recusa.
+- Sem modos de permissao (`set_mode` recusa). Ferramenta so existe no perfil "Executor local (amostra)": o adaptador
+  recebe o `on_permission` do Chat (o mesmo canal do ACP: PermissionCard, Permission Inbox, broker) e os eventos
+  "tool_call"/"tool_update" viram `tool_call`/`tool_call_update` (o ToolCard do Chat mostra o resultado do MOTOR).
 """
 from __future__ import annotations
 
@@ -31,8 +33,11 @@ class ProviderClient:
     config_opens_new_session = True
 
     def __init__(self, adapter: ProviderAdapter, *, on_update: Callable[[Update], None] | None = None,
-                 on_exit: Callable[[int | None], None] | None = None, **_ignored: Any) -> None:
+                 on_exit: Callable[[int | None], None] | None = None, on_permission: Callable | None = None,
+                 **_ignored: Any) -> None:
         self.adapter = adapter
+        if on_permission is not None and hasattr(adapter, "on_permission"):  # so adaptador com executor usa
+            adapter.on_permission = on_permission
         self.on_update = on_update
         self.on_exit = on_exit
         self.session_id: str | None = None
@@ -99,7 +104,7 @@ class ProviderClient:
 
     def set_mode(self, mode_id: str) -> cf.Future:
         f: cf.Future = cf.Future()
-        f.set_exception(AcpError("RPC", "este provedor nao tem modos de permissao (nao executa ferramentas)"))
+        f.set_exception(AcpError("RPC", "este provedor nao tem modos de permissao (ferramenta so no perfil Executor local, sempre com permissao por pedido)"))
         return f
 
     # ------------------------------------------------------------------------------------------------ conversa
@@ -112,6 +117,10 @@ class ProviderClient:
         def emit(ev: AgentEvent) -> None:
             if ev.kind == "usage" and self.on_update is not None:            # F6: snapshot com estado por campo
                 self.on_update(Update("usage_snapshot", sid, {"snapshot": dict(ev.data)}))
+                return
+            if ev.kind in ("tool_call", "tool_update") and self.on_update is not None:
+                kind = "tool_call" if ev.kind == "tool_call" else "tool_call_update"
+                self.on_update(Update(kind, sid, dict(ev.data)))
                 return
             kind = {"text": "agent_message_chunk", "thought": "agent_thought_chunk"}.get(ev.kind)
             if kind and self.on_update is not None:
