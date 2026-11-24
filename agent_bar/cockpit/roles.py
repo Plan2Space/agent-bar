@@ -16,11 +16,12 @@ from __future__ import annotations
 import re
 from collections.abc import Iterable, Sequence
 
+from agent_bar.cockpit.health import EXECUTOR_KEYS   # uma fonte só: quem executa ferramentas (Claude ACP)
+
 CONVERSA = "Conversa"
 EXECUTOR_LOCAL = "Executor local (amostra)"
 EXECUTOR_CLAUDE = "Executor Claude"
 ACP_OTHER = "Agente ACP"
-EXECUTOR_KEYS = frozenset({"claude"})
 
 
 def role_of(profile) -> str:
