@@ -214,3 +214,21 @@ def test_each_turn_gets_a_fresh_studio_turn_id_even_after_a_restart(server):
         seen.append((ctx.session_id, ctx.turn, ctx.turn_id))
         a.disconnect()
     assert seen[0][:2] == seen[1][:2] and seen[0][2] != seen[1][2] and len(seen[0][2]) >= 16
+
+
+class HostWithFinal(Host):
+    def final_text(self, results):
+        return "Studio: " + "; ".join(f"{r['status']} {r['run_id']}" for r in results)
+
+
+def test_executor_that_writes_the_final_text_skips_the_model_summary(server):
+    host = HostWithFinal()
+    a = make(server, host)
+    server.tool_script = {"calls": [call()]}
+    sid, res, events = ask(a)
+    assert res.stop_reason == "end_turn" and len(chats(server)) == 1             # nenhum resumo pedido ao modelo
+    assert "".join(e.text for e in events if e.kind == "text") == "Studio: completed lx-1"
+    roles = [m["role"] for m in a._history[sid]]
+    assert roles == ["user", "assistant", "tool", "assistant"]                 # o resultado fica para o proximo turno
+    assert a._history[sid][-1]["content"] == "Studio: completed lx-1"
+    a.disconnect()

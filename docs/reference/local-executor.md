@@ -13,7 +13,10 @@ Um perfil do Chat, **Executor local (amostra)**, ao lado de **Ollama (local)** (
 3. **Permitir uma vez** roda `python -m p2s_engine.run` do motor `sketchup-mcp-next` (o mesmo `build_room` do MCP
    `p2s-engine`): SketchUp 2026 constrói, salva, fecha o próprio PID, reabre e o inspetor mede;
 4. o cartão da ferramenta mostra o que o MOTOR gravou: `run_id`, caminho e SHA256 do `.skp`, veredito da inspeção do
-   arquivo reaberto, PIDs do SketchUp. Veredito visual fica PENDENTE (humano).
+   arquivo reaberto, PIDs do SketchUp. Veredito visual fica PENDENTE (humano);
+5. a frase final do turno é escrita pelo Studio a partir desse resultado ("Resultado do motor (escrito pelo Studio, não
+   pelo modelo)"), não pelo modelo: no ensaio real o llama3.1:8b resumiu falha como sucesso. O resultado fica no
+   histórico como papel `tool`, e o modelo o lê nos turnos seguintes.
 
 Recusar, fechar ou deixar vencer = zero chamada ao motor. Um pedido = no máximo um run (registro em
 `<saída>/_studio/requests.sqlite`; prazo vencido = "desconhecido", reconciliado pelo `run_id`, nunca re-executado).

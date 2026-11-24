@@ -351,8 +351,17 @@ class OllamaAdapter(ProviderAdapter):
         turn_msgs: list[dict] = [{"role": "assistant", "content": text}]
         if self.tool_host is not None and raw_calls:
             assistant = {"role": "assistant", "content": text, "tool_calls": raw_calls}
-            tool_msgs = self._run_tools(sid, run, body, raw_calls, on_event)
+            tool_msgs, results = self._run_tools(sid, run, body, raw_calls, on_event)
             turn_msgs = [assistant, *tool_msgs]
+            final = getattr(self.tool_host, "final_text", None)
+            if final is not None:                                             # o Studio escreve o desfecho (motor), nao o modelo
+                text2 = final(results)
+                on_event(AgentEvent("text", text2))
+                turn_msgs.append({"role": "assistant", "content": text2})
+                self._remember(sid, messages, turn_msgs)
+                rec = self._sessions.get(sid) or {}
+                return PromptResult("cancelled" if run["cancel"].is_set() else "end_turn", str(confirmed),
+                                    rec.get("effort_accepted"))
             follow = {k: v for k, v in body.items() if k != "tools"}             # 1 rodada de ferramenta por turno
             follow["messages"] = [*body["messages"], assistant, *tool_msgs]
             once = None if run["cancel"].is_set() else self._stream_once(run, follow, on_event)
@@ -378,8 +387,9 @@ class OllamaAdapter(ProviderAdapter):
             if sid in self._history:                                         # so turno completo entra no historico
                 self._history[sid] = [*messages, *turn_msgs]
 
-    def _run_tools(self, sid: str, run: dict, body: dict, raw_calls: list, on_event) -> list[dict]:
-        """Valida as chamadas do turno e entrega as aceitas ao executor do Studio. Devolve as mensagens `tool`."""
+    def _run_tools(self, sid: str, run: dict, body: dict, raw_calls: list, on_event) -> tuple[list[dict], list[dict]]:
+        """Valida as chamadas do turno e entrega as aceitas ao executor do Studio. Devolve (mensagens `tool`,
+        resultados na ordem: recusas primeiro, depois as executadas)."""
         turn = self._turns.get(sid, 0)
         calls, refused = normalize_tool_calls(raw_calls, self.tool_host.names(), turn)
         model = str(body.get("model") or "")
@@ -389,9 +399,11 @@ class OllamaAdapter(ProviderAdapter):
                           on_permission=self.on_permission, cancel=run["cancel"],
                           emit=lambda kind, data: on_event(AgentEvent(kind, str(data.get("title") or ""), dict(data))))
         out: list[dict] = []
+        results: list[dict] = []
         for r in refused:
             self._emit_refusal(r, on_event)
-            out.append({"role": "tool", "tool_name": r.name, "content": json.dumps(refusal_result(r), ensure_ascii=False)})
+            results.append(refusal_result(r))
+            out.append({"role": "tool", "tool_name": r.name, "content": json.dumps(results[-1], ensure_ascii=False)})
         for c in calls:
             try:
                 res = self.tool_host.run(c, ctx)
@@ -403,10 +415,12 @@ class OllamaAdapter(ProviderAdapter):
             if res.get("status") == "completed" and self._tool_proof is None:
                 self._tool_proof = (f"tool_call executado: {model}@{(ctx.model_digest or '?')[:12]} -> {c.name} "
                                     f"(run {res.get('run_id')})")
+            results.append(res)
             view = getattr(self.tool_host, "model_view", None)                 # o modelo recebe o essencial
             shown = view(res) if view is not None else res
-            out.append({"role": "tool", "tool_name": c.name, "content": json.dumps(shown, ensure_ascii=False, default=str)})
-        return out
+            content = shown if isinstance(shown, str) else json.dumps(shown, ensure_ascii=False, default=str)
+            out.append({"role": "tool", "tool_name": c.name, "content": content})
+        return out, results
 
     @staticmethod
     def _emit_refusal(r: RefusedCall, on_event) -> None:

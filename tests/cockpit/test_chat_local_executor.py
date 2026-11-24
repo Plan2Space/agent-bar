@@ -57,8 +57,8 @@ def server():
         yield s
 
 
-def build_view(server, tmp_path, mode="ok"):
-    os.environ["AGENT_BAR_COCKPIT_DATA"] = str(tmp_path / "data")
+def build_view(server, tmp_path, monkeypatch, mode="ok"):
+    monkeypatch.setenv("AGENT_BAR_COCKPIT_DATA", str(tmp_path / "data"))   # nao vaza para outros testes
     (tmp_path / "ws").mkdir()
     root = engine_root(tmp_path)
     engine = FakeEngine(mode)
@@ -102,8 +102,8 @@ def tool_card(view):
     return cards[0]
 
 
-def test_allow_once_runs_the_engine_once_and_the_chat_shows_the_engine_result(server, tmp_path, cleanup):
-    view = build_view(server, tmp_path)
+def test_allow_once_runs_the_engine_once_and_the_chat_shows_the_engine_result(server, tmp_path, cleanup, monkeypatch):
+    view = build_view(server, tmp_path, monkeypatch)
     cleanup.append(view)
     eid = ask_and_answer(view, "allow_once")
     assert len(view.engine.calls) == 1
@@ -114,12 +114,13 @@ def test_allow_once_runs_the_engine_once_and_the_chat_shows_the_engine_result(se
     assert "veredito visual: PENDENTE" in body
     entry = view.inbox.get(eid)
     assert entry.status == "ALLOWED" and entry.decision == "allow_once" and entry.result == "completed"
-    follow = [b for p, b in server.requests if p == "/api/chat"][-1]
-    assert follow["messages"][-1]["role"] == "tool" and "tools" not in follow
+    assert len([b for p, b in server.requests if p == "/api/chat"]) == 1         # desfecho escrito pelo Studio
+    agent = [m for m in view.chat.messages if m["role"] == "agent"][-1]["text"]
+    assert agent.startswith("Resultado do motor (escrito pelo Studio") and "SUCESSO" in agent and "run_id: lx-" in agent
 
 
-def test_deny_runs_nothing_and_the_card_is_failed(server, tmp_path, cleanup):
-    view = build_view(server, tmp_path)
+def test_deny_runs_nothing_and_the_card_is_failed(server, tmp_path, cleanup, monkeypatch):
+    view = build_view(server, tmp_path, monkeypatch)
     cleanup.append(view)
     eid = ask_and_answer(view, "deny")
     assert view.engine.calls == []
@@ -128,18 +129,20 @@ def test_deny_runs_nothing_and_the_card_is_failed(server, tmp_path, cleanup):
     assert view.inbox.get(eid).status == "DENIED"
 
 
-def test_an_engine_failure_is_never_shown_as_ready(server, tmp_path, cleanup):
-    view = build_view(server, tmp_path, mode="inspection_fail")
+def test_an_engine_failure_is_never_shown_as_ready(server, tmp_path, cleanup, monkeypatch):
+    view = build_view(server, tmp_path, monkeypatch, mode="inspection_fail")
     cleanup.append(view)
     ask_and_answer(view, "allow_once")
     card = tool_card(view)
     assert card.state["status"] == "failed"
     assert "pronto" not in card.body.toPlainText() and "INSPECTION_FAILED" in card.body.toPlainText()
+    agent = [m for m in view.chat.messages if m["role"] == "agent"][-1]["text"]
+    assert "FALHOU" in agent and "SUCESSO" not in agent and "INSPECTION_FAILED" in agent
 
 
-def test_health_does_not_say_the_local_executor_has_no_tools(server, tmp_path, cleanup):
+def test_health_does_not_say_the_local_executor_has_no_tools(server, tmp_path, cleanup, monkeypatch):
     from agent_bar.cockpit.health import NOT_EXECUTOR, executor_row
-    view = build_view(server, tmp_path)
+    view = build_view(server, tmp_path, monkeypatch)
     cleanup.append(view)
     ask_and_answer(view, "allow_once")
     row = executor_row(view)

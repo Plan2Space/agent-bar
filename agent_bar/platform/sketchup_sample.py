@@ -237,18 +237,44 @@ class SketchUpSampleTool:
         return ("Voce e o Executor local (amostra) do P2S Studio. Voce tem UMA ferramenta, build_room_sample: o Studio a "
                 "executa de verdade no SketchUp 2026, depois da permissao do usuario, e devolve o resultado do motor. "
                 "Para pedido de amostra de comodo, chame a ferramenta (fixture_ref room_001, salvo pedido de outra da "
-                "lista). Quando receber o resultado, responda em portugues, curto: estado, run_id, caminho do .skp e "
-                "veredito da inspecao, exatamente como vieram. Se o estado nao for completed, diga que NAO ficou pronto "
-                "e cite o erro. Nunca invente valores nem diga que nao consegue usar o SketchUp.")
+                "lista). O desfecho de cada execucao e escrito pelo Studio a partir do motor.")
 
     @staticmethod
-    def model_view(result: dict) -> dict:
-        """O que volta ao modelo (papel `tool`): o essencial, para ele nao se perder num JSON grande."""
+    def model_text(result: dict) -> str:
+        """O que volta ao modelo (papel `tool`): o resumo factual do motor em frases curtas, com o desfecho na 1a linha
+        (o llama3.1:8b inverteu o sentido de um JSON `completed` no ensaio real 5)."""
+        st = result.get("status")
+        head = {"completed": "SUCESSO: a amostra foi criada no SketchUp 2026; o .skp foi salvo, reaberto e inspecionado.",
+                "unknown": "RESULTADO AINDA DESCONHECIDO: o motor nao terminou; nao ha arquivo confirmado.",
+                "refused": "NAO EXECUTADO: o pedido foi recusado antes de abrir o SketchUp."}.get(
+            str(st), "FALHOU: a amostra nao ficou pronta.")
         insp = result.get("inspection_result") or {}
-        return {k: v for k, v in {
-            "status": result.get("status"), "run_id": result.get("run_id"), "skp": result.get("skp_abs"),
-            "skp_sha256": result.get("skp_sha256"), "inspecao": insp.get("verdict"), "reaberto": insp.get("reopened"),
-            "veredito_visual": insp.get("visual_verdict"), "erro": result.get("error")}.items() if v is not None}
+        lines = [head]
+        if result.get("run_id"):
+            lines.append(f"run_id: {result['run_id']}")
+        if result.get("skp_abs"):
+            lines.append(f"arquivo: {result['skp_abs']} (sha256 {result.get('skp_sha256')})")
+        if insp:
+            lines.append(f"inspecao do arquivo reaberto: {insp.get('verdict')}; veredito visual: pendente (humano)")
+        if result.get("error"):
+            lines.append(f"erro: {result['error'].get('code')} - {result['error'].get('message')}")
+        return "\n".join(lines)
+
+    def model_view(self, result: dict) -> str:
+        """O que fica no historico como papel `tool` (o modelo le no proximo turno): o mesmo resumo factual."""
+        return self.model_text(result)
+
+    def final_text(self, results: list[dict]) -> str:
+        """A frase final do turno vem do Studio, a partir do que o motor gravou: no ensaio real o llama3.1:8b inverteu
+        o sentido de resultados (falha resumida como sucesso), e a SPEC §5 proibe o modelo converter falha em sucesso."""
+        parts = []
+        for r in results:
+            if r.get("request_id") or r.get("run_id"):
+                parts.append(self.model_text(r))
+            else:                                                            # recusa antes do executor (inventada etc.)
+                err = r.get("error") or {}
+                parts.append(f"NAO EXECUTADO: {err.get('code')} - {err.get('message')}")
+        return "Resultado do motor (escrito pelo Studio, nao pelo modelo):\n" + "\n\n".join(parts)
 
     def preflight(self) -> tuple[bool, str]:
         """Pronto para a amostra? (motor com venv, pacote do motor, fixtures permitidas). Sem abrir o SketchUp."""
@@ -302,7 +328,7 @@ class SketchUpSampleTool:
             "toolCallId": call.call_id, "kind": "execute", "status": "pending",
             # o titulo aparece inteiro no cartao: modelo, acao e destino; o cartao corta o rawInput em 300 caracteres,
             # entao a ordem poe primeiro o que a permissao precisa mostrar (ferramenta, fixture+versao, workspace, impacto)
-            "title": f"Executor local (amostra) · {ctx.model_id}: construir {ref} no SketchUp 2026 → {run_dir}",
+            "title": f"Executor local (amostra) · {ctx.model_id}: construir {ref} no SketchUp 2026 -> {run_dir}",
             "rawInput": {
                 "tool": TOOL_NAME, "fixture_ref": ref, "expected_fixture_version": fixture_hash,
                 "workspace_id": str(self.engine_root),
