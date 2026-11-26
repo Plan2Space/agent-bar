@@ -117,6 +117,10 @@ class NotificationsArea(QWidget):
             self.permissions.refresh()
 
     def update_counts(self) -> None:
+        """Títulos com a contagem e, se a seção aberta é uma lista que a coleta muda, a lista também (revisão do
+        #120: o contador não pode divergir do que está na tela)."""
+        if self.sections.currentWidget() is self.needs:
+            self.needs.refresh()
         needs = len(self.needs.items())
         pending = len(self.permissions.inbox.pending())
         self.sections.setTabText(1, f"Precisa de você ({needs})" if needs else "Precisa de você")

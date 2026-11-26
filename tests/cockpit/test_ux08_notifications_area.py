@@ -138,3 +138,25 @@ def test_an_open_permission_shows_in_notifications_with_allow_and_deny_and_the_d
     win.notifications_area.update_counts()
     assert not nt.allow_btn.isVisibleTo(nt)
     assert win.notifications_area.sections.tabText(2) == "Permissões"
+
+
+def test_the_open_needs_you_list_follows_the_collection_not_only_its_counter(win):
+    """CHANGES_REQUESTED do fmmodesto (#120 @ 2e917d7): com a seção aberta, a coleta que adiciona ou resolve um PR
+    mudava o contador do título, mas não a lista visível. A cada atualização da área, a lista aberta é relida."""
+    def publish(n):
+        return win.center.publish("HUMAN_APPROVAL", f"PR precisa de você: Plan2Space/agent-bar#{n}", body="HIGH",
+                                  state="ACTION_REQUIRED", source="human-inbox",
+                                  link=f"https://github.com/Plan2Space/agent-bar/pull/{n}",
+                                  dedupe_key=f"human:Plan2Space/agent-bar#{n}@" + "a" * 40)
+    first = publish(7)
+    win.show_page(win.needs)
+    pump()
+    rows = lambda: [win.needs.tree.topLevelItem(i).text(1) for i in range(win.needs.tree.topLevelItemCount())]  # noqa: E731
+    assert rows() == ["PR precisa de você: Plan2Space/agent-bar#7"]
+    publish(8)                                                                      # a coleta trouxe mais um
+    win.notifications_area.update_counts()                                          # o timer da área
+    assert len(rows()) == 2 and win.notifications_area.sections.tabText(1) == "Precisa de você (2)"
+    win.center.resolve(first.id if hasattr(first, "id") else first, "RESOLVED")     # e resolveu o primeiro
+    win.notifications_area.update_counts()
+    assert rows() == ["PR precisa de você: Plan2Space/agent-bar#8"]
+    assert win.notifications_area.sections.tabText(1) == "Precisa de você (1)"
