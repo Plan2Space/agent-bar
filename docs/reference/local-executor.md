@@ -80,6 +80,9 @@ amostra, o perfil publica uma segunda ferramenta, `render_room_sample(run_id, ca
   `.skp`, render_spec, pasta e slot são do Studio;
 - sem slot concedido (`P2S_LOCAL_EXECUTOR_RENDER_SLOT`, dado pelo coordenador) = `SLOT_NOT_GRANTED`, sem perguntar nem
   abrir nada; a saída do executor precisa ficar sob `<motor>/runs` (raiz que o render do motor aceita);
+- o slot é uma variável de ambiente lida a cada chamada: qualquer valor não vazio vale como "concedido" enquanto o
+  processo do Studio viver. A auditoria é o próprio valor, mostrado no cartão de permissão (`rawInput.slot`) e gravado
+  pelo motor em `render_manifest.request.slot`; quem concede e quando fica no canal do coordenador, não no Studio;
 - mesma permissão, mesmo lock e mesma recusa com SketchUp aberto do build (um motor por vez, build ou render);
   o `.skp` é re-conferido pelo sha256 do build antes e depois da permissão;
 - chama `python -m p2s_engine.render <spec> <skp> --out-dir --run-id --cameras --slot --request-id --parent-run-id

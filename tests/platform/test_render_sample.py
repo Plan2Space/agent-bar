@@ -70,13 +70,19 @@ class FakeEngine:
             data = b"" if self.render_mode == "empty_png" else b"PNG-" + c.encode()
             png = run_dir / "renders" / f"dia_{c}.png"
             png.write_bytes(data)
-            outputs.append({"key": f"dia_{c}", "png": f"renders/{png.name}",
+            rel = f"renders/{png.name}"
+            if self.render_mode == "png_outside":                          # quadro apontando para fora do run
+                outside = run_dir.parent / f"fora_{c}.png"
+                outside.write_bytes(data)
+                rel = f"../{outside.name}"
+            outputs.append({"key": f"dia_{c}", "png": rel,
                             "png_sha256": "0" * 64 if self.render_mode == "png_hash" else sha(data)})
         man = {"run_id": run_dir.name, "status": "OK" if self.render_mode != "blocked" else "BLOCKED",
                "finished_at": "x", "verdict": "FAIL" if self.render_mode == "fail" else
                (None if self.render_mode == "blocked" else "PASS"),
                "engine": {"commit": "e" * 40},
-               "input_skp": {"sha256": sha(b"SKP")}, "outputs": outputs,
+               "input_skp": {"sha256": "1" * 64 if self.render_mode == "skp_mismatch" else sha(b"SKP")},
+               "outputs": outputs,
                "request": {"cameras": cams, "slot": argv[argv.index("--slot") + 1]},
                "error": "VRAY_BUSY: vray.exe" if self.render_mode == "blocked" else None}
         (run_dir / "render_manifest.json").write_text(json.dumps(man), encoding="utf-8")
@@ -92,18 +98,20 @@ def engine_root(tmp_path):
     for rel, body in (("tests/fixtures/rooms/room_001.json", {"room_id": "room_001"}),
                       ("tests/fixtures/rooms/room_alt_5x3.json", {"room_id": "room_alt_5x3"}),
                       (E3A, {"furnishing_id": "plan_alt_5x3_e3a"}),
-                      (SPEC, {"render_id": "x", "cameras": [{"name": c} for c in CAMS]})):
+                      (SPEC, {"render_id": "x", "cameras": [{"name": c} for c in CAMS + ["amostra_topo"]]})):
         (root / rel).parent.mkdir(parents=True, exist_ok=True)
         (root / rel).write_text(json.dumps(body), encoding="utf-8")
     return root
 
 
 class Perm:
-    def __init__(self, choice="allow_once"):
-        self.choice, self.requests = choice, []
+    def __init__(self, choice="allow_once", on_ask=None):
+        self.choice, self.requests, self.on_ask = choice, [], on_ask
 
     def __call__(self, req, respond):
         self.requests.append(req)
+        if self.on_ask is not None:
+            self.on_ask(req)
         respond(self.choice)
 
 
@@ -282,3 +290,84 @@ def test_the_render_card_does_not_say_the_build_text(engine_root, tmp_path):
     text = summary(res)
     assert ".skp salvo" not in text and "render gravado e conferido" in text
     assert ".skp salvo, reaberto e inspecionado" in summary(b)                 # o do build continua
+
+
+
+# ---------------------------------------------- as 7 protecoes que a revisao (fmmodesto, #142) achou sem teste
+def test_a_png_outside_the_render_run_is_never_accepted(engine_root, tmp_path):            # (a)
+    build, render = tools(engine_root, tmp_path, FakeEngine(render_mode="png_outside"))
+    b = built(build)
+    res = render.run(call(RENDER_TOOL, {"run_id": b["run_id"], "cameras": CAMS[:1]}), ctx(Perm(), "r1"))
+    assert res["status"] == "failed" and res["error"]["code"] == "IMAGE_MISSING"
+
+
+def test_a_render_waits_for_the_same_engine_lock_as_the_build(engine_root, tmp_path):      # (b)
+    from agent_bar.platform.sketchup_sample import _ENGINE_LOCK
+    engine = FakeEngine()
+    build, render = tools(engine_root, tmp_path, engine)
+    b = built(build)
+    n = len(engine.calls)
+    assert _ENGINE_LOCK.acquire(blocking=False)                              # um build "em curso" nesta aba
+    try:
+        res = render.run(call(RENDER_TOOL, {"run_id": b["run_id"], "cameras": CAMS[:1]}), ctx(Perm(), "r1"))
+    finally:
+        _ENGINE_LOCK.release()
+    assert res["error"]["code"] == "BUSY" and len(engine.calls) == n
+
+
+def test_a_skp_changed_while_the_permission_was_open_is_not_rendered(engine_root, tmp_path):   # (c)
+    engine = FakeEngine()
+    build, render = tools(engine_root, tmp_path, engine)
+    b = built(build)
+    n = len(engine.calls)
+    perm = Perm(on_ask=lambda _req: Path(b["skp_abs"]).write_bytes(b"TROCADO"))
+    res = render.run(call(RENDER_TOOL, {"run_id": b["run_id"], "cameras": CAMS[:1]}), ctx(perm, "r1"))
+    assert len(perm.requests) == 1                                           # passou do 1o check, pediu permissao
+    assert res["error"]["code"] == "SKP_CHANGED" and len(engine.calls) == n
+
+
+def test_three_cameras_of_the_spec_are_refused(engine_root, tmp_path):                     # (d)
+    engine = FakeEngine()
+    build, render = tools(engine_root, tmp_path, engine)
+    b = built(build)
+    n, perm = len(engine.calls), Perm()
+    res = render.run(call(RENDER_TOOL, {"run_id": b["run_id"], "cameras": CAMS + ["amostra_topo"]}), ctx(perm, "r1"))
+    assert res["error"]["code"] == "CAMERA_NOT_ALLOWED" and perm.requests == [] and len(engine.calls) == n
+
+
+def test_the_same_camera_twice_is_refused(engine_root, tmp_path):                          # (e)
+    engine = FakeEngine()
+    build, render = tools(engine_root, tmp_path, engine)
+    b = built(build)
+    n, perm = len(engine.calls), Perm()
+    res = render.run(call(RENDER_TOOL, {"run_id": b["run_id"], "cameras": CAMS[:1] * 2}), ctx(perm, "r1"))
+    assert res["error"]["code"] == "CAMERA_NOT_ALLOWED" and perm.requests == [] and len(engine.calls) == n
+
+
+def test_a_completed_render_is_not_renderable_as_if_it_were_a_build(engine_root, tmp_path):   # (f)
+    import json as _json
+    engine = FakeEngine()
+    build, render = tools(engine_root, tmp_path, engine)
+    b = built(build)
+    fake = "lx-20261126T000000Z-render-como-build"                           # passa no padrao de nome de build
+    (build.out_root / fake).mkdir(parents=True)
+    skp = build.out_root / fake / "x.skp"
+    skp.write_bytes(b"SKP")
+    build.registry.insert({"request_id": "rq-render-velho", "session_id": "s", "turn": 1, "call_digest": "d",
+                           "fixture_ref": "plan_alt_5x3_e3a", "fixture_hash": sha(b"SKP"), "run_id": fake,
+                           "status": "completed", "result": {"tool": RENDER_TOOL, "status": "completed",
+                                                             "skp_abs": str(skp), "skp_sha256": sha(b"SKP")}},
+                          now=1.0)
+    build.registry.update("rq-render-velho", "completed", _json.loads(_json.dumps(
+        {"tool": RENDER_TOOL, "status": "completed", "skp_abs": str(skp), "skp_sha256": sha(b"SKP")})), 1.0)
+    n, perm = len(engine.calls), Perm()
+    res = render.run(call(RENDER_TOOL, {"run_id": fake, "cameras": CAMS[:1]}), ctx(perm, "r1"))
+    assert res["error"]["code"] == "RUN_NOT_RENDERABLE" and perm.requests == [] and len(engine.calls) == n
+    assert b["status"] == "completed"
+
+
+def test_an_engine_that_rendered_another_skp_is_failed(engine_root, tmp_path):            # (g)
+    build, render = tools(engine_root, tmp_path, FakeEngine(render_mode="skp_mismatch"))
+    b = built(build)
+    res = render.run(call(RENDER_TOOL, {"run_id": b["run_id"], "cameras": CAMS[:1]}), ctx(Perm(), "r1"))
+    assert res["status"] == "failed" and res["error"]["code"] == "SKP_HASH_MISMATCH"
