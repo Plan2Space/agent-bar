@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import base64
 import concurrent.futures as cf
+import hashlib
 import itertools
 import json
 import logging
@@ -201,6 +202,12 @@ class OllamaAdapter(ProviderAdapter):
         except (urllib.error.URLError, OSError, ValueError) as exc:
             raise ProviderUnavailable(f"servidor local nao respondeu em {self.endpoint}") from exc
         self.version = str(data.get("version") or "") or None
+        self._models, self._digests = self._read_models(tags)
+        self._verified_at = datetime.now(UTC).isoformat(timespec="seconds")
+        self._connected = True
+
+    def _read_models(self, tags: dict) -> tuple[dict[str, dict], dict[str, str]]:
+        """Modelos de conversa e digests a partir do /api/tags + /api/show (nada fixo no codigo)."""
         models: dict[str, dict] = {}
         digests: dict[str, str] = {}
         for m in tags.get("models") or []:
@@ -226,10 +233,37 @@ class OllamaAdapter(ProviderAdapter):
                 "effort_levels": effort_levels_from_show(show), "limits": {"context_tokens": ctx},
                 "source": "GET /api/tags + POST /api/show",
             }
-        self._models = models
-        self._digests = {k: v for k, v in digests.items() if k in models}
-        self._verified_at = datetime.now(UTC).isoformat(timespec="seconds")
-        self._connected = True
+        return models, {k: v for k, v in digests.items() if k in models}
+
+    def refresh_models(self) -> dict:
+        """LAB-10: rele o servidor sem desconectar. Devolve o que mudou: modelos novos, removidos e com digest novo
+        (mesmo nome, outro blob: a prova de capacidade do digest antigo nao passa para o novo)."""
+        self._need()
+        try:
+            tags = self._get("/api/tags")
+        except (urllib.error.URLError, OSError, ValueError) as exc:
+            raise ProviderUnavailable(f"servidor local nao respondeu em {self.endpoint}") from exc
+        models, digests = self._read_models(tags)
+        with self._lock:
+            old_models, old_digests = self._models, self._digests
+            self._models, self._digests = models, digests
+            self._verified_at = datetime.now(UTC).isoformat(timespec="seconds")
+        return {"added": sorted(set(models) - set(old_models)), "removed": sorted(set(old_models) - set(models)),
+                "digest_changed": sorted(k for k in models if k in old_digests and digests.get(k) != old_digests[k])}
+
+    def model_identity(self, model_id: str) -> dict:
+        """LAB-10: identidade de UM modelo — provedor, adaptador, id, digest, o que o servidor ANUNCIA e o que foi
+        COMPROVADO neste Studio. `model_version` fica None: o Ollama so da a tag (dentro do id) e o digest."""
+        m = self._models.get(model_id)
+        if m is None:
+            raise ModelRejected(model_id)
+        return {"schema": "p2s.model_identity.v1", "provider": "ollama", "adapter": self.adapter_id,
+                "provider_version": self.version, "model_id": model_id, "model_version": None,
+                "model_digest": self._digests.get(model_id),
+                "announced": {"tools": m["tools"], "images": m["images"], "thinking": bool(m["effort_levels"]),
+                              "context_tokens": (m.get("limits") or {}).get("context_tokens"),
+                              "source": m["source"]},
+                "proven": {"tool_calls": self.tool_calls_for(model_id)}, "verified_at": self._verified_at}
 
     def disconnect(self) -> None:
         with self._lock:
@@ -367,6 +401,15 @@ class OllamaAdapter(ProviderAdapter):
         if once is None:
             return PromptResult("cancelled")
         confirmed, text, raw_calls = once
+        if self.tool_host is not None and raw_calls and confirmed != str(body.get("model") or ""):
+            # o servidor diz ter respondido com OUTRO modelo: nenhuma ferramenta roda sob o nome pedido (LAB-22)
+            for i, raw in enumerate(raw_calls):
+                fn = raw.get("function") if isinstance(raw, dict) else None
+                cid = str(raw.get("id") or f"mismatch-{i}") if isinstance(raw, dict) else f"mismatch-{i}"
+                self._emit_refusal(RefusedCall(cid, str(fn.get("name") or "") if isinstance(fn, dict) else "",
+                                               "MODEL_MISMATCH", f"pedido a {body.get('model')!r}, respondido por "
+                                                                 f"{confirmed!r}: nada executado"), on_event)
+            raw_calls = []
         turn_msgs: list[dict] = [{"role": "assistant", "content": text}]
         if self.tool_host is not None and raw_calls:
             assistant = {"role": "assistant", "content": text, "tool_calls": raw_calls}
@@ -416,6 +459,10 @@ class OllamaAdapter(ProviderAdapter):
                           model_id=model, model_digest=self._digests.get(model),
                           provider_version=self.version, workspace=(self._sessions.get(sid) or {}).get("workspace"),
                           on_permission=self.on_permission, cancel=run["cancel"],
+                          provider="ollama", adapter=self.adapter_id, prompt_sha256=self._prompt_hash(body),
+                          inference={"think": body.get("think"), "num_ctx": (body.get("options") or {}).get("num_ctx"),
+                                     "temperature": (body.get("options") or {}).get("temperature"),
+                                     "seed": (body.get("options") or {}).get("seed")},
                           emit=lambda kind, data: on_event(AgentEvent(kind, str(data.get("title") or ""), dict(data))))
         out: list[dict] = []
         results: list[dict] = []
@@ -445,6 +492,12 @@ class OllamaAdapter(ProviderAdapter):
             content = shown if isinstance(shown, str) else json.dumps(shown, ensure_ascii=False, default=str)
             out.append({"role": "tool", "tool_name": c.name, "content": content})
         return out, results
+
+    @staticmethod
+    def _prompt_hash(body: dict) -> str | None:
+        """sha256 do ultimo texto do usuario do envio (o prompt em si nao vai para a proveniencia)."""
+        text = next((m.get("content") for m in reversed(body.get("messages") or []) if m.get("role") == "user"), None)
+        return hashlib.sha256(str(text).encode("utf-8")).hexdigest() if text is not None else None
 
     @staticmethod
     def _emit_refusal(r: RefusedCall, on_event) -> None:

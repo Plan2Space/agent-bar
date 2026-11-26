@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
 from agent_bar.cockpit import acp_mcp
 from agent_bar.cockpit import permission_mode as PM
 from agent_bar.cockpit import profiles as prof
+from agent_bar.cockpit import roles as R
 from agent_bar.cockpit.acp import (
     AcpClient,
     AsyncRuntime,
@@ -42,6 +43,7 @@ from agent_bar.cockpit.permission_inbox import InboxClosed, PermissionInbox
 from agent_bar.cockpit.store import Chat, ChatStore, data_dir
 from agent_bar.cockpit.ui.composer import Composer, load_enter_sends, save_enter_sends
 from agent_bar.cockpit.ui.widgets import (
+    ExecutorOffer,
     Notice,
     PermissionCard,
     PlanCard,
@@ -217,7 +219,7 @@ class ChatView(QWidget):
         self.agent_box = QComboBox()
         for p in self.profiles:
             ok, why = p.available()
-            self.agent_box.addItem(p.label if ok else f"{p.label} — indisponível: {why}", p.key)
+            self.agent_box.addItem(R.label(p) if ok else f"{R.role_of(p)} · {p.label} — indisponível: {why}", p.key)
             if not ok:
                 self.agent_box.model().item(self.agent_box.count() - 1).setEnabled(False)
         first_ok = next((i for i, p in enumerate(self.profiles) if p.available()[0]), 0)
@@ -558,6 +560,8 @@ class ChatView(QWidget):
         if self.no_safe_mode:
             self._add(Notice("envio bloqueado: o agente não anuncia um modo que peça permissão", "#ff6b6b"))
             return
+        if self._refuse_execution_in_conversation(text):
+            return
         self._draft = text                                                   # volta para a caixa se o envio falhar
         self.input.clear()
         self.empty.setVisible(False)
@@ -579,6 +583,33 @@ class ChatView(QWidget):
             self.ensure_client()
             return
         self._prompt(full)
+
+    def _refuse_execution_in_conversation(self, text: str) -> bool:
+        """UX-11: pedido de execução (SketchUp, build, render) numa Conversa não vai ao modelo como se ele pudesse. A
+        recusa diz o motivo e oferece os Executores disponíveis; "Enviar só como conversa" é escolha explícita."""
+        p = self.profile()
+        if getattr(self, "_as_conversation", False) or R.role_of(p) != R.CONVERSA or not R.wants_execution(text):
+            return False
+        executors = [q for q in self.profiles if R.role_of(q) in (R.EXECUTOR_CLAUDE, R.EXECUTOR_LOCAL) and q.available()[0]]
+        self.input.setPlainText(text)                                        # o texto volta para a caixa
+        choices = [(f"Usar {R.role_of(q)}", lambda k=q.key: self._use_agent(k)) for q in executors]
+        choices.append(("Enviar só como conversa", lambda t=text: self._send_as_conversation(t)))
+        self._add(ExecutorOffer(R.refusal(p, executors), choices))
+        return True
+
+    def _use_agent(self, key: str) -> None:
+        text = self.input.toPlainText()
+        i = self.agent_box.findData(key)
+        if i >= 0:
+            self.agent_box.setCurrentIndex(i)                                # troca o agente; o envio continua manual
+        self.input.setPlainText(text)
+
+    def _send_as_conversation(self, text: str) -> None:
+        self._as_conversation = True
+        try:
+            self.send(text)
+        finally:
+            self._as_conversation = False
 
     def _prompt(self, text: str) -> None:
         assert self.client is not None

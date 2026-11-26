@@ -1,0 +1,176 @@
+"""UX-11 (P2S-STUDIO-UX-CONSOLIDATION-F0 §9; D-UX-4 emendada pela SPEC da PoC, es#81 §11): o Chat escolhe o agente
+pelo PAPEL, com as capacidades verificadas à vista: **Conversa** (Ollama genérico, sem ferramentas), **Executor local
+(amostra)** (uma ferramenta só: build_room_sample) e **Executor Claude** (Claude Code via ACP).
+
+Critério: Ollama aparece com "sem ferramentas"; pedir SketchUp nele → recusa com o motivo e a oferta do Executor, sem
+envio ao modelo como se pudesse. Nenhum texto afirma capacidade que o agente não tem (regra do coordenador: "Não resolva
+com system prompt que afirme capacidade inexistente")."""
+from __future__ import annotations
+
+import os
+import sys
+import time
+from pathlib import Path
+
+import pytest
+
+from agent_bar.cockpit import roles as R
+from agent_bar.cockpit.profiles import AgentProfile
+
+STUB = Path(__file__).with_name("fake_acp_agent.py")
+CLAUDE = AgentProfile("claude", "Claude Code (ACP)", ("claude-agent-acp",))
+OLLAMA = AgentProfile("ollama", "Ollama (local)", ("ollama",), adapter="ollama")
+LOCAL = AgentProfile("ollama-executor", "Executor local (amostra)", ("ollama",), adapter="ollama-executor")
+DEMO = AgentProfile("demo", "Demonstração (sem LLM)", ("python",), demo=True)
+OTHER = AgentProfile("stub", "Stub", ("python",))
+
+
+def test_each_profile_has_one_role():
+    assert [R.role_of(p) for p in (CLAUDE, OLLAMA, LOCAL, DEMO)] == [R.EXECUTOR_CLAUDE, R.CONVERSA, R.EXECUTOR_LOCAL,
+                                                                       R.CONVERSA]
+    assert R.role_of(OTHER) == R.ACP_OTHER                                         # agente ACP sem capacidade conferida
+
+
+def test_capabilities_say_only_what_was_verified():
+    assert R.capabilities(OLLAMA) == "sem ferramentas"
+    assert R.capabilities(DEMO) == "sem ferramentas (demonstração, sem LLM)"
+    assert R.capabilities(LOCAL) == "uma ferramenta: build_room_sample (amostra no SketchUp)"
+    assert R.capabilities(CLAUDE) == "ferramentas do Claude Code · MCP não conferido"
+    assert R.capabilities(CLAUDE, tools=["Read", "build_room"], mcp="p2s-engine conferido") == (
+        "ferramentas do Claude Code · usadas nesta sessão: 2 · MCP: p2s-engine conferido")
+    assert R.capabilities(OTHER) == "capacidades não conferidas"
+
+
+def test_the_selector_label_shows_role_name_and_capabilities():
+    assert R.label(OLLAMA) == "Conversa · Ollama (local) — sem ferramentas"
+    assert R.label(LOCAL).startswith("Executor local (amostra) · ")
+    assert R.label(CLAUDE).startswith("Executor Claude · Claude Code (ACP) — ")
+
+
+@pytest.mark.parametrize("text", ["abre o SketchUp e monta a suíte 01", "renderiza a cama de novo",
+                                  "gera o .skp da planta_74", "roda o build_room da suíte",
+                                  "executa o render_room com a câmera r2_canto", "constrói o cômodo no SketchUp"])
+def test_execution_requests_are_recognised(text):
+    assert R.wants_execution(text)
+
+
+@pytest.mark.parametrize("text", ["o que é o SketchUp?", "explica a diferença entre V-Ray e Enscape",
+                                  "resume o último PR", "qual a regra de folga ergonômica?",
+                                  "dá para abrir o SketchUp daqui?", "como eu renderizo a suíte 01?"])
+def test_questions_about_the_tools_are_conversation(text):
+    assert not R.wants_execution(text)
+
+
+def test_the_refusal_names_the_reason_and_offers_the_available_executors():
+    text = R.refusal(OLLAMA, [CLAUDE, LOCAL])
+    assert "Ollama (local)" in text and "sem ferramentas" in text and "não executa" in text
+    assert "Executor Claude" in text and "Executor local (amostra)" in text
+    assert "Nada foi enviado" in text
+
+
+# ---------------------------------------------------------------------------------------------- no Chat
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+
+@pytest.fixture
+def chat(tmp_path, monkeypatch):
+    pytest.importorskip("PySide6.QtWidgets")
+    from PySide6.QtWidgets import QApplication
+
+    from agent_bar.cockpit.store import ChatStore
+    from agent_bar.cockpit.ui.chat import ChatView
+    app = QApplication.instance() or QApplication([])
+    monkeypatch.setenv("AGENT_BAR_COCKPIT_DATA", str(tmp_path / "data"))
+    (tmp_path / "ws").mkdir()
+    sent: list = []
+
+    class Provider:                                                               # o "Ollama": registra o que receberia
+        def __init__(self, p, ws, **_kw):
+            self.p = p
+
+        def connect(self, _sid=None):
+            import concurrent.futures as cf
+            f = cf.Future()
+            f.set_result({"agent": {}, "session_id": "o-1", "modes": {}, "config_options": []})
+            return f
+
+        def prompt(self, text):
+            import concurrent.futures as cf
+            sent.append(text)
+            f = cf.Future()
+            f.set_result({"stopReason": "end_turn"})
+            return f
+
+        def close(self):
+            import concurrent.futures as cf
+            f = cf.Future()
+            f.set_result(None)
+            return f
+
+    stub = AgentProfile("claude", "Claude Code (ACP)", (sys.executable, str(STUB)))
+    ollama = AgentProfile("ollama", "Ollama (local)", ("python",), adapter="ollama")
+    v = ChatView(ChatStore(tmp_path / "data"), provider_factory=Provider,
+                 profiles_fn=lambda: [ollama, stub], workspaces_fn=lambda: [tmp_path / "ws"])
+    yield v, sent, app
+    v.shutdown()
+    v.deleteLater()
+
+
+def _pump(app, cond, timeout=10.0):
+    end = time.monotonic() + timeout
+    while time.monotonic() < end:
+        app.processEvents()
+        if cond():
+            return True
+        time.sleep(0.01)
+    return False
+
+
+def test_the_agent_selector_lists_roles_with_capabilities(chat):
+    v, _sent, _app = chat
+    labels = [v.agent_box.itemText(i) for i in range(v.agent_box.count())]
+    assert labels[0] == "Conversa · Ollama (local) — sem ferramentas"
+    assert labels[1].startswith("Executor Claude · Claude Code (ACP)")
+
+
+def test_asking_sketchup_in_conversation_is_refused_and_never_sent_to_the_model(chat):
+    from agent_bar.cockpit.ui import widgets as W
+    v, sent, app = chat
+    v.agent_box.setCurrentIndex(0)                                                # Conversa (Ollama)
+    v.send("abre o SketchUp e monta a suíte 01")
+    _pump(app, lambda: False, timeout=0.3)
+    assert sent == []                                                             # nada foi para o modelo
+    assert not v.busy and v.input.toPlainText() == "abre o SketchUp e monta a suíte 01"   # o texto volta para a caixa
+    offer = v.transcript.findChildren(W.ExecutorOffer)
+    assert offer and "sem ferramentas" in offer[-1].text.text()
+    assert [b.text() for b in offer[-1].buttons] == ["Usar Executor Claude", "Enviar só como conversa"]
+
+
+def test_the_offer_switches_to_the_executor_without_sending(chat):
+    from agent_bar.cockpit.ui import widgets as W
+    v, sent, app = chat
+    v.agent_box.setCurrentIndex(0)
+    v.send("renderiza a cama de novo")
+    offer = v.transcript.findChildren(W.ExecutorOffer)[-1]
+    offer.buttons[0].click()
+    assert v.profile().key == "claude" and sent == []
+    assert v.input.toPlainText() == "renderiza a cama de novo"                    # envio continua manual
+
+
+def test_sending_as_conversation_is_an_explicit_choice(chat):
+    from agent_bar.cockpit.ui import widgets as W
+    v, sent, app = chat
+    v.agent_box.setCurrentIndex(0)
+    v.send("renderiza a cama de novo")
+    offer = v.transcript.findChildren(W.ExecutorOffer)[-1]
+    offer.buttons[-1].click()
+    assert _pump(app, lambda: bool(sent))
+    assert sent == ["renderiza a cama de novo"]                                   # o texto exato, sem promessa nenhuma
+
+
+def test_a_question_goes_to_the_conversation_model(chat):
+    v, sent, app = chat
+    v.agent_box.setCurrentIndex(0)
+    v.send("o que é o SketchUp?")
+    assert _pump(app, lambda: bool(sent))
+    assert sent == ["o que é o SketchUp?"]
