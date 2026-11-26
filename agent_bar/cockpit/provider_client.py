@@ -108,6 +108,12 @@ class ProviderClient:
         return f
 
     # ------------------------------------------------------------------------------------------------ conversa
+    def published_tools(self) -> list[str] | None:
+        """Ferramentas que o executor do Studio publica neste adaptador (None = adaptador sem executor: Conversa)."""
+        host = getattr(self.adapter, "tool_host", None)
+        names = getattr(host, "names", None)
+        return sorted(names()) if callable(names) else None
+
     def prompt(self, content: str | list) -> cf.Future:
         text = content if isinstance(content, str) else " ".join(
             b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text")

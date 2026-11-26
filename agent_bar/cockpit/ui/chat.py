@@ -570,6 +570,16 @@ class ChatView(QWidget):
             return
         self._prompt(full)
 
+    def _show_published_tools(self) -> None:
+        """Executor local: o seletor passa a dizer as ferramentas que o adaptador PUBLICOU (achado da PoC no LAB-16)."""
+        fn = getattr(self.client, "published_tools", None)
+        published = fn() if callable(fn) else None
+        if published is None:
+            return
+        i = self.agent_box.findData(self.profile().key)
+        if i >= 0:
+            self.agent_box.setItemText(i, R.label(self.profile(), published=published))
+
     def _refuse_execution_in_conversation(self, text: str) -> bool:
         """UX-11: pedido de execução (SketchUp, build, render) numa Conversa não vai ao modelo como se ele pudesse. A
         recusa diz o motivo e oferece os Executores disponíveis; "Enviar só como conversa" é escolha explícita."""
@@ -624,6 +634,7 @@ class ChatView(QWidget):
                 self._show_error(exc)  # type: ignore[arg-type]
                 return
             info = result if isinstance(result, dict) else {}
+            self._show_published_tools()
             self.ready = True
             if self.chat.session_id and not info.get("loaded"):                # R16: agente sem session/load
                 self._add(Notice("— o agente não recarrega sessões: sessão nova, histórico anterior só visual —", "#ffc233"))
