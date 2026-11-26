@@ -267,6 +267,34 @@ class UserBubble(MessageBlock):
         super().__init__("user", text)
 
 
+class ExecutorOffer(QFrame):
+    """UX-11: recusa de um pedido de execução numa Conversa, com o motivo e a oferta do Executor (nada foi enviado)."""
+
+    def __init__(self, message: str, choices) -> None:
+        super().__init__()
+        self.setObjectName("card")
+        self.setStyleSheet(CARD_CSS)
+        lay = QVBoxLayout(self)
+        self.text = QLabel(message)
+        self.text.setWordWrap(True)
+        self.text.setStyleSheet("color:#ffc233;font-size:12px")
+        lay.addWidget(self.text)
+        row = QHBoxLayout()
+        self.buttons: list[QPushButton] = []
+        for label, fn in choices:
+            b = QPushButton(label)
+            b.clicked.connect(lambda _c=False, f=fn: self._choose(f))
+            row.addWidget(b)
+            self.buttons.append(b)
+        row.addStretch(1)
+        lay.addLayout(row)
+
+    def _choose(self, fn) -> None:
+        for b in self.buttons:
+            b.setEnabled(False)                                              # uma escolha por oferta
+        fn()
+
+
 class Notice(QLabel):
     def __init__(self, text: str, color: str = "#8f8f98") -> None:
         super().__init__(text)
