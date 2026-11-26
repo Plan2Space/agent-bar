@@ -134,6 +134,7 @@ class ChatView(QWidget):
                  profiles_fn: Callable[[], list[prof.AgentProfile]] = prof.profiles,
                  workspaces_fn: Callable[[], list[Path]] = prof.workspaces,
                  context_provider: Callable[[], str] | None = None,
+                 context_sent: Callable[[list[str]], None] | None = None,
                  provider_factory: Callable[..., object] | None = None,
                  inbox: PermissionInbox | None = None, broker: PermissionBroker | None = None,
                  session_gate: Callable[[prof.AgentProfile], str | None] | None = None,
@@ -141,6 +142,7 @@ class ChatView(QWidget):
         super().__init__()
         self.permission_mode_fn = permission_mode_fn or PM.current           # Felipe: bypass sempre (reversível)
         self.context_provider = context_provider                          # F4: biblioteca (texto exato do preview)
+        self.context_sent = context_sent                                  # UX-13: quem anexou é avisado do envio
         self.store = store or ChatStore()
         self.rt = runtime or AsyncRuntime("cockpit-chat")
         self._own_rt = runtime is None
@@ -563,6 +565,8 @@ class ChatView(QWidget):
             self.chat.add("user", text)
         full = compose_prompt(context, text)
         self.store.save(self.chat)
+        if parts and self.context_sent is not None:                         # o envio efetivo consome a escolha
+            self.context_sent([n for n, _t in parts])
         self._refresh_history()
         self._set_busy(True)
         self.text_block = self.thought_block = None

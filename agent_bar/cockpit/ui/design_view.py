@@ -342,7 +342,8 @@ class DesignView(QWidget):
         self.breadcrumb.setAccessibleName("Seleção do Design")
         self.attach_box = QCheckBox("Anexar esta seleção ao próximo prompt do Chat")
         self.attach_box.setStyleSheet("QCheckBox{color:#cfcfd4;font-size:12px}")
-        self.attach_box.setToolTip("Desligado por padrão. O texto anexado é exatamente o do preview abaixo.")
+        self.attach_box.setToolTip("Desligado por padrão. Vale para o próximo envio do Chat e se desmarca depois dele. "
+                                   "O texto anexado é exatamente o do preview abaixo.")
         ctx.addWidget(self.breadcrumb, 1)
         ctx.addWidget(self.attach_box)
         lay.addLayout(ctx)
