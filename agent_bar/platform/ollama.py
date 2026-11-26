@@ -27,6 +27,7 @@ import hashlib
 import itertools
 import json
 import logging
+import socket
 import threading
 import urllib.error
 import urllib.request
@@ -98,6 +99,14 @@ def think_param(level: str | None) -> bool | str | None:
     if level is None:
         return None
     return {"off": False, "on": True}.get(level, level)
+
+
+STREAM_TIMEOUT_S = 300                                                       # sem NADA no stream por este tempo = falha
+
+
+def _silent_stream(seconds: float) -> str:
+    return (f"o Ollama não mandou resposta em {seconds:.0f} s: o modelo pode estar carregando ou rodando em parte na "
+            "CPU (GPU ocupada por outro programa?)")
 
 
 class OllamaAdapter(ProviderAdapter):
@@ -312,6 +321,21 @@ class OllamaAdapter(ProviderAdapter):
             return self.preferred_model
         return next(iter(offered), None)
 
+    def cpu_share(self, model_id: str) -> float | None:
+        """Fração do modelo carregado que está na CPU, pelo /api/ps (size × size_vram). None = não carregado ou não deu
+        para ler (nunca vira 0). Leitura local e barata; não carrega modelo."""
+        try:
+            data = self._get("/api/ps")
+        except (OSError, ValueError):
+            return None
+        for m in data.get("models") or []:
+            if model_id in (m.get("name"), m.get("model")):
+                size, vram = m.get("size"), m.get("size_vram")
+                if not isinstance(size, (int, float)) or not isinstance(vram, (int, float)) or size <= 0:
+                    return None
+                return round(max(0.0, (size - vram) / size), 2)
+        return None
+
     def model_digest(self, model_id: str) -> str:
         self._need()
         d = self._digests.get(model_id)
@@ -511,13 +535,17 @@ class OllamaAdapter(ProviderAdapter):
         calls: list = []
         confirmed = None
         try:
-            resp = self._post("/api/chat", body, stream=True, timeout=300)
+            resp = self._post("/api/chat", body, stream=True, timeout=STREAM_TIMEOUT_S)
         except urllib.error.HTTPError as exc:
-            raise PromptFailed(f"HTTP {exc.code}{_ollama_error(exc)}") from None
+            hint = " — o Ollama não conseguiu iniciar o modelo (GPU ou memória)" if exc.code >= 500 else ""
+            raise PromptFailed(f"o Ollama devolveu erro HTTP {exc.code}{_ollama_error(exc)}{hint}") from None
         except (urllib.error.URLError, OSError) as exc:
             if run["cancel"].is_set():
                 return None
-            raise PromptFailed("servidor local nao respondeu") from exc
+            if isinstance(exc, (socket.timeout, TimeoutError)) or isinstance(getattr(exc, "reason", None),
+                                                                              (socket.timeout, TimeoutError)):
+                raise PromptFailed(_silent_stream(STREAM_TIMEOUT_S)) from exc
+            raise PromptFailed("o Ollama local não respondeu (o serviço está no ar?)") from exc
         run["resp"] = resp
         if run["cancel"].is_set():
             self._close_resp(run)
@@ -548,6 +576,9 @@ class OllamaAdapter(ProviderAdapter):
                                             num_ctx=(body.get("options") or {}).get("num_ctx"))
                     on_event(AgentEvent("usage", "", snap.to_dict()))           # F6: contadores reais do turno
                     break
+        except (socket.timeout, TimeoutError):
+            if not run["cancel"].is_set():
+                raise PromptFailed(_silent_stream(STREAM_TIMEOUT_S)) from None
         except (OSError, ValueError, AttributeError):
             if not run["cancel"].is_set():
                 raise PromptFailed("stream interrompido") from None
