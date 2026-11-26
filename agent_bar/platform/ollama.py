@@ -495,7 +495,8 @@ class OllamaAdapter(ProviderAdapter):
         try:
             resp = self._post("/api/chat", body, stream=True, timeout=STREAM_TIMEOUT_S)
         except urllib.error.HTTPError as exc:
-            raise PromptFailed(f"HTTP {exc.code}{_ollama_error(exc)}") from None
+            hint = " — o Ollama não conseguiu iniciar o modelo (GPU ou memória)" if exc.code >= 500 else ""
+            raise PromptFailed(f"o Ollama devolveu erro HTTP {exc.code}{_ollama_error(exc)}{hint}") from None
         except (urllib.error.URLError, OSError) as exc:
             if run["cancel"].is_set():
                 return None

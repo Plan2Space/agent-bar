@@ -201,3 +201,34 @@ def test_a_model_partly_on_the_cpu_is_announced_after_the_turn(chat):
     made[-1].pending.set_result("end_turn")
     assert pump(lambda: not v.busy)
     assert pump(lambda: any("40%" in n.text() and "CPU" in n.text() for n in v.transcript.findChildren(Notice)))
+
+
+def test_an_http_500_from_chat_becomes_a_readable_reason_with_the_error_body():
+    """Caso do auditor (25/11): o Ollama não conseguiu iniciar o modelo na GPU e devolveu HTTP 500 depois de 2 min 40 s;
+    a conversa ficou sem resposta. O 500 vira motivo legível com o corpo resumido."""
+    import urllib.error
+
+    def boom():
+        body = io.BytesIO(json.dumps({"error": "llama runner process has terminated: GPU discovery watchdog timed out"
+                                      " " + "x" * 400}).encode())
+        raise urllib.error.HTTPError("http://x/api/chat", 500, "Internal Server Error", {}, body)
+    a = OllamaAdapter("http://x", opener=Opener(chat=boom))
+    a.connect()
+    with pytest.raises(PromptFailed) as e:
+        a._stream_once({"cancel": __import__("threading").Event(), "resp": None},
+                       {"model": "llama3.1:8b", "messages": []}, lambda _ev: None)
+    msg = str(e.value)
+    assert "o Ollama devolveu erro HTTP 500" in msg and "GPU discovery watchdog timed out" in msg
+    assert "não conseguiu iniciar o modelo" in msg and len(msg) < 400                 # resumido, com o motivo provável
+
+
+def test_a_failed_turn_stops_the_live_state(chat):
+    v, made = chat
+    v.send("diga oi")
+    assert pump(lambda: "carregando" in v.status.text())
+    made[-1].pending.set_exception(PromptFailed("o Ollama devolveu erro HTTP 500: GPU discovery watchdog timed out"))
+    assert pump(lambda: not v.busy)
+    before = v.status.text()
+    pump(secs=1.6)                                                                     # o relógio não segue contando
+    assert v.status.text() == before and "carregando" not in before
+    assert "HTTP 500" in v.banner_label.text() and "watchdog" in v.banner_label.text()
