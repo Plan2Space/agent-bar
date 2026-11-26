@@ -19,6 +19,7 @@ from pathlib import Path
 from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtGui import QIcon, QImageReader, QPixmap
 from PySide6.QtWidgets import (
+    QComboBox,
     QDialog,
     QFrame,
     QHBoxLayout,
@@ -28,7 +29,7 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QPushButton,
-    QSplitter,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -118,14 +119,29 @@ class Thumb(QLabel):
     """Imagem clicável (amplia)."""
     clicked = Signal()
 
-    def __init__(self, min_size: QSize = THUMB) -> None:
+    def __init__(self, min_size: QSize = THUMB, aspect: float | None = None) -> None:
         super().__init__()
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.setMinimumSize(min_size)
+        self.aspect = aspect                                                   # UX-14: altura segue a largura (16:9)
+        if aspect:
+            pol = QSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+            pol.setHeightForWidth(True)
+            self.setSizePolicy(pol)
         self.setStyleSheet("background:#0e0e11;border:1px solid #2a2a30;color:#ff9a9b")
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.path: Path | None = None
         self._pix = QPixmap()
+
+    def hasHeightForWidth(self) -> bool:                                        # noqa: N802
+        return bool(self.aspect)
+
+    def heightForWidth(self, w: int) -> int:                                    # noqa: N802
+        return max(self.minimumHeight(), int(w / self.aspect)) if self.aspect else super().heightForWidth(w)
+
+    def sizeHint(self) -> QSize:                                               # noqa: N802
+        hint = super().sizeHint()
+        return QSize(hint.width(), self.heightForWidth(max(hint.width(), self.minimumWidth()))) if self.aspect else hint
 
     def set_image(self, path: Path | None, why: str = "") -> None:
         self.path = path
@@ -152,6 +168,23 @@ class Thumb(QLabel):
         super().mousePressEvent(e)
 
 
+def state_lines(item: G.GalleryItem, evaluations: Sequence) -> list[str]:
+    """Os cinco estados do run, uma linha cada, sem misturar (pedido do Felipe): geometria, construção, render,
+    publicação e avaliação. Run cujas provas não fecham nunca mostra o PASS do manifest: "não verificado" com o motivo."""
+    gaps = item.verification_gaps()
+    if gaps:
+        why = f"não verificado ({gaps[0]})"
+        geo = cons = rend = why
+    else:
+        geo, cons = item.build.get("geometria", "—"), item.build.get("construção", "—")
+        rend = item.render_verdict or "sem veredito"
+    return [f"Geometria: {geo}",
+            f"Construção: {cons}",
+            f"Render: {rend}",
+            f"Publicação: {source_text(item)}",
+            f"Avaliação: {visual_line(evaluations)}"]
+
+
 class BigCard(QFrame):
     """Cartão grande: título, miniatura real, linhas de informação e "Ampliar"."""
 
@@ -163,7 +196,7 @@ class BigCard(QFrame):
         lay.setContentsMargins(10, 8, 10, 8)
         self.title = QLabel(title)
         self.title.setStyleSheet(TITLE_CSS)
-        self.thumb = Thumb(CARD_THUMB)                                          # cede altura para a legenda
+        self.thumb = Thumb(CARD_THUMB, aspect=16 / 9)                           # imagem grande, sem faixa vazia
         self.info = QLabel("")
         self.info.setWordWrap(True)
         self.info.setStyleSheet(INFO_CSS)
@@ -171,14 +204,18 @@ class BigCard(QFrame):
         self.enlarge_btn = QPushButton("Ampliar")
         self.enlarge_btn.setStyleSheet(BTN_CSS)
         lay.addWidget(self.title)
-        lay.addWidget(self.thumb, 1)
+        lay.addWidget(self.thumb)
         lay.addWidget(self.info)
         lay.addWidget(self.enlarge_btn, 0, Qt.AlignmentFlag.AlignLeft)
+        lay.addStretch(1)                                                         # cartões alinhados pelo topo
         self.item: G.GalleryItem | None = None
+        self.image: G.GalleryImage | None = None
 
-    def fill(self, item: G.GalleryItem | None, lines: Sequence[str], empty: str = "") -> None:
+    def fill(self, item: G.GalleryItem | None, lines: Sequence[str], empty: str = "",
+             image: G.GalleryImage | None = None) -> None:
         self.item = item
-        img = G.primary_image(item) if item is not None else None
+        img = image or (G.primary_image(item) if item is not None else None)
+        self.image = img
         self.thumb.set_image(img.path if img else None, empty or "sem imagem com sha256 conferido")
         self.info.setText("\n".join(lines))
         self.enlarge_btn.setEnabled(img is not None)
@@ -210,35 +247,60 @@ class DesignView(QWidget):
         self.enlarged: QDialog | None = None
         self.compared: tuple[G.GalleryItem, G.GalleryItem] | None = None
         self.compared_images: tuple[G.GalleryImage, G.GalleryImage] | None = None
+        self.thumbs_loaded = False                                               # UX-14: miniaturas só sob demanda
+        self.camera: str | None = None                                           # UX-14b: None = preferida
+        self.references: list[tuple[str, G.GalleryItem]] = []
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
+        pick = QHBoxLayout()
+        cam_label = QLabel("Câmera")
+        cam_label.setStyleSheet(MUTED_CSS)
+        self.camera_box = QComboBox()
+        self.camera_box.setToolTip("O último render passa a ser o da câmera escolhida; comparar usa a mesma câmera")
+        ref_label = QLabel("Referência")
+        ref_label.setStyleSheet(MUTED_CSS)
+        self.reference_box = QComboBox()
+        self.reference_box.setToolTip("A referência vigente de cada categoria")
+        self._ref_label = ref_label
+        for w in (cam_label, self.camera_box, ref_label, self.reference_box):
+            pick.addWidget(w)
+        pick.addStretch(1)
+        lay.addLayout(pick)
+        self.camera_box.activated.connect(lambda _i: self._camera_chosen())
+        self.camera_box.currentIndexChanged.connect(lambda _i: self._camera_chosen())
+        self.reference_box.currentIndexChanged.connect(lambda _i: self._reference_chosen())
         cards = QHBoxLayout()
+        cards.setContentsMargins(0, 0, 0, 0)
         self.cards = {"referência": BigCard("REFERÊNCIA"), "último": BigCard("ÚLTIMO RENDER"),
                       "melhor": BigCard("MELHOR RENDER")}
-        for c in self.cards.values():
-            cards.addWidget(c, 1)
+        for key, c in self.cards.items():
+            cards.addWidget(c, 1 if key == "melhor" else 2)                     # referência e último: as imagens grandes
             c.enlarge_btn.clicked.connect(lambda _=False, card=c: self._enlarge_item(card.item))
             c.thumb.clicked.connect(lambda card=c: self._enlarge_item(card.item))
-        top = QWidget()
-        top.setLayout(cards)
-        cards.setContentsMargins(0, 0, 0, 0)
-        split = QSplitter(Qt.Orientation.Vertical)
-        split.addWidget(top)
-        bottom = QWidget()
-        bl = QVBoxLayout(bottom)
-        bl.setContentsMargins(0, 4, 0, 0)
-        head = QHBoxLayout()
-        self.history_title = QLabel("Histórico de evolução (mais recente primeiro)")
-        self.history_title.setStyleSheet(TITLE_CSS)
-        head.addWidget(self.history_title, 1)
-        self.cmp_ref_btn = QPushButton("Comparar com a referência")
+        self.cards["melhor"].hide()                                               # só com avaliação válida e elegível
+        lay.addLayout(cards)
+        self.best_note = QLabel("")                                               # melhor render sem destaque: uma linha
+        self.best_note.setWordWrap(True)
+        self.best_note.setStyleSheet(MUTED_CSS)
+        lay.addWidget(self.best_note)
+        head = QHBoxLayout()                                                      # ações sobre o último render (ou o run
+        self.cmp_ref_btn = QPushButton("Comparar com a referência")              # escolhido no histórico aberto)
         self.cmp_prev_btn = QPushButton("Comparar com a versão anterior")
         self.enlarge_btn = QPushButton("Ampliar")
         self.tech_btn = QPushButton("Detalhes técnicos")
-        for b in (self.cmp_ref_btn, self.cmp_prev_btn, self.enlarge_btn, self.tech_btn):
-            b.setStyleSheet(BTN_CSS)
-            head.addWidget(b)
-        bl.addLayout(head)
+        for btn in (self.cmp_ref_btn, self.cmp_prev_btn, self.enlarge_btn, self.tech_btn):
+            btn.setStyleSheet(BTN_CSS)
+            head.addWidget(btn)
+        head.addStretch(1)
+        self.history_toggle = QPushButton("▸ Histórico completo")
+        self.history_toggle.setCheckable(True)
+        self.history_toggle.setStyleSheet(BTN_CSS)
+        head.addWidget(self.history_toggle)
+        lay.addLayout(head)
+        self.history_title = QLabel("")                                           # compatibilidade: o texto do histórico
+        self.history_title.setStyleSheet(TITLE_CSS)
+        self.history_title.hide()
+        lay.addWidget(self.history_title)
         self.history = QListWidget()
         self.history.setViewMode(QListView.ViewMode.IconMode)
         self.history.setIconSize(THUMB)
@@ -248,7 +310,8 @@ class DesignView(QWidget):
         self.history.setMovement(QListView.Movement.Static)
         self.history.setStyleSheet("QListWidget{background:#121215;color:#cfcfd4;border:1px solid #2a2a30;"
                                    "font-size:11px}")
-        bl.addWidget(self.history, 1)
+        self.history.hide()
+        lay.addWidget(self.history, 2)
         self.compare = QWidget()
         cl = QVBoxLayout(self.compare)
         cl.setContentsMargins(0, 4, 0, 0)
@@ -269,7 +332,7 @@ class DesignView(QWidget):
         cl.addWidget(self.compare_label)
         cl.addLayout(panes, 1)
         self.compare.hide()
-        bl.addWidget(self.compare, 1)
+        lay.addWidget(self.compare, 2)
         row = QHBoxLayout()                                                       # S01C-F1-11: comentário → Chat
         self.comment = QLineEdit()
         self.comment.setPlaceholderText("Comente o que está na tela (ex.: gostei mais da iluminação anterior, mas quero "
@@ -280,16 +343,15 @@ class DesignView(QWidget):
         self.comment_btn.setStyleSheet(BTN_CSS)
         row.addWidget(self.comment, 1)
         row.addWidget(self.comment_btn)
-        bl.addLayout(row)
+        lay.addLayout(row)
         self.comment_status = QLabel("")
         self.comment_status.setWordWrap(True)
         self.comment_status.setStyleSheet(MUTED_CSS)
-        bl.addWidget(self.comment_status)
+        lay.addWidget(self.comment_status)
+        lay.addStretch(1)                                                         # tudo junto no topo
         self.comment_btn.clicked.connect(lambda: self.comment_requested.emit(self.comment.text()))
         self.comment.returnPressed.connect(lambda: self.comment_requested.emit(self.comment.text()))
-        split.addWidget(bottom)
-        split.setSizes([330, 520])
-        lay.addWidget(split, 1)
+        self.history_toggle.toggled.connect(self._toggle_history)
         self.cmp_ref_btn.clicked.connect(self.compare_with_reference)
         self.cmp_prev_btn.clicked.connect(self.compare_with_previous)
         self.enlarge_btn.clicked.connect(lambda: self._enlarge_item(self.selected()))
@@ -303,7 +365,28 @@ class DesignView(QWidget):
         self.items = list(items)
         self.evaluations_for = evaluations_for
         self.renders = [i for i in self.items if i.kind == "render"]               # já em ordem: mais recente primeiro
-        self.reference = G.reference_item(self.items)
+        self.references = G.current_references(self.items)
+        latest = G.reference_item(self.items)
+        self.reference = latest
+        self.reference_box.blockSignals(True)
+        self.reference_box.clear()
+        for cat, ref in self.references:
+            self.reference_box.addItem(cat, ref.item_id)
+        if latest is not None:
+            self.reference_box.setCurrentIndex(max(0, self.reference_box.findData(latest.item_id)))
+        self.reference_box.blockSignals(False)
+        many = len(self.references) > 1                                          # uma categoria: nada a escolher
+        self.reference_box.setVisible(many)
+        self._ref_label.setVisible(many)
+        self.camera_box.blockSignals(True)
+        self.camera_box.clear()
+        self.camera_box.addItem("preferida (r2_canto, perspectiva…)", None)
+        for cam in G.rendered_cameras(self.renders):
+            self.camera_box.addItem(cam, cam)
+        keep = self.camera_box.findData(self.camera) if self.camera else 0
+        self.camera_box.setCurrentIndex(keep if keep >= 0 else 0)
+        self.camera = self.camera_box.currentData()
+        self.camera_box.blockSignals(False)
         self._fill_cards()
         self._fill_history()
         self.compare.hide()
@@ -318,24 +401,27 @@ class DesignView(QWidget):
             self.cards["referência"].fill(ref, [ref.title or ref.item_id, ref.item_id,
                                                 "Referência estética: não é geometria validada.",
                                                 ref.provenance_text(), f"curadoria {ref.curation or '—'}"])
-        last = G.latest_render(self.renders)
+        last = G.latest_render(self.renders, camera=self.camera)
         if last is None:
-            self.cards["último"].fill(None, ["nenhum render do cômodo"], "nenhum render")
+            self.cards["último"].fill(None, ["nenhum render do cômodo" if not self.camera
+                                             else f"nenhum render da câmera {self.camera}"], "nenhum render")
         else:
-            img = G.primary_image(last)
-            state = (f"Geometria: {last.build.get('geometria', '—')} · Render: {last.render_verdict or '—'}"
-                     if last.verified else f"Estado técnico: {tech_text(last)}")
-            self.cards["último"].fill(last, [
-                f"{last.when()} · {last.item_id}", G.camera_text(img), source_text(last), state,
-                f"Nota visual: {visual_line(self.evaluations_for(last))}"])
+            img = (G.image_for_camera(last, self.camera) if self.camera else None) or G.primary_image(last)
+            self.cards["último"].fill(last, [f"{last.when()} · {last.item_id}", G.camera_text(img),
+                                             *state_lines(last, self.evaluations_for(last))], image=img)
         best = G.cards(self.items, self.evaluations_for)[2]
         if best.item is not None and not best.item.eligible(self.evaluations_for(best.item)):
             best = G.Card(best.role, None, "nenhum render elegível: candidato inelegível recusado")
         if best.item is None:                                                     # nunca um inválido para preencher
             head = best_headline(best.text)
             self.cards["melhor"].fill(None, [head, best.text], head)
+            self.cards["melhor"].hide()                                           # sem destaque sem avaliação válida
+            self.best_note.setText(f"Melhor render: {head.lower()} ({best.text})")
+            self.best_note.show()
         else:                                                                     # (S01C-F1-07 decide; hoje não ocorre)
             self.cards["melhor"].fill(best.item, [f"{best.item.when()} · {best.item.item_id}", best.text])
+            self.cards["melhor"].show()
+            self.best_note.hide()
 
     def _fill_history(self) -> None:
         self.history.clear()
@@ -351,28 +437,54 @@ class DesignView(QWidget):
                 f"{source_text(it)}{mark}",
             ])
             li = QListWidgetItem(text)
-            if img is not None:
-                pix = thumbnail(img.path)
-                if not pix.isNull():
-                    li.setIcon(QIcon(pix))
             li.setData(Qt.ItemDataRole.UserRole, it.item_id)
             li.setToolTip(it.item_id)
             self.history.addItem(li)
         self.history_title.setText(f"Histórico de evolução: {len(self.renders)} render(s), mais recente primeiro")
-        if self.history.count():
-            self.history.setCurrentRow(0)
+        fails = sum(1 for i in self.renders if i.render_verdict == "FAIL")
+        self.history_toggle.setText(f"{'▾' if self.history_toggle.isChecked() else '▸'} Histórico completo "
+                                    f"({len(self.renders)} runs, {fails} FAIL)")
+        self.history_toggle.setEnabled(bool(self.renders))
+        self.thumbs_loaded = False
+        if self.history_toggle.isChecked():
+            self._load_thumbs()
+        self._buttons()
+
+    def _load_thumbs(self) -> None:
+        """As miniaturas só são decodificadas quando o histórico é aberto (nunca 14 imagens na tela principal)."""
+        for row in range(self.history.count()):
+            li = self.history.item(row)
+            it = next((i for i in self.renders if i.item_id == li.data(Qt.ItemDataRole.UserRole)), None)
+            img = G.primary_image(it) if it is not None else None
+            if img is not None:
+                pix = thumbnail(img.path)
+                if not pix.isNull():
+                    li.setIcon(QIcon(pix))
+        self.thumbs_loaded = True
+
+    def _toggle_history(self, on: bool) -> None:
+        self.history.setVisible(on)
+        self.history_title.setVisible(on)
+        if on and not self.thumbs_loaded:
+            self._load_thumbs()
+        if not on:
+            self.history.setCurrentRow(-1)                                        # recolheu: as ações voltam ao último
+        text = self.history_toggle.text()
+        self.history_toggle.setText(("▾" if on else "▸") + text[1:])
         self._buttons()
 
     # ------------------------------------------------------------------------------------------------ ações
     def selected(self) -> G.GalleryItem | None:
         li = self.history.currentItem()
-        if li is None:
-            return None
+        if li is None:                                                            # sem escolha: o último render
+            return G.latest_render(self.renders, camera=self.camera)
         return next((i for i in self.renders if i.item_id == li.data(Qt.ItemDataRole.UserRole)), None)
 
     def previous_of(self, item: G.GalleryItem) -> G.GalleryItem | None:
         idx = next((n for n, i in enumerate(self.renders) if i.item_id == item.item_id), None)
         rest = self.renders[idx + 1:] if idx is not None else []
+        if self.camera:                                                          # UX-14b: a versão anterior DESTA câmera
+            return next((i for i in rest if G.image_for_camera(i, self.camera) is not None), None)
         return next((i for i in rest if i.images), None)
 
     def _buttons(self) -> None:
@@ -388,6 +500,24 @@ class DesignView(QWidget):
         if it is not None and self.reference is not None:
             self._compare(it, self.reference)
 
+    def _camera_chosen(self) -> None:
+        cam = self.camera_box.currentData()
+        if cam == self.camera:
+            return
+        self.camera = cam
+        self.compare.hide()
+        self._fill_cards()
+        self._buttons()
+
+    def _reference_chosen(self) -> None:
+        rid = self.reference_box.currentData()
+        ref = next((r for _c, r in self.references if r.item_id == rid), None)
+        if ref is None or ref is self.reference:
+            return
+        self.reference = ref
+        self._fill_cards()
+        self._buttons()
+
     def compare_with_previous(self) -> None:
         it = self.selected()
         prev = self.previous_of(it) if it is not None else None
@@ -395,7 +525,7 @@ class DesignView(QWidget):
             self._compare(it, prev)
 
     def _compare(self, a: G.GalleryItem, b: G.GalleryItem) -> None:
-        img_a, img_b, note = G.comparison_pair(a, b)                           # mesma câmera dos dois lados, se houver
+        img_a, img_b, note = G.comparison_pair(a, b, camera=self.camera)       # a câmera escolhida, dos dois lados
         if img_a is None or img_b is None:
             return
         self.compared = (a, b)
@@ -416,7 +546,7 @@ class DesignView(QWidget):
         if self.compared and self.compared_images and self.compare.isVisibleTo(self) \
                 and self.compared[0].item_id == it.item_id:
             return it, self.compared_images[0], (self.compared[1], self.compared_images[1])
-        img = G.primary_image(it)
+        img = (G.image_for_camera(it, self.camera) if self.camera else None) or G.primary_image(it)
         return (it, img, None) if img is not None else None
 
     def _enlarge_item(self, item: G.GalleryItem | None) -> None:
@@ -445,5 +575,6 @@ class DesignView(QWidget):
             self.enlarged = None
 
 
-__all__ = ["visual_line", "NOT_EVALUATED", "BigCard", "DesignView", "best_headline", "compare_label", "source_text", "tech_text",
+__all__ = ["visual_line", "NOT_EVALUATED", "BigCard", "DesignView", "best_headline", "compare_label", "source_text",
+           "state_lines", "tech_text",
            "thumbnail"]
