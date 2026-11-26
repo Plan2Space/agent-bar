@@ -149,3 +149,17 @@ def test_health_does_not_say_the_local_executor_has_no_tools(server, tmp_path, c
     assert row.state == NOT_EXECUTOR                                         # nao e o Executor Claude
     text = " ".join(row.lines)
     assert "sem ferramentas" not in text and "build_room_sample" in text
+
+
+def test_health_lists_the_tools_the_executor_actually_publishes():
+    from types import SimpleNamespace
+
+    from agent_bar.cockpit.health import NOT_EXECUTOR, executor_row
+    host = SimpleNamespace(names=lambda: {"build_room_sample", "render_room_sample"})
+    chat = SimpleNamespace(client=SimpleNamespace(adapter=SimpleNamespace(tool_host=host)), profile=lambda: PROFILE,
+                           status=SimpleNamespace(text=lambda: "pronto"), tools_observed=set())
+    row = executor_row(chat)
+    text = " ".join(row.lines)
+    assert row.state == NOT_EXECUTOR and "build_room_sample, render_room_sample" in text and "só build" not in text
+    chat.client = None                                                       # antes de conectar: nada inventado
+    assert "conferidas ao conectar" in " ".join(executor_row(chat).lines) or executor_row(chat).state != NOT_EXECUTOR
