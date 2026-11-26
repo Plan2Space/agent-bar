@@ -80,3 +80,37 @@ def test_run_engine_keeps_stdout_apart_from_the_log(tmp_path):
     assert "ruido" in log.read_text(encoding="utf-8") and "status" not in log.read_text(encoding="utf-8")
     assert stdout_path(log).name == "rq-x.engine.stdout.json"
     assert subprocess is not None and Path(log).parent == stdout_path(log).parent
+
+
+class BusyWithManifest(RenderFakeEngine):
+    """#72 @4f1a799: SketchUp/V-Ray ocupado vem DEPOIS da validacao, com run_dir e run_manifest
+    (status SKETCHUP_UNAVAILABLE, error.code exato); o SketchUp nao abre."""
+
+    def __init__(self, code: str):
+        super().__init__()
+        self.code = code
+
+    def __call__(self, argv, cwd, env, timeout_s, log_path, on_start=None):
+        if argv[2] != "p2s_engine.run":
+            return super().__call__(argv, cwd, env, timeout_s, log_path, on_start)
+        self.calls.append(list(argv))
+        run_dir = Path(argv[argv.index("--out-dir") + 1]) / argv[argv.index("--run-id") + 1]
+        run_dir.mkdir(parents=True)
+        err = {"code": self.code, "message": f"{self.code}: SketchUp.exe ja aberto (PID 1)"}
+        (run_dir / "run_manifest.json").write_text(json.dumps({
+            "run_id": run_dir.name, "status": "SKETCHUP_UNAVAILABLE", "finished_at": "x", "verdict": None,
+            "engine": {"commit": "e" * 40}, "error": err,
+            "steps": [{"name": "validate_fixture", "status": "OK"}, {"name": "solve_layout", "status": "OK"}]}),
+            encoding="utf-8")
+        stdout_path(log_path).write_text(json.dumps({"status": "SKETCHUP_UNAVAILABLE", "error": err}), encoding="utf-8")
+        return EngineExit(1, 4242)
+
+
+@pytest.mark.parametrize("code", ["SKETCHUP_BUSY", "VRAY_BUSY", "BUSY_UNKNOWN"])
+def test_a_busy_engine_with_manifest_keeps_the_exact_code(engine_root, tmp_path, code):
+    build, _ = tools(engine_root, tmp_path, BusyWithManifest(code))
+    res = build.run(call(TOOL_NAME, {"fixture_ref": "room_001"}), ctx(Perm(), turn_id="b1"))
+    assert res["status"] == "failed" and res["error"]["code"] == code
+    assert res["error"]["engine_status"] == "SKETCHUP_UNAVAILABLE"
+    roles = res["provenance"]["roles"]
+    assert roles["builder"] is None and roles["evaluator"] is None        # o SketchUp nao abriu

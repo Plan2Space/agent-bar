@@ -98,4 +98,6 @@ qualquer I/O e antes de abrir o SketchUp, fixture fora de `tests/fixtures/`/`run
 fora do padrão e SketchUp/V-Ray já abertos. Nesse caso não há `run_manifest`; o motor deixa
 `{status: BLOCKED, error: {code, message}}` no stdout, que o executor grava em `<request_id>.engine.stdout.json` (o
 stderr fica no `.engine.log`) e registra com o código exato (`PATH_NOT_ALLOWED`, `SKETCHUP_BUSY`, `VRAY_BUSY`,
-`BUSY_UNKNOWN`), não como `NO_MANIFEST`. O mesmo vale para o render.
+`BUSY_UNKNOWN`), não como `NO_MANIFEST`. Desde o #72 @4f1a799, SketchUp/V-Ray ocupado é conferido por último,
+depois da validação: aí há `run_manifest` com status `SKETCHUP_UNAVAILABLE` e `error.code` exato, e o executor registra
+esse código (o SketchUp não abriu; nenhum papel de construção é creditado). O mesmo vale para o render.

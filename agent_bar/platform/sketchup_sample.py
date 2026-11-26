@@ -510,6 +510,11 @@ class SketchUpSampleTool:
                                "engine_commit": (man.get("engine") or {}).get("commit"),
                                "sketchup": man.get("sketchup"), "engine_status": man.get("status"),
                                "verdict": man.get("verdict")}
+        engine_err = man.get("error") if isinstance(man.get("error"), dict) else {}
+        if man.get("status") == "SKETCHUP_UNAVAILABLE" and engine_err.get("code"):
+            # motor #72: SketchUp/V-Ray ocupado (ou tasklist indisponivel) depois da validacao; o SketchUp nao abriu
+            return {**out, "status": "failed", "error": {"code": str(engine_err["code"]), "engine_status":
+                    "SKETCHUP_UNAVAILABLE", "message": str(engine_err.get("message") or "")[:300]}}
         if man.get("status") != "OK":
             return {**out, "status": "failed", "error": {"code": "ENGINE_FAILED", "message":
                     f"motor terminou {man.get('status')}: {json.dumps(man.get('error'), ensure_ascii=False)[:300]}"}}
