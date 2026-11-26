@@ -56,3 +56,17 @@ commit); `planner`, `builder` e `evaluator` (o motor, pelo commit; o modelo só 
 (o avaliador exige também o `validation_report.json`). Timeout, falha antes do passo ou recusa não creditam nada ao
 motor. `renderer` e `refiner` ficam `null` nesta ferramenta. Não há modelo de reserva (`fallback_model` é sempre `null`). O que não foi medido fica `null`,
 nunca um valor inventado (ex.: `model_version`, `experiment_id`, `parent_run_id`).
+
+## Descoberta dinâmica e identidade por modelo (LAB-10)
+
+Nenhuma lista de modelos no código: o adaptador lê `GET /api/tags` + `POST /api/show` ao conectar e
+`OllamaAdapter.refresh_models()` relê sem desconectar, devolvendo `added`, `removed` e `digest_changed` (mesmo nome,
+outro blob). A prova de `tool_calls` é por `modelo@digest`: um re-pull com digest novo volta a `UNKNOWN`.
+`OllamaAdapter.model_identity(modelo)` (`p2s.model_identity.v1`) separa o que o servidor **anuncia** (tools, visão,
+thinking, contexto) do que foi **comprovado** neste Studio. `model_version` fica `null`: o Ollama só fornece a tag
+(dentro do id) e o digest. `P2S_LOCAL_EXECUTOR_MODEL` é só preferência; se não estiver instalado, vale o primeiro
+modelo instalado que anuncia `tools`.
+
+Negativos (LAB-22): modelo inexistente é recusado antes de qualquer pedido; modelo removido no meio da sessão falha
+tipado sem executar nada; resposta em nome de outro modelo (`done.model` diferente do pedido) é recusada com
+`MODEL_MISMATCH` e não executa ferramenta.
