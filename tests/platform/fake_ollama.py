@@ -42,6 +42,8 @@ class FakeOllama:
         # {"calls": [...raw tool_calls...], "content": "texto", "drop": True (corta antes do done),
         #  "again": True (devolve tool_calls tambem na rodada com o resultado)}
         self.tool_script: dict | None = None
+        self.digests: dict[str, str] = {}                                   # digest substituto (modelo re-baixado)
+        self.reply_model: str | None = None                                 # o servidor diz ter usado OUTRO modelo
         outer = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -60,7 +62,7 @@ class FakeOllama:
                 if self.path == "/api/version":
                     return self._json({"version": "0.40.16-fake"})
                 if self.path == "/api/tags":
-                    tags = [{"name": n, "model": n, **({} if outer.no_digest else {"digest": fake_digest(n)})}
+                    tags = [{"name": n, "model": n, **({} if outer.no_digest else {"digest": outer.digests.get(n) or fake_digest(n)})}
                             for n in outer.models]
                     return self._json({"models": tags})
                 return self._json({"error": "not found"}, 404)
@@ -77,6 +79,10 @@ class FakeOllama:
 
             def _chat(self, body):
                 model = body.get("model")
+                if model in outer.models and outer.reply_model:
+                    model_reply = outer.reply_model
+                else:
+                    model_reply = None
                 if model not in outer.models:
                     return self._json({"error": f"model '{model}' not found"}, 404)
                 if "think" in body and "thinking" not in outer.models[model]["capabilities"]:
@@ -91,27 +97,27 @@ class FakeOllama:
                     self.wfile.flush()
                 try:
                     if body.get("think") is True:
-                        line({"model": model, "message": {"role": "assistant", "thinking": "pensando..."}, "done": False})
+                        line({"model": model_reply or model, "message": {"role": "assistant", "thinking": "pensando..."}, "done": False})
                     script = outer.tool_script
                     role = body["messages"][-1].get("role")
                     if script is not None and role == "user" and ("tools" in body or script.get("untold")):
                         if script.get("content"):
-                            line({"model": model, "message": {"role": "assistant", "content": script["content"]},
+                            line({"model": model_reply or model, "message": {"role": "assistant", "content": script["content"]},
                                   "done": False})
                         if script.get("calls"):
-                            line({"model": model, "message": {"role": "assistant", "content": "",
+                            line({"model": model_reply or model, "message": {"role": "assistant", "content": "",
                                                               "tool_calls": script["calls"]}, "done": False})
                         if script.get("drop"):
                             return                                           # stream cortado: sem done
                     elif script is not None and role == "tool":
                         if script.get("again") and script.get("calls"):
-                            line({"model": model, "message": {"role": "assistant", "content": "",
+                            line({"model": model_reply or model, "message": {"role": "assistant", "content": "",
                                                               "tool_calls": script["calls"]}, "done": False})
-                        line({"model": model, "message": {"role": "assistant",
+                        line({"model": model_reply or model, "message": {"role": "assistant",
                                                           "content": "resultado: " + str(last)[:60]}, "done": False})
                     elif "devagar" in last:
                         for i in range(2000):
-                            line({"model": model, "message": {"role": "assistant", "content": f"{i} "}, "done": False})
+                            line({"model": model_reply or model, "message": {"role": "assistant", "content": f"{i} "}, "done": False})
                             time.sleep(0.02)
                     elif body["messages"][-1].get("images"):            # modelo com vision recebeu imagem
                         if "vision" not in outer.models[model]["capabilities"]:
@@ -120,14 +126,14 @@ class FakeOllama:
                         imgs = body["messages"][-1]["images"]
                         text = (outer.image_reply if outer.image_reply is not None
                                 else f"imagens={len(imgs)} bytes={sum(len(i) for i in imgs)}")
-                        line({"model": model, "message": {"role": "assistant", "content": text}, "done": False})
+                        line({"model": model_reply or model, "message": {"role": "assistant", "content": text}, "done": False})
                     elif "historico" in last:
                         n = sum(1 for m in body["messages"] if m["role"] == "user")
-                        line({"model": model, "message": {"role": "assistant", "content": f"users={n}"}, "done": False})
+                        line({"model": model_reply or model, "message": {"role": "assistant", "content": f"users={n}"}, "done": False})
                     else:
                         for part in ("o", "k"):
-                            line({"model": model, "message": {"role": "assistant", "content": part}, "done": False})
-                    final = {"model": model, "message": {"role": "assistant", "content": ""}, "done": True,
+                            line({"model": model_reply or model, "message": {"role": "assistant", "content": part}, "done": False})
+                    final = {"model": model_reply or model, "message": {"role": "assistant", "content": ""}, "done": True,
                              "done_reason": "stop",
                              "prompt_eval_count": 13 + IMAGE_TOKENS * len(body["messages"][-1].get("images") or []),
                              "prompt_eval_cached_count": 0, "eval_count": 2}
