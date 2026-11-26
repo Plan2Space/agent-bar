@@ -101,7 +101,7 @@ class CockpitWindow(QMainWindow):
         self.library: LibraryTab | None = None
         inbox = chat_kwargs.pop("inbox", None)
         self.sessions = ChatSessions(runtime=self.runtime, inbox=inbox,              # F5: abas de sessao no Chat
-                                     context_provider=self._chat_context,
+                                     context_provider=self._chat_context, context_sent=self._chat_context_sent,
                                      **chat_kwargs)
         self.library = LibraryTab(lambda: self.chat.workspace(), **({"discover_fn": discover_fn} if discover_fn else {}))
         wf_kwargs = {k: chat_kwargs[k] for k in ("profiles_fn", "ask_permission") if k in chat_kwargs}
@@ -278,6 +278,11 @@ class CockpitWindow(QMainWindow):
         """O que o Chat anexa ao próximo prompt: a Biblioteca e/ou o Design, cada um pelo texto exato do seu preview."""
         lib = self.library.context() if self.library else ""
         return [(name, text) for name, text in (("biblioteca", lib), ("Design", self.design_context())) if text]
+
+    def _chat_context_sent(self, names: list[str]) -> None:
+        """A escolha de anexar o Design vale para UM envio (revisão do #124): depois dele, desmarca."""
+        if "Design" in names and getattr(self, "review", None) is not None:
+            self.review.design.attach_box.setChecked(False)
 
     @property
     def chat(self) -> ChatView:
