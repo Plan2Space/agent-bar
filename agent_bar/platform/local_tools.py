@@ -18,7 +18,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
-REFUSAL_CODES = ("UNKNOWN_TOOL", "MALFORMED", "DUPLICATE", "TURN_LIMIT")
+REFUSAL_CODES = ("UNKNOWN_TOOL", "MALFORMED", "DUPLICATE", "TURN_LIMIT", "MODEL_MISMATCH")
 
 
 @dataclass(frozen=True)
