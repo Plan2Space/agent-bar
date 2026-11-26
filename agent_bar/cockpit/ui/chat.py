@@ -6,6 +6,9 @@ O handler de update so acumula texto ou atualiza um cartao: nada de I/O na threa
 from __future__ import annotations
 
 import logging
+import os
+import threading
+import time
 from collections.abc import Callable
 from pathlib import Path
 
@@ -81,6 +84,9 @@ def _choices(option: dict) -> list[tuple[str, str]]:
     return out
 
 
+DEFAULT_OLLAMA_MODEL = "llama3.1:8b"
+
+
 def _default_provider_client(profile, workspace: str, **kw):
     """Cliente do Chat para provedor nao-ACP. Hoje: Ollama no endpoint descoberto (OLLAMA_HOST ou o padrao)."""
     from agent_bar.cockpit.provider_client import ProviderClient
@@ -92,7 +98,10 @@ def _default_provider_client(profile, workspace: str, **kw):
     if profile.adapter == "ollama-executor":                                 # P2S-LOCAL-EXECUTOR-SKETCHUP-POC
         from agent_bar.platform.sketchup_sample import executor_adapter
         return ProviderClient(executor_adapter(endpoint), **kw)
-    return ProviderClient(OllamaAdapter(endpoint, timeout=30), **kw)
+    # o modelo padrão é uma PREFERÊNCIA explícita e estável, não a ordem do /api/tags (o 1º era um modelo de 9 GB com
+    # thinking, que com a GPU ocupada passava minutos sem emitir nada); configurável por AGENT_BAR_OLLAMA_MODEL
+    preferred = os.environ.get("AGENT_BAR_OLLAMA_MODEL", "").strip() or DEFAULT_OLLAMA_MODEL
+    return ProviderClient(OllamaAdapter(endpoint, timeout=30, preferred_model=preferred), **kw)
 
 
 def _confirm_irreversible_dialog(req: PermissionRequest, parent: QWidget) -> bool:
@@ -199,6 +208,11 @@ class ChatView(QWidget):
         self.bridge.permission.connect(self._on_permission, queued)
         self.bridge.done.connect(self._on_done, queued)
         self.bridge.exited.connect(self._on_exit, queued)
+        self._wait_timer = QTimer(self)                                       # bug do Felipe: nunca tela parada sem sinal
+        self._wait_timer.setInterval(1000)
+        self._wait_timer.timeout.connect(self._tick)
+        self._turn_t0 = 0.0
+        self._phase = ""
         self.flush_timer = QTimer(self)
         self.flush_timer.setSingleShot(True)
         self.flush_timer.setInterval(FLUSH_MS)
@@ -350,6 +364,9 @@ class ChatView(QWidget):
 
     def _set_busy(self, busy: bool) -> None:
         self.busy = busy
+        if not busy and self._phase:                                         # falhou antes do turno (ex.: conexão)
+            self._phase = ""
+            self._wait_timer.stop()
         self.send_btn.setText("Parar" if busy else "Enviar")
         self._enable_config()
 
@@ -404,8 +421,11 @@ class ChatView(QWidget):
             lambda f, g=gen: self._emit_done(g, f"config:{cid}", f))
 
     def _show_error(self, exc: BaseException | None, text: str = "") -> None:
+        from agent_bar.platform.adapter import AdapterError
         kind = classify(exc) if exc is not None else "error"
-        hint = {"not_found": "o executável do agente não está no PATH", "auth": "o agente pede login na CLI dele",
+        if isinstance(exc, AdapterError):                                    # Ollama e outros provedores da plataforma
+            kind = "provedor"
+        hint = {"provedor": "o provedor local falhou","not_found": "o executável do agente não está no PATH", "auth": "o agente pede login na CLI dele",
                 "timeout": "o agente não respondeu a tempo", "acp_down": "o processo do agente terminou"}.get(kind, "falha")
         detail = text or (str(exc) if exc else "")
         self.banner_label.setText(f"[{kind}] {hint}. {detail}"[:400])
@@ -573,6 +593,7 @@ class ChatView(QWidget):
             self.context_sent([n for n, _t in parts])
         self._refresh_history()
         self._set_busy(True)
+        self._start_wait()                                                   # sinal desde o envio, antes do 1º token
         self.text_block = self.thought_block = None
         self._turn_text, self._turn_thought = [], []
         if self.client is None or not self.ready:
@@ -611,8 +632,54 @@ class ChatView(QWidget):
     def _prompt(self, text: str) -> None:
         assert self.client is not None
         gen = self.gen
-        self.status.setText("agente trabalhando…")
+        self._tick()
         self.client.prompt(text).add_done_callback(lambda f, g=gen: self._emit_done(g, "prompt", f))
+
+    # ------------------------------------------------------------------------------- estado vivo do turno
+    def _model_in_use(self) -> str:
+        opt = find_config(getattr(self, "_config", []), "model")
+        return str((opt or {}).get("currentValue") or "")
+
+    def _start_wait(self) -> None:
+        self._turn_t0 = time.monotonic()
+        self._phase = "wait"
+        self._wait_timer.start()
+        self._tick()
+
+    PHASES = {"wait": None, "think": "pensando…", "answer": "respondendo…", "tool": "usando ferramenta…"}
+
+    def _tick(self) -> None:
+        """Fase e tempo desde o envio, a cada segundo: carregando/aguardando → pensando → respondendo."""
+        if not self._phase:
+            return
+        p = self.profile()
+        wait = "carregando o modelo / aguardando a 1ª resposta…" if p.adapter != "acp" else "aguardando o agente…"
+        if not self.ready:
+            wait = "conectando…"
+        phase = self.PHASES.get(self._phase) or wait
+        model = self._model_in_use()
+        n = int(time.monotonic() - self._turn_t0)
+        self.status.setText(f"{p.label}" + (f" · {model}" if model else "") + f" · {phase} {n} s")
+
+    def _stop_wait(self) -> None:
+        if not self._phase:
+            return
+        n = int(time.monotonic() - self._turn_t0)
+        self._phase = ""
+        self._wait_timer.stop()
+        model = self._model_in_use()
+        self.status.setText(f"{self.profile().label}" + (f" · {model}" if model else "") + f" · turno em {n} s")
+        fn = getattr(self.client, "cpu_share", None)
+        if callable(fn) and model:                                           # /api/ps: local e barato, fora da UI
+            gen = self.gen
+
+            def check() -> None:
+                try:
+                    share = fn(model)
+                except Exception:                                            # noqa: BLE001 - aviso é opcional
+                    share = None
+                self.bridge.done.emit(gen, "cpu", (model, share), None)
+            threading.Thread(target=check, name="ollama-ps", daemon=True).start()
 
     def stop(self) -> None:
         for eid in list(self._perm_cards):                                   # nenhum cartão fica esperando um clique
@@ -625,6 +692,12 @@ class ChatView(QWidget):
     # ------------------------------------------------------------------------------------- sinais (thread UI)
     def _on_done(self, gen: int, tag: str, result: object, exc: object) -> None:
         if gen != self.gen:
+            return
+        if tag == "cpu":
+            model, share = result if isinstance(result, tuple) else ("", None)
+            if isinstance(share, float) and share > 0:
+                self._add(Notice(f"{model} está {round(share * 100)}% na CPU (a GPU pode estar ocupada por outro programa): "
+                                 "as respostas ficam lentas.", "#ffc233"))
             return
         if tag == "connect":
             if exc is not None:
@@ -747,6 +820,7 @@ class ChatView(QWidget):
             log.warning("preferencia do Enter nao foi salva")
 
     def _finish_turn(self, stop_reason: str | None, exc: BaseException | None) -> None:
+        self._stop_wait()
         if self._turn_thought:
             self.chat.add("thought", "".join(self._turn_thought))
         self._last_turn_text = list(self._turn_text)
@@ -863,10 +937,14 @@ class ChatView(QWidget):
         if gen != self.gen:
             return
         if u.kind == "agent_message_chunk":
+            if self._phase:
+                self._phase = "answer"
             self._buf.append(u.text)
             self._turn_text.append(u.text)
             self._kick()
         elif u.kind == "agent_thought_chunk":
+            if self._phase and self._phase != "answer":
+                self._phase = "think"
             self._tbuf.append(u.text)
             self._turn_thought.append(u.text)
             self._kick()
