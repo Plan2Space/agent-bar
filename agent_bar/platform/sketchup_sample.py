@@ -626,7 +626,9 @@ def _text(s: str) -> list[dict]:
 def summary(result: dict) -> str:
     """Linhas que o Chat mostra no cartao da ferramenta: o que o MOTOR gravou, nunca a frase do modelo."""
     st = result.get("status")
-    lines = [f"estado: {st}" + (" (pronto: .skp salvo, reaberto e inspecionado)" if st == "completed" else "")]
+    done = ("render gravado e conferido" if result.get("tool") == "render_room_sample"
+            else ".skp salvo, reaberto e inspecionado")
+    lines = [f"estado: {st}" + (f" (pronto: {done})" if st == "completed" else "")]
     for k in ("request_id", "run_id", "build_run_id", "fixture_ref", "fixture_hash", "engine_commit", "skp_abs",
               "skp_sha256", "skp_bytes"):
         if result.get(k) is not None:

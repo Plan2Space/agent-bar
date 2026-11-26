@@ -271,3 +271,14 @@ def test_optional_fixture_absent_from_the_engine_is_not_published(engine_root, t
     enum = build.specs()[0]["function"]["parameters"]["properties"]["fixture_ref"]["enum"]
     assert "plan_alt_5x3_e3a" not in enum
     assert render.preflight()[0] is False                                     # sem build renderizavel publicado
+
+
+def test_the_render_card_does_not_say_the_build_text(engine_root, tmp_path):
+    from agent_bar.platform.sketchup_sample import summary
+    engine = FakeEngine()
+    build, render = tools(engine_root, tmp_path, engine)
+    b = built(build)
+    res = render.run(call(RENDER_TOOL, {"run_id": b["run_id"], "cameras": CAMS[:1]}), ctx(Perm(), "r1"))
+    text = summary(res)
+    assert ".skp salvo" not in text and "render gravado e conferido" in text
+    assert ".skp salvo, reaberto e inspecionado" in summary(b)                 # o do build continua
