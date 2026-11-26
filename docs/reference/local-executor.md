@@ -90,3 +90,12 @@ amostra, o perfil publica uma segunda ferramenta, `render_room_sample(run_id, ca
 - `completed` só com `render_manifest` OK + veredito PASS + cada PNG dentro do run, não vazio e com o sha256
   registrado pelo motor; visual sempre pendente (humano). O papel `renderer` só entra quando o motor gravou quadros, e
   `parent_run_id` liga o render ao build.
+
+## Guardas de borda do motor (`--via tool-cli`)
+
+O build chama `python -m p2s_engine.run … --via tool-cli` (sketchup-mcp-next#66/#72): o próprio motor recusa, antes de
+qualquer I/O e antes de abrir o SketchUp, fixture fora de `tests/fixtures/`/`runs/`, saída fora de `runs/`, `run_id`
+fora do padrão e SketchUp/V-Ray já abertos. Nesse caso não há `run_manifest`; o motor deixa
+`{status: BLOCKED, error: {code, message}}` no stdout, que o executor grava em `<request_id>.engine.stdout.json` (o
+stderr fica no `.engine.log`) e registra com o código exato (`PATH_NOT_ALLOWED`, `SKETCHUP_BUSY`, `VRAY_BUSY`,
+`BUSY_UNKNOWN`), não como `NO_MANIFEST`. O mesmo vale para o render.

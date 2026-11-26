@@ -33,6 +33,7 @@ from agent_bar.platform.sketchup_sample import (
     _error,
     _text,
     _under,
+    engine_refusal,
     filtered_env,
     provenance,
     sha256_file,
@@ -233,6 +234,9 @@ class RenderSampleTool:
                           "o render nao terminou no prazo; reconciliado pelo run_id (sem novo render)"})
         else:
             result.update(read_render(b.out_root / run_id, chk["skp_sha"]))
+            refusal = engine_refusal(log) if result["error"] and result["error"]["code"] == "NO_MANIFEST" else None
+            if refusal:                                                      # recusa na borda: o codigo exato do motor
+                result["error"] = refusal
         observe_renderer(prov, b.out_root / run_id)
         b._finish(call, ctx, rid, result)
         return result
