@@ -340,6 +340,7 @@ class DesignView(QWidget):
         self.breadcrumb = QLabel("")
         self.breadcrumb.setStyleSheet(MUTED_CSS)
         self.breadcrumb.setAccessibleName("Seleção do Design")
+        self.breadcrumb.setWordWrap(True)                                         # UX-16: o texto não alarga a página
         self.attach_box = QCheckBox("Anexar esta seleção ao próximo prompt do Chat")
         self.attach_box.setStyleSheet("QCheckBox{color:#cfcfd4;font-size:12px}")
         self.attach_box.setToolTip("Desligado por padrão. Vale para o próximo envio do Chat e se desmarca depois dele. "
