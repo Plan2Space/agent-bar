@@ -442,8 +442,7 @@ class SketchUpSampleTool:
                           "o motor nao terminou no prazo; o resultado sera reconciliado pelo run_id (sem novo run)"})
         else:
             result.update(self.read_run(self.out_root / run_id, fixture_hash))
-            su = result.get("sketchup") or {}                                # o que o motor registrou, depois do run
-            result["provenance"]["roles"]["builder"]["sketchup_version"] = su.get("version")
+        observe_roles(result["provenance"], self.out_root / run_id)          # papeis efetivos: so o que o motor registrou
         self._finish(call, ctx, rid, result)
         return result
 
@@ -514,6 +513,8 @@ class SketchUpSampleTool:
                     finished = False
                 if finished:
                     result.update(self.read_run(run_dir, prior["fixture_hash"]))
+                    if result.get("provenance"):
+                        observe_roles(result["provenance"], run_dir)
                     self._finish(None, None, prior["request_id"], result)
                     return {**result, "replayed": True}
             pid = result.get("engine_pid")
@@ -537,9 +538,11 @@ class SketchUpSampleTool:
 
 
 def provenance(ctx: ToolContext, engine_head: dict | None, studio: dict) -> dict:
-    """Quem fez o que nesta execucao (P2S-STUDIO-LLM-LAB-001 §10). O modelo local so PEDIU a ferramenta e escolheu a
-    fixture: o plano de construcao e do motor, a partir da fixture versionada, e nao e atribuido ao modelo. Nao ha
-    modelo de reserva: `fallback_model` e sempre None neste executor. O que nao foi medido fica None."""
+    """Quem fez o que nesta execucao (P2S-STUDIO-LLM-LAB-001 §10). Na hora do pedido so dois papeis ja ocorreram: o
+    modelo local PEDIU a ferramenta (e escolheu a fixture_ref) e o Studio escreve o desfecho. Planejamento, construcao e
+    inspecao ficam em `roles_expected` e so passam a `roles` quando o run_manifest do motor registra o passo
+    (`observe_roles`): timeout, falha antes do passo ou recusa nunca creditam ao motor algo que nao aconteceu. O plano
+    de construcao e do motor, derivado da fixture versionada, nunca do modelo. Sem modelo de reserva."""
     engine = f"sketchup-mcp-next@{(engine_head or {}).get('commit') or 'desconhecido'}"
     model = f"{ctx.model_id}@{ctx.model_digest or 'sem-digest'}"
     return {
@@ -548,20 +551,47 @@ def provenance(ctx: ToolContext, engine_head: dict | None, studio: dict) -> dict
         "model_version": None,                                               # o Ollama so da a tag (no model_id) e o digest
         "experiment_id": None, "parent_run_id": None,
         "prompt_sha256": ctx.prompt_sha256, "inference": dict(ctx.inference),
-        "roles": {
-            "tool_requester": {"kind": "model", "id": model},
+        "roles": {"tool_requester": {"kind": "model", "id": model}, "planner": None, "builder": None,
+                  "renderer": None, "evaluator": None, "refiner": None,
+                  "outcome_writer": {"kind": "studio", "id": f"agent-bar@{studio.get('commit')}"}},
+        "roles_expected": {
             "planner": {"kind": "engine", "id": engine,
                         "note": "plano de construcao derivado da fixture versionada; o modelo so escolheu a ferramenta "
                                 "e a fixture_ref"},
-            "builder": {"kind": "engine", "id": engine, "sketchup_version": None},
-            "renderer": None,                                                # esta ferramenta nao renderiza
+            "builder": {"kind": "engine", "id": engine},
             "evaluator": {"kind": "engine_harness", "id": engine,
                           "note": "inspecao do .skp reaberto (validation_report.json); veredito visual: humano"},
-            "refiner": None,
-            "outcome_writer": {"kind": "studio", "id": f"agent-bar@{studio.get('commit')}"},
         },
         "fallback_model": None,
     }
+
+
+def observe_roles(prov: dict, run_dir: Path) -> dict:
+    """Passa de `roles_expected` a `roles` so o que o run_manifest do motor registrou como passo OK; o avaliador exige
+    tambem o validation_report.json com veredito. Ilegivel ou ausente = nada creditado."""
+    try:
+        man = json.loads((run_dir / "run_manifest.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return prov
+    ok = {str(st.get("name")) for st in man.get("steps") or [] if st.get("status") == "OK"}
+    exp, roles = prov.get("roles_expected") or {}, prov["roles"]
+    commit = (man.get("engine") or {}).get("commit")
+    engine = f"sketchup-mcp-next@{commit}" if commit else None
+
+    def credit(role: str, **extra) -> None:
+        if role in exp:
+            roles[role] = {**exp[role], **({"id": engine} if engine else {}), **extra}
+    if "validate_fixture" in ok:
+        credit("planner")
+    if "build_and_save" in ok:
+        credit("builder", sketchup_version=(man.get("sketchup") or {}).get("version"))
+    try:
+        verdict = json.loads((run_dir / "validation_report.json").read_text(encoding="utf-8")).get("verdict")
+    except (OSError, ValueError):
+        verdict = None
+    if "reopen_and_inspect" in ok and verdict:
+        credit("evaluator", verdict=verdict)
+    return prov
 
 
 def _error(code: str, message: str) -> dict:

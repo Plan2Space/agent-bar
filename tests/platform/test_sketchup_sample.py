@@ -66,8 +66,14 @@ class FakeEngine:
                "sketchup": {"version": "26.0.429", "build_pid": 1, "reopen_pid": 2},
                "artifacts": [{"role": "skp", "path": skp_rel,
                               "sha256": "0" * 64 if self.mode == "hash_mismatch" else sha(data), "bytes": len(data)}],
-               "error": {"code": "SU"} if self.mode == "engine_failed" else None}
+               "error": {"code": "SU"} if self.mode == "engine_failed" else None,
+               "steps": ([{"name": "validate_fixture", "status": "OK"}, {"name": "build_and_save", "status": "FAILED"}]
+                         if self.mode == "engine_failed" else
+                         [{"name": n, "status": "OK"} for n in
+                          ("validate_fixture", "build_and_save", "reopen_and_inspect", "validate")])}
         (run_dir / "run_manifest.json").write_text(json.dumps(man), encoding="utf-8")
+        if self.mode == "engine_failed":
+            return                                                           # falhou antes da inspecao: sem relatorio
         (run_dir / "validation_report.json").write_text(json.dumps(
             {"verdict": verdict, "failed": [], "checks": [{"id": "reopened", "pass": self.mode != "not_reopened"}]}), encoding="utf-8")
 
@@ -407,3 +413,29 @@ def test_provenance_separates_who_asked_who_planned_who_built_and_who_judged(eng
     assert roles["renderer"] is None and roles["refiner"] is None and p["fallback_model"] is None
     assert p["experiment_id"] is None and p["parent_run_id"] is None       # nao medido = None, nunca inventado
     assert roles["builder"]["sketchup_version"] == "26.0.429"              # do manifest do motor, depois do run
+
+
+def test_roles_are_only_what_the_engine_records_after_the_run(engine_root, tmp_path):
+    """fmmodesto #122: nada de atribuir planejamento, construcao ou inspecao antes de acontecerem."""
+    tool = make(engine_root, tmp_path, FakeEngine("timeout"))
+    tool.head = lambda _r: {"commit": "e" * 40, "dirty": False}
+    p = tool.run(call(), ctx(Perm()))["provenance"]
+    assert p["roles"]["planner"] is None and p["roles"]["builder"] is None and p["roles"]["evaluator"] is None
+    assert p["roles"]["tool_requester"]["kind"] == "model"                   # isso ocorreu de fato
+    assert p["roles_expected"]["evaluator"]["kind"] == "engine_harness"      # previsto != efetivo
+
+
+def test_an_engine_failure_before_inspection_does_not_credit_the_harness(engine_root, tmp_path):
+    tool = make(engine_root, tmp_path, FakeEngine("engine_failed"))
+    res = tool.run(call(), ctx(Perm()))
+    roles = res["provenance"]["roles"]
+    assert res["status"] == "failed"
+    assert roles["planner"]["kind"] == "engine"                              # a fixture foi validada e planejada
+    assert roles["builder"] is None and roles["evaluator"] is None          # build falhou; nada foi inspecionado
+
+
+def test_refused_requests_record_no_engine_role(engine_root, tmp_path):
+    res = make(engine_root, tmp_path).run(call(), ctx(Perm("reject_once")))
+    assert res["status"] == "refused"
+    roles = res.get("provenance", {}).get("roles", {})
+    assert not any(roles.get(k) for k in ("planner", "builder", "evaluator", "renderer"))

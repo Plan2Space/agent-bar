@@ -50,7 +50,9 @@ min); reabrir o Studio não espera por isso e o registro reconcilia o run.
 
 Cada execução grava em `<saída>/_studio/<request_id>.json` o bloco `provenance` (`p2s.lab.provenance.v1`): provedor,
 adaptador, versão do provedor, `model_id`, `model_digest`, sha256 do prompt do envio, parâmetros de inferência pedidos e
-os papéis separados — `tool_requester` (o modelo local), `planner` e `builder` (o motor, pelo commit; o modelo só
-escolheu a ferramenta e a `fixture_ref`), `renderer`, `evaluator` (a inspeção do motor), `refiner` e `outcome_writer`
-(o Studio, pelo commit). Não há modelo de reserva (`fallback_model` é sempre `null`). O que não foi medido fica `null`,
+os papéis separados. No pedido só existem `tool_requester` (o modelo local) e `outcome_writer` (o Studio, pelo
+commit); `planner`, `builder` e `evaluator` (o motor, pelo commit; o modelo só escolheu a ferramenta e a
+`fixture_ref`) ficam em `roles_expected` e só passam a `roles` quando o `run_manifest` do motor registra o passo OK
+(o avaliador exige também o `validation_report.json`). Timeout, falha antes do passo ou recusa não creditam nada ao
+motor. `renderer` e `refiner` ficam `null` nesta ferramenta. Não há modelo de reserva (`fallback_model` é sempre `null`). O que não foi medido fica `null`,
 nunca um valor inventado (ex.: `model_version`, `experiment_id`, `parent_run_id`).
