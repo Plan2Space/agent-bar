@@ -114,6 +114,11 @@ class ProviderClient:
         names = getattr(host, "names", None)
         return sorted(names()) if callable(names) else None
 
+    def cpu_share(self, model_id: str) -> float | None:
+        """Quanto do modelo está na CPU agora (só adaptador que mede; os outros: None = não dá para saber)."""
+        fn = getattr(self.adapter, "cpu_share", None)
+        return fn(model_id) if callable(fn) else None
+
     def prompt(self, content: str | list) -> cf.Future:
         text = content if isinstance(content, str) else " ".join(
             b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text")
