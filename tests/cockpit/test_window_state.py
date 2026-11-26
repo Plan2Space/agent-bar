@@ -312,3 +312,26 @@ def test_quitting_through_the_core_saves_the_window_too(tmp_path):
         assert saved is not None and (saved.x, saved.y, saved.w, saved.h) == (130, 95, 1100, 760)
     finally:
         dispose(win)
+
+
+def test_an_active_window_still_remembers_where_it_was_closed(tmp_path):
+    """Achado no aceite real do UX-16 (rodada 3): com a janela ATIVA, o Windows põe WindowActive no windowState(); a
+    comparação `== WindowNoState` falhava e a geometria normal nunca era registrada. Fechar e reabrir voltava ao estado
+    inicial. Nos testes offscreen a janela nunca fica ativa, e o defeito passava."""
+    from PySide6.QtCore import Qt
+    store = WS.WindowStateStore(tmp_path / "window.json")
+    store.save(WS.WindowState(100, 80, 1000, 700, maximized=False))
+    win = cockpit(tmp_path, store)
+    try:
+        win.show()
+        win.setWindowState(Qt.WindowState.WindowActive)                           # como o Windows quando ela tem o foco
+        _APP.processEvents()
+        assert win.windowState() & Qt.WindowState.WindowActive
+        win.resize(1150, 740)
+        win.move(150, 110)
+        _APP.processEvents()
+        win.close()
+    finally:
+        dispose(win)
+    saved = store.load()
+    assert (saved.x, saved.y, saved.w, saved.h) == (150, 110, 1150, 740) and not saved.maximized

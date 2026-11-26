@@ -343,7 +343,9 @@ class CockpitWindow(QMainWindow):
         """Posição da MOLDURA e tamanho do conteúdo enquanto a janela está normal: é o que volta ao sair do maximizado.
         (normalGeometry() dá o canto do conteúdo, não da moldura: salvar dele desceria a janela uma barra de título a
         cada ciclo maximizar/reabrir.)"""
-        if self.windowState() == Qt.WindowState.WindowNoState and self.isVisible():
+        # só os bits de tamanho contam: com a janela ATIVA o Windows acrescenta WindowActive ao estado (UX-16, rodada 3)
+        sized = Qt.WindowState.WindowMaximized | Qt.WindowState.WindowMinimized | Qt.WindowState.WindowFullScreen
+        if not (self.windowState() & sized) and self.isVisible():
             now = (self.pos().x(), self.pos().y(), self.width(), self.height())
             if now != getattr(self, "_normal", None):
                 self._prev_normal, self._normal = getattr(self, "_normal", None), now
