@@ -446,7 +446,9 @@ class ChatView(QWidget):
         self.status.setText(f"conectando a {p.label} em {Path(ws).name}…")
         if p.adapter != "acp":                                               # provedor da plataforma (F1/F2): mesmo Chat
             self.mcp = acp_mcp.McpConfig()
-            self.mcp_label.setText("MCP: não se aplica (provedor sem ferramentas)")
+            # revisão do #123: dizer só o que é verdade para o PAPEL (o Executor local tem ferramenta, do Studio)
+            self.mcp_label.setText("MCP: não se aplica (ferramentas do Studio, não MCP)"
+                                   if R.role_of(p) == R.EXECUTOR_LOCAL else "MCP: não se aplica (Conversa, sem ferramentas)")
             self.client = self.provider_factory(
                 p, ws, on_update=lambda u, g=gen: self.bridge.update.emit(g, u),
                 on_permission=lambda req, respond, g=gen: self.bridge.permission.emit(g, req, respond),

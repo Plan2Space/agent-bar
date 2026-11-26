@@ -129,3 +129,63 @@ def test_the_chat_declares_the_apps_config_and_says_so(tmp_path, monkeypatch, wi
             assert got == [] and v.mcp_label.text() == f"MCP indisponível (sem {M.CONFIG_NAME})"
     finally:
         dispose(v)
+
+
+def test_a_resumed_session_declares_the_same_servers_on_load(tmp_path):
+    """SHOULD da revisão (#123 @ 5276c06): o session/load também manda os servidores; uma sessão retomada não pode
+    perder (nem ganhar) MCP em silêncio."""
+    first = AcpClient([sys.executable, str(STUB)], tmp_path, mcp_servers=[ENGINE])
+    try:
+        first.connect(None).result(T)
+        sid = first.session_id
+    finally:
+        first.close().result(T)
+    chunks: list[str] = []
+    again = AcpClient([sys.executable, str(STUB)], tmp_path, mcp_servers=[ENGINE],
+                      on_update=lambda u: chunks.append(u.text) if u.kind == "agent_message_chunk" else None)
+    try:
+        info = again.connect(sid).result(T)
+        assert info.get("loaded") is True and again.session_id == sid               # passou pelo session/load
+        again.prompt("mcp").result(T)
+        assert json.loads("".join(chunks)) == [ENGINE]
+    finally:
+        again.close().result(T)
+
+
+@pytest.mark.parametrize("key,adapter,expected", [
+    ("ollama", "ollama", "MCP: não se aplica (Conversa, sem ferramentas)"),
+    ("ollama-executor", "ollama-executor", "MCP: não se aplica (ferramentas do Studio, não MCP)"),
+], ids=["conversa", "executor-local"])
+def test_the_mcp_line_of_a_platform_provider_is_true_for_its_role(tmp_path, monkeypatch, key, adapter, expected):
+    """MUST da revisão (#123 @ 5276c06): "provedor sem ferramentas" era falso para o Executor local (amostra), que
+    existe JUSTAMENTE por ter ferramenta (do Studio, não MCP)."""
+    import concurrent.futures as cf
+
+    from agent_bar.cockpit.profiles import AgentProfile
+    from agent_bar.cockpit.store import ChatStore
+    from agent_bar.cockpit.ui.chat import ChatView
+
+    class Provider:
+        def __init__(self, *_a, **_kw):
+            pass
+
+        def connect(self, _sid=None):
+            f = cf.Future()
+            f.set_result({"agent": {}, "session_id": "p-1", "modes": {}, "config_options": []})
+            return f
+
+        def close(self):
+            f = cf.Future()
+            f.set_result(None)
+            return f
+    monkeypatch.setenv("AGENT_BAR_COCKPIT_DATA", str(tmp_path / "data"))
+    monkeypatch.setattr(AgentProfile, "available", lambda self: (True, ""))
+    (tmp_path / "ws").mkdir()
+    prof = AgentProfile(key, key, ("python",), adapter=adapter)
+    v = ChatView(ChatStore(tmp_path / "data"), provider_factory=Provider, profiles_fn=lambda: [prof],
+                 workspaces_fn=lambda: [tmp_path / "ws"])
+    try:
+        v.ensure_client()
+        assert v.mcp_label.text() == expected
+    finally:
+        dispose(v)
