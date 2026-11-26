@@ -304,3 +304,80 @@ def test_tool_context_carries_prompt_hash_and_inference_parameters(server):
     assert ctx.provider == "ollama" and ctx.adapter == "ollama"
     assert ctx.inference == {"think": None, "num_ctx": None, "temperature": None, "seed": None}
     a.disconnect()
+
+
+
+# ------------------------------------------------------------------ LAB-10: descoberta dinamica e identidade por modelo
+def test_a_model_installed_while_the_studio_is_open_is_discovered_without_reconnecting(server):
+    a = make(server, Host())
+    assert [m["model_id"] for m in a.list_models()] == ["chat-a"]
+    server.models = {**server.models, "chat-new": {"capabilities": ["completion", "tools"]}}
+    diff = a.refresh_models()
+    assert diff["added"] == ["chat-new"] and diff["removed"] == [] and diff["digest_changed"] == []
+    assert "chat-new" in [m["model_id"] for m in a.list_models()]
+    a.disconnect()
+
+
+def test_a_new_digest_under_the_same_tag_has_its_own_history(server):
+    a = make(server, Host())
+    server.tool_script = {"calls": [call()]}
+    ask(a)
+    assert a.tool_calls_for("chat-a")["state"] == "SUPPORTED"
+    server.digests["chat-a"] = "f" * 64                                      # o mesmo nome, outro blob (re-pull)
+    diff = a.refresh_models()
+    assert diff["digest_changed"] == ["chat-a"]
+    assert a.tool_calls_for("chat-a")["state"] == "UNKNOWN"                  # a prova era do digest antigo
+    a.disconnect()
+
+
+def test_model_identity_separates_announced_from_proven(server):
+    a = make(server, Host())
+    ident = a.model_identity("chat-a")
+    assert ident["provider"] == "ollama" and ident["adapter"] == "ollama" and ident["model_id"] == "chat-a"
+    assert ident["model_digest"] == fake_digest("chat-a") and ident["model_version"] is None
+    assert ident["announced"]["tools"] == "SUPPORTED" and ident["proven"]["tool_calls"]["state"] == "UNKNOWN"
+    server.tool_script = {"calls": [call()]}
+    ask(a)
+    assert a.model_identity("chat-a")["proven"]["tool_calls"]["state"] == "SUPPORTED"
+    a.disconnect()
+
+
+def test_a_preferred_model_that_is_not_installed_is_not_invented(server):
+    a = OllamaAdapter(server.endpoint, tool_host=Host(), preferred_model="nao-instalado:1b")
+    a.connect()
+    assert a.create_session(SessionRequest())["model_accepted"] == "chat-a"   # o 1o instalado com tools
+    a.disconnect()
+
+
+# ------------------------------------------------------------------ LAB-22: negativos do §21 no executor
+def test_an_unknown_model_is_refused_before_any_request(server):
+    from agent_bar.platform.adapter import ModelRejected
+    a = make(server, Host())
+    before = len(chats(server))
+    with pytest.raises(ModelRejected):
+        a.create_session(SessionRequest(model_id="nao-existe:7b"))
+    assert len(chats(server)) == before
+    a.disconnect()
+
+
+def test_a_model_removed_mid_session_fails_typed_and_runs_nothing(server):
+    host = Host()
+    a = make(server, host)
+    sid = a.create_session(SessionRequest(model_id="chat-a"))["session_id"]
+    server.models = {k: v for k, v in server.models.items() if k != "chat-a"}  # desinstalado com o Studio aberto
+    server.tool_script = {"calls": [call()]}
+    with pytest.raises(PromptFailed):
+        a.send_prompt(sid, "crie", lambda e: None).result(timeout=15)
+    assert host.calls == []
+    a.disconnect()
+
+
+def test_a_reply_from_another_model_is_never_executed_under_the_requested_name(server):
+    host = Host()
+    a = make(server, host)
+    server.reply_model = "outro-modelo:70b"                                  # o servidor diz ter usado outro modelo
+    server.tool_script = {"calls": [call()]}
+    _, res, events = ask(a)
+    assert host.calls == []                                                  # nada roda com atribuicao errada
+    assert any(e.kind == "tool_update" and "MODEL_MISMATCH" in json.dumps(dict(e.data)) for e in events)
+    a.disconnect()

@@ -56,3 +56,37 @@ commit); `planner`, `builder` e `evaluator` (o motor, pelo commit; o modelo só 
 (o avaliador exige também o `validation_report.json`). Timeout, falha antes do passo ou recusa não creditam nada ao
 motor. `renderer` e `refiner` ficam `null` nesta ferramenta. Não há modelo de reserva (`fallback_model` é sempre `null`). O que não foi medido fica `null`,
 nunca um valor inventado (ex.: `model_version`, `experiment_id`, `parent_run_id`).
+
+## Descoberta dinâmica e identidade por modelo (LAB-10)
+
+Nenhuma lista de modelos no código: o adaptador lê `GET /api/tags` + `POST /api/show` ao conectar e
+`OllamaAdapter.refresh_models()` relê sem desconectar, devolvendo `added`, `removed` e `digest_changed` (mesmo nome,
+outro blob). A prova de `tool_calls` é por `modelo@digest`: um re-pull com digest novo volta a `UNKNOWN`.
+`OllamaAdapter.model_identity(modelo)` (`p2s.model_identity.v1`) separa o que o servidor **anuncia** (tools, visão,
+thinking, contexto) do que foi **comprovado** neste Studio. `model_version` fica `null`: o Ollama só fornece a tag
+(dentro do id) e o digest. `P2S_LOCAL_EXECUTOR_MODEL` é só preferência; se não estiver instalado, vale o primeiro
+modelo instalado que anuncia `tools`.
+
+Negativos (LAB-22): modelo inexistente é recusado antes de qualquer pedido; modelo removido no meio da sessão falha
+tipado sem executar nada; resposta em nome de outro modelo (`done.model` diferente do pedido) é recusada com
+`MODEL_MISMATCH` e não executa ferramenta.
+
+## Render pelo modelo local (LAB-16)
+
+Quando o motor tem a fixture `plan_alt_5x3_e3a` (sala 5x3 com cama, `sketchup-mcp-next#67`) e a render_spec de
+amostra, o perfil publica uma segunda ferramenta, `render_room_sample(run_id, cameras)`:
+
+- o modelo só nomeia um `run_id` de build `completed` deste executor com render_spec, e 1 ou 2 câmeras da spec;
+  `.skp`, render_spec, pasta e slot são do Studio;
+- sem slot concedido (`P2S_LOCAL_EXECUTOR_RENDER_SLOT`, dado pelo coordenador) = `SLOT_NOT_GRANTED`, sem perguntar nem
+  abrir nada; a saída do executor precisa ficar sob `<motor>/runs` (raiz que o render do motor aceita);
+- o slot é uma variável de ambiente lida a cada chamada: qualquer valor não vazio vale como "concedido" enquanto o
+  processo do Studio viver. A auditoria é o próprio valor, mostrado no cartão de permissão (`rawInput.slot`) e gravado
+  pelo motor em `render_manifest.request.slot`; quem concede e quando fica no canal do coordenador, não no Studio;
+- mesma permissão, mesmo lock e mesma recusa com SketchUp aberto do build (um motor por vez, build ou render);
+  o `.skp` é re-conferido pelo sha256 do build antes e depois da permissão;
+- chama `python -m p2s_engine.render <spec> <skp> --out-dir --run-id --cameras --slot --request-id --parent-run-id
+  --requested-by-json` (contrato da Frente A; a CLI com esses argumentos é pré-requisito no motor);
+- `completed` só com `render_manifest` OK + veredito PASS + cada PNG dentro do run, não vazio e com o sha256
+  registrado pelo motor; visual sempre pendente (humano). O papel `renderer` só entra quando o motor gravou quadros, e
+  `parent_run_id` liga o render ao build.
