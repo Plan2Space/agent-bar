@@ -37,7 +37,9 @@ TOOL_NAME = "build_room_sample"
 ALLOWED_FIXTURES = {                                                         # ref -> caminho versionado no motor
     "room_001": "tests/fixtures/rooms/room_001.json",
     "room_alt_5x3": "tests/fixtures/rooms/room_alt_5x3.json",
+    "plan_alt_5x3_e3a": "tests/fixtures/furnishing/plan_alt_5x3.e3a.furnishing.json",   # LAB E3a: + cama (render)
 }
+CORE_FIXTURES = ("room_001", "room_alt_5x3")                                 # sem elas o executor nao esta pronto
 OPTIONS = ({"optionId": "allow_once", "name": "Permitir uma vez", "kind": "allow_once"},
            {"optionId": "reject_once", "name": "Recusar", "kind": "reject_once"})
 STATUSES = ("accepted", "running", "completed", "failed", "unknown", "refused")
@@ -155,6 +157,12 @@ class RequestRegistry:
             self._db.execute("UPDATE requests SET status=?, result=?, updated_at=? WHERE request_id=?",
                              (status, json.dumps(result, ensure_ascii=False), now, request_id))
 
+    def by_run_id(self, run_id: str) -> dict | None:
+        with self._lock:
+            row = self._db.execute("SELECT * FROM requests WHERE run_id=? ORDER BY created_at DESC LIMIT 1",
+                                   (run_id,)).fetchone()
+        return dict(row) if row else None
+
     def in_flight(self) -> list[dict]:
         with self._lock:
             return [dict(r) for r in self._db.execute(
@@ -214,6 +222,9 @@ class SketchUpSampleTool:
         self.base_env = dict(os.environ if base_env is None else base_env)
         venv = self.engine_root / ".venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
         self.python = Path(python) if python is not None else venv
+        # tipo de run -> (manifest do motor, leitor do resultado, papeis observados); o render se registra aqui
+        self.replay_kinds: dict[str, tuple] = {
+            "build": ("run_manifest.json", lambda rd, pr: self.read_run(rd, pr["fixture_hash"]), observe_roles)}
 
     @property
     def registry(self) -> RequestRegistry:
@@ -229,12 +240,17 @@ class SketchUpSampleTool:
                             "permitida do motor; gera um run novo com .skp salvo, reaberto e inspecionado. "
                             "Pede permissao ao usuario antes de abrir o SketchUp."),
             "parameters": {"type": "object", "properties": {"fixture_ref": {
-                "type": "string", "enum": sorted(ALLOWED_FIXTURES),
-                "description": "fixture de comodo permitida (room_001 = sala 4x4 m com porta e janela)"}},
+                "type": "string", "enum": self.available_fixtures(),
+                "description": ("fixture permitida (room_001 = sala 4x4 m com porta e janela; plan_alt_5x3_e3a = "
+                                "sala 5x3 com cama, renderizavel)")}},
                 "required": ["fixture_ref"]}}}]
 
     def names(self) -> set[str]:
         return {TOOL_NAME}
+
+    def available_fixtures(self) -> list[str]:
+        """Fixtures da allowlist presentes neste checkout do motor (as opcionais so aparecem quando existem)."""
+        return sorted(r for r, rel in ALLOWED_FIXTURES.items() if (self.engine_root / rel).is_file())
 
     def system_prompt(self) -> str:
         return ("Voce e o Executor local (amostra) do P2S Studio. Voce tem UMA ferramenta, build_room_sample: o Studio a "
@@ -285,7 +301,7 @@ class SketchUpSampleTool:
             return False, f"{self.engine_root} nao e um checkout do sketchup-mcp-next"
         if not self.python.is_file():
             return False, f"motor sem ambiente Python ({self.python}); rode `uv sync` no checkout do motor"
-        missing = [r for r, rel in ALLOWED_FIXTURES.items() if not (self.engine_root / rel).is_file()]
+        missing = [r for r in CORE_FIXTURES if not (self.engine_root / ALLOWED_FIXTURES[r]).is_file()]
         if missing:
             return False, f"fixtures ausentes no motor: {missing}"
         return True, ""
@@ -304,8 +320,8 @@ class SketchUpSampleTool:
         if extra:
             return _error("ARGUMENT_NOT_ALLOWED", f"argumentos nao publicados: {extra} (so fixture_ref)")
         ref = args.get("fixture_ref")
-        if not isinstance(ref, str) or ref not in ALLOWED_FIXTURES:
-            return _error("FIXTURE_NOT_ALLOWED", f"fixture_ref fora da allowlist {sorted(ALLOWED_FIXTURES)}")
+        if not isinstance(ref, str) or ref not in self.available_fixtures():
+            return _error("FIXTURE_NOT_ALLOWED", f"fixture_ref fora da allowlist {self.available_fixtures()}")
         raw = self.engine_root / ALLOWED_FIXTURES[ref]
         if raw.is_symlink():
             return _error("FIXTURE_NOT_ALLOWED", "fixture e um link simbolico")
@@ -405,7 +421,8 @@ class SketchUpSampleTool:
 
     def _execute(self, call: ToolCall, ctx: ToolContext, rid: str, ref: str, fixture: Path, fixture_hash: str,
                  run_id: str, head: dict | None, studio: dict) -> dict:
-        base = {"request_id": rid, "run_id": run_id, "fixture_ref": ref, "fixture_hash": fixture_hash,
+        base = {"tool": TOOL_NAME, "request_id": rid, "run_id": run_id, "fixture_ref": ref,
+                "fixture_hash": fixture_hash,
                 "engine_commit": (head or {}).get("commit"), "engine_dirty": (head or {}).get("dirty"),
                 "workspace_id": str(self.engine_root), "mode": self.mode, "studio_commit": studio.get("commit"),
                 "studio_dirty": studio.get("dirty"), "model": ctx.model_id,
@@ -501,20 +518,23 @@ class SketchUpSampleTool:
         return {**out, "status": "completed", "error": None}
 
     def _replay(self, prior: dict) -> dict:
-        """Pedido ja registrado: devolve o resultado gravado; `running`/`unknown` reconcilia pelo run_dir."""
+        """Pedido ja registrado: devolve o resultado gravado; `running`/`unknown` reconcilia pelo run_dir, com o
+        manifest e o leitor do tipo do run (build ou render)."""
         result = json.loads(prior["result"] or "{}")
         if prior["status"] in ("running", "unknown", "accepted"):
+            kind = "render" if str(prior.get("fixture_ref") or "").startswith("render:") else "build"
+            manifest_name, reader, observe = self.replay_kinds.get(kind, self.replay_kinds["build"])
             run_dir = self.out_root / prior["run_id"]
-            man = run_dir / "run_manifest.json"
+            man = run_dir / manifest_name
             if man.is_file():
                 try:
                     finished = bool(json.loads(man.read_text(encoding="utf-8")).get("finished_at"))
                 except (OSError, ValueError):
                     finished = False
                 if finished:
-                    result.update(self.read_run(run_dir, prior["fixture_hash"]))
+                    result.update(reader(run_dir, prior))
                     if result.get("provenance"):
-                        observe_roles(result["provenance"], run_dir)
+                        observe(result["provenance"], run_dir)
                     self._finish(None, None, prior["request_id"], result)
                     return {**result, "replayed": True}
             pid = result.get("engine_pid")
@@ -526,12 +546,13 @@ class SketchUpSampleTool:
             else:                                                            # motor morto sem manifest final
                 code = "ENGINE_GONE" if pid else "ENGINE_NOT_STARTED"
                 result.update(status="failed", error={"code": code, "message":
-                              "o motor deste pedido terminou sem run_manifest final; nenhum novo run foi disparado"})
+                              "o motor deste pedido terminou sem manifest final; nenhum novo run foi disparado"})
                 self._finish(None, None, prior["request_id"], result)
         return {**result, "replayed": True}
 
     def _refuse(self, call: ToolCall, ctx: ToolContext, rid: str, err: dict, **extra: Any) -> dict:
-        result = {"status": "refused", "request_id": rid, "mode": self.mode, "error": err["error"], **extra}
+        result = {"tool": TOOL_NAME, "status": "refused", "request_id": rid, "mode": self.mode,
+                  "error": err["error"], **extra}
         ctx.emit("tool_update", {"toolCallId": call.call_id, "title": f"Executor local (amostra): {TOOL_NAME}",
                                  "kind": "execute", "status": "failed", "content": _text(summary(result))})
         return result
@@ -606,10 +627,14 @@ def summary(result: dict) -> str:
     """Linhas que o Chat mostra no cartao da ferramenta: o que o MOTOR gravou, nunca a frase do modelo."""
     st = result.get("status")
     lines = [f"estado: {st}" + (" (pronto: .skp salvo, reaberto e inspecionado)" if st == "completed" else "")]
-    for k in ("request_id", "run_id", "fixture_ref", "fixture_hash", "engine_commit", "skp_abs", "skp_sha256",
-              "skp_bytes"):
+    for k in ("request_id", "run_id", "build_run_id", "fixture_ref", "fixture_hash", "engine_commit", "skp_abs",
+              "skp_sha256", "skp_bytes"):
         if result.get(k) is not None:
             lines.append(f"{k}: {result[k]}")
+    for img in result.get("images") or []:
+        lines.append(f"imagem ({img.get('kind')}): {img.get('png_abs')} sha256 {img.get('sha256')}")
+    if result.get("images"):
+        lines.append("veredito visual: PENDENTE (humano)")
     insp = result.get("inspection_result") or {}
     if insp:
         lines.append(f"inspecao: {insp.get('verdict')} · reaberto={insp.get('reopened')} · relatorio {insp.get('report')}")
@@ -661,7 +686,10 @@ def executor_adapter(endpoint: str):
     if not ok:
         raise SampleConfigError(why)
     model = os.environ.get("P2S_LOCAL_EXECUTOR_MODEL", "").strip() or DEFAULT_MODEL
-    return OllamaAdapter(endpoint, timeout=30, tool_host=tool, preferred_model=model)
+    from agent_bar.platform.render_sample import RenderSampleTool, ToolBox
+    render = RenderSampleTool(tool)
+    host = ToolBox([tool, render]) if render.preflight()[0] else tool    # LAB-16: so com build renderizavel
+    return OllamaAdapter(endpoint, timeout=30, tool_host=host, preferred_model=model)
 
 
 if __name__ == "__main__":                                                   # preflight a mao: python -m ...
