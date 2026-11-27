@@ -74,14 +74,34 @@ def filtered_env(base: Mapping[str, str]) -> dict[str, str]:
     return out
 
 
+def stdout_path(log_path: Path) -> Path:
+    """Onde fica o stdout do motor (o JSON de resultado C2) ao lado do log: `<request_id>.engine.stdout.json`."""
+    return log_path.with_name(log_path.name.removesuffix(".log") + ".stdout.json")
+
+
+def engine_refusal(log_path: Path) -> dict | None:
+    """Recusa do motor ANTES de qualquer I/O (sketchup-mcp-next#66/#72, `--via tool-cli`): sem run_manifest, o motor so
+    deixa o JSON {status: BLOCKED|INVALID_FIXTURE, error: {code, message}} no stdout. Devolve o erro, ou None."""
+    try:
+        out = json.loads(stdout_path(log_path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    err = out.get("error") if isinstance(out, dict) else None
+    if out.get("status") in ("BLOCKED", "INVALID_FIXTURE") and isinstance(err, dict) and err.get("code"):
+        return {"code": str(err["code"]), "message": str(err.get("message") or "")[:300],
+                "engine_status": out["status"]}
+    return None
+
+
 def run_engine(argv: list[str], cwd: Path, env: dict, timeout_s: float, log_path: Path,
                on_start: Callable[[int, float | None], None] | None = None) -> EngineExit:
-    """Sobe o motor como processo filho (sem shell), saida inteira no log. Nao mata no prazo: o motor fecha o proprio
-    SketchUp pelo PID; matar o Python deixaria o SketchUp orfao. Prazo vencido = `unknown`, reconciliado depois."""
+    """Sobe o motor como processo filho (sem shell): stdout (o JSON de resultado) em `stdout_path(log)`, stderr no log.
+    Nao mata no prazo: o motor fecha o proprio SketchUp pelo PID; matar o Python deixaria o SketchUp orfao. Prazo
+    vencido = `unknown`, reconciliado depois."""
     log_path.parent.mkdir(parents=True, exist_ok=True)
     flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-    with open(log_path, "ab") as log:
-        proc = subprocess.Popen(argv, cwd=str(cwd), env=env, stdin=subprocess.DEVNULL, stdout=log, stderr=log,
+    with open(log_path, "ab") as log, open(stdout_path(log_path), "wb") as out:
+        proc = subprocess.Popen(argv, cwd=str(cwd), env=env, stdin=subprocess.DEVNULL, stdout=out, stderr=log,
                                 creationflags=flags)
         if on_start is not None:                                             # identidade gravada antes de esperar
             from agent_bar.platform.proc import creation_time
@@ -435,7 +455,7 @@ class SketchUpSampleTool:
                                  "content": _text(f"permitido uma vez · request_id {rid} · run {run_id}\n"
                                                   "SketchUp 2026 em execucao pelo motor...")})
         argv = [str(self.python), "-m", "p2s_engine.run", str(fixture), "--out-dir", str(self.out_root),
-                "--run-id", run_id]
+                "--run-id", run_id, "--via", "tool-cli"]                    # guardas de borda do motor (#66/#72)
         log = self.out_root / "_studio" / f"{rid}.engine.log"
         started = self.clock()
         ident: dict[str, Any] = {}
@@ -459,6 +479,9 @@ class SketchUpSampleTool:
                           "o motor nao terminou no prazo; o resultado sera reconciliado pelo run_id (sem novo run)"})
         else:
             result.update(self.read_run(self.out_root / run_id, fixture_hash))
+            refusal = engine_refusal(log) if result["error"] and result["error"]["code"] == "NO_MANIFEST" else None
+            if refusal:                                                      # recusa na borda: o codigo exato do motor
+                result["error"] = refusal
         observe_roles(result["provenance"], self.out_root / run_id)          # papeis efetivos: so o que o motor registrou
         self._finish(call, ctx, rid, result)
         return result
@@ -487,6 +510,11 @@ class SketchUpSampleTool:
                                "engine_commit": (man.get("engine") or {}).get("commit"),
                                "sketchup": man.get("sketchup"), "engine_status": man.get("status"),
                                "verdict": man.get("verdict")}
+        engine_err = man.get("error") if isinstance(man.get("error"), dict) else {}
+        if man.get("status") == "SKETCHUP_UNAVAILABLE" and engine_err.get("code"):
+            # motor #72: SketchUp/V-Ray ocupado (ou tasklist indisponivel) depois da validacao; o SketchUp nao abriu
+            return {**out, "status": "failed", "error": {"code": str(engine_err["code"]), "engine_status":
+                    "SKETCHUP_UNAVAILABLE", "message": str(engine_err.get("message") or "")[:300]}}
         if man.get("status") != "OK":
             return {**out, "status": "failed", "error": {"code": "ENGINE_FAILED", "message":
                     f"motor terminou {man.get('status')}: {json.dumps(man.get('error'), ensure_ascii=False)[:300]}"}}
