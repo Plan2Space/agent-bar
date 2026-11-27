@@ -116,7 +116,7 @@ def test_window_wires_bell_chat_and_links(tmp_path):
             time.sleep(0.01)
         assert any(n.category == "AGENT" and "terminou" in n.title for n in win.center.list())
         win.notifications.bell.click()
-        assert win.tabs.currentWidget() is win.notifications
+        assert win.current_page() is win.notifications                       # UX-08: seção Todas de Notificações
         win.open_link("chat")
         assert win.tabs.currentWidget() is win.sessions
     finally:
