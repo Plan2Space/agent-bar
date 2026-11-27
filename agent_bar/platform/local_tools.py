@@ -115,5 +115,44 @@ def normalize_tool_calls(raw_calls: Any, published: set[str], turn: int) -> tupl
     return ok, refused
 
 
+def _array_fits(value: list, schema: Mapping[str, Any]) -> bool:
+    """A lista passa no schema publicado? So sabe conferir itens `string` (com enum opcional); o resto = nao."""
+    items = schema.get("items")
+    if not isinstance(items, Mapping) or items.get("type") != "string":
+        return False
+    if not all(isinstance(v, str) for v in value):
+        return False
+    if "enum" in items and not all(v in items["enum"] for v in value):
+        return False
+    if len(value) < int(schema.get("minItems", 0)):
+        return False
+    if "maxItems" in schema and len(value) > int(schema["maxItems"]):
+        return False
+    return not (schema.get("uniqueItems") and len(set(value)) != len(value))
+
+
+def coerce_json_array_args(arguments: Mapping[str, Any], parameters: Mapping[str, Any] | None
+                           ) -> tuple[dict[str, Any], list[dict]]:
+    """Coercao ESTRITA de um argumento `array` que o modelo mandou como STRING com JSON dentro (o llama3.1:8b faz isso
+    as vezes: `"[\\"a\\", \\"b\\"]"`). So quando o parametro e declarado `array` no schema publicado E a string decodifica
+    para uma lista que passa no MESMO schema; qualquer outra coisa fica como veio (e o validador da ferramenta recusa).
+    Devolve (argumentos a usar, [{param, raw, used}]) sem mexer nos originais: a coercao fica registrada."""
+    args = dict(arguments)
+    done: list[dict] = []
+    props = (parameters or {}).get("properties") or {}
+    for name, schema in props.items():
+        raw = args.get(name)
+        if not isinstance(schema, Mapping) or schema.get("type") != "array" or not isinstance(raw, str):
+            continue
+        try:
+            value = json.loads(raw)
+        except ValueError:
+            continue
+        if isinstance(value, list) and _array_fits(value, schema):
+            args[name] = value
+            done.append({"param": name, "raw": raw, "used": value})
+    return args, done
+
+
 def refusal_result(r: RefusedCall) -> dict:
     return {"status": "refused", "error": {"code": r.code, "message": r.reason}, "tool": r.name, "call_id": r.call_id}
