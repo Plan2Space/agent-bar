@@ -150,3 +150,22 @@ def test_overview_reports_health_per_source_and_read_time():
     assert health["github"].startswith("parcial")
     assert health["project"] == "ok"
     assert ov.active_agents is None          # sem fonte do Runtime neste PR: desconhecido, nunca 0 inventado
+
+
+def test_fronts_come_from_the_project_field_and_missing_is_unknown():
+    proj = ps.collect_project(client(), "Plan2Space", 1, now=NOW)
+    # O board ainda não tem o campo "Frente" (a H cria): tudo cai em "desconhecida", nada inventado.
+    assert [f.front for f in proj.fronts] == [ps.FRONT_UNKNOWN]
+    assert proj.fronts[0].total == proj.total
+
+
+def test_fronts_group_counts_by_the_front_field():
+    items = [{"status": "Done", "frente": "D"}, {"status": "Blocked", "Frente": "D"}, {"status": "In Progress"}]
+
+    class R:
+        def __call__(self, argv, timeout):
+            return 0, json.dumps({"items": items}), ""
+    proj = ps.collect_project(GhClient(exe=[__file__], runner=R()), "Plan2Space", 1, now=NOW)
+    d = next(f for f in proj.fronts if f.front == "D")
+    assert d.total == 2 and d.counts[ps.T_DONE] == 1 and d.counts[ps.T_BLOCKED] == 1
+    assert next(f for f in proj.fronts if f.front == ps.FRONT_UNKNOWN).counts[ps.T_IN_PROGRESS] == 1
