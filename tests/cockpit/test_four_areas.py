@@ -22,7 +22,7 @@ from PySide6.QtWidgets import QApplication, QMessageBox  # noqa: E402
 _APP = QApplication.instance() or QApplication([])
 STUB = Path(__file__).with_name("fake_acp_agent.py")
 MAIN = ["Chat", "Design", "PRs", "Notificações"]
-ADVANCED = ["Fluxos", "Dev", "Permissões", "Biblioteca", "Actions"]
+ADVANCED = ["Fluxos", "Dev", "Biblioteca", "Actions"]         # UX-08: Permissões foi para Notificações
 
 
 class FakeCore:
@@ -72,13 +72,13 @@ def pump(n=5):
 def test_the_main_navigation_is_exactly_chat_design_prs_notifications(win):
     w, _ = win
     assert [w.tabs.tabText(i) for i in range(w.tabs.count())] == MAIN
-    assert [w.tabs.widget(i) for i in range(4)] == [w.sessions, w.review, w.prs, w.notifications]
+    assert [w.tabs.widget(i) for i in range(4)] == [w.sessions, w.review, w.prs, w.notifications_area]  # UX-08
 
 
-def test_advanced_holds_flows_dev_permissions_library_and_actions(win):
+def test_advanced_holds_flows_dev_library_and_actions(win):
     w, _ = win
     assert [w.advanced.tabText(i) for i in range(w.advanced.count())] == ADVANCED
-    assert [w.advanced.widget(i) for i in range(5)] == [w.workflows, w.dev, w.permissions, w.library, w.actions]
+    assert [w.advanced.widget(i) for i in range(4)] == [w.workflows, w.dev, w.library, w.actions]
     names = [w.settings.sections.item(i).text() for i in range(w.settings.sections.count())]
     assert "Avançado" in names and "Geral" in names
 
