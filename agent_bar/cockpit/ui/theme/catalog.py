@@ -6,6 +6,8 @@
 - **Alto contraste:** escuro e claro, texto ≥ 7:1.
 - **Plan2Space (originais):** Studio Sage, Industrial Black, Walnut Boutique, Bronze Luxury, Concrete, Architectural White,
   Warm Studio, Graphite.
+- **Plan2Space (lote 4):** Blueprint, Terracotta, Marble, Night Render, Linen, Forest Cabin, Daylight Atelier,
+  Charcoal Sketch, Brass & Smoke, Moss Studio, Clay Model, Ink & Paper.
 - **Inspirados (lote 2):** Dracula, Nord, Tokyo Night (Night, Storm, Day), Catppuccin (Latte, Mocha),
   Gruvbox (Dark, Light), One Dark, One Light, Solarized (Dark, Light), Rosé Pine. Licenças MIT conferidas no repositório
   de cada um (SOURCES.md). Frappé e Macchiato ficaram fora por serem quase idênticos entre si (teste de
@@ -112,6 +114,33 @@ THEMES: tuple[Theme, ...] = (
           bg="#fdf6e3", surface="#eee8d5", surface_alt="#e6dfc8", border="#93a1a1", text="#4e6167", text_muted="#54666d", accent="#268bd2", accent_text="#000000", selection="#e6dfc8", focus="#aa8100", success="#5c6900", warning="#7d5f00", danger="#c32c29", info="#1d6f68", source="altercation/solarized (MIT)"),
     Theme("rose-pine", "Rosé Pine", "Inspirados", True,
           bg="#191724", surface="#1f1d2e", surface_alt="#26233a", border="#403d52", text="#e0def4", text_muted="#908caa", accent="#ebbcba", accent_text="#191724", selection="#403d52", focus="#c4a7e7", success="#9ccfd8", warning="#f6c177", danger="#eb6f92", info="#5e92a8", source="rose-pine/rose-pine-theme (MIT)"),
+    # ------------------------------------------------------------------------------------------ lote 4: originais Plan2Space
+    # materiais e momentos de projeto: prancha azul, terracota, mármore, render noturno, linho, cabana na mata, ateliê
+    # de dia, croqui a carvão, latão e fumaça, musgo, maquete de argila e nanquim sobre papel
+    Theme("blueprint", "Blueprint", "Plan2Space", True,
+          bg="#0b2a4a", surface="#0f3460", surface_alt="#154070", border="#3d6a99", text="#eaf2ff", text_muted="#b4c9e6", accent="#ffffff", accent_text="#0b2a4a", selection="#1d4f86", focus="#9ad0ff", success="#8fe3a8", warning="#ffd479", danger="#ff9d9d", info="#9ad0ff", source=P2S),
+    Theme("terracotta", "Terracotta", "Plan2Space", False,
+          bg="#f2dcd0", surface="#faece4", surface_alt="#e9cbbb", border="#d4a891", text="#3a1d14", text_muted="#6b3f30", accent="#a8432a", accent_text="#ffffff", selection="#ebc4b2", focus="#a8432a", success="#2f6b3a", warning="#7a5200", danger="#a3261d", info="#2d5c80", source=P2S),
+    Theme("marble", "Marble", "Plan2Space", False,
+          bg="#f4f4f2", surface="#ffffff", surface_alt="#e9e8e4", border="#cfcdc7", text="#1c1c1e", text_muted="#5a5a5e", accent="#2f2f33", accent_text="#ffffff", selection="#dedcd6", focus="#8a7a55", success="#256b30", warning="#7a5200", danger="#a8261d", info="#2a557d", source=P2S),
+    Theme("night-render", "Night Render", "Plan2Space", True,
+          bg="#0d0f1a", surface="#151829", surface_alt="#1e2238", border="#33395a", text="#e8e6f0", text_muted="#a9a6bf", accent="#ffb347", accent_text="#0d0f1a", selection="#2c2f4d", focus="#ffb347", success="#7fd9a0", warning="#ffcf6e", danger="#ff8a8a", info="#8ab8ff", source=P2S),
+    Theme("linen", "Linen", "Plan2Space", False,
+          bg="#f3efe6", surface="#faf8f2", surface_alt="#e9e3d6", border="#d2c9b6", text="#2e2a22", text_muted="#5f584a", accent="#6b7d5c", accent_text="#000000", selection="#dfe5d6", focus="#6b7d5c", success="#2f6b3a", warning="#7a5200", danger="#a3261d", info="#2d5c80", source=P2S),
+    Theme("forest-cabin", "Forest Cabin", "Plan2Space", True,
+          bg="#101a14", surface="#16241c", surface_alt="#1e3026", border="#34503f", text="#e3eee6", text_muted="#a7bdaf", accent="#d98c4a", accent_text="#101a14", selection="#25402f", focus="#e0a26b", success="#8fd6a5", warning="#ecc56a", danger="#f39388", info="#8fbfe0", source=P2S),
+    Theme("daylight-atelier", "Daylight Atelier", "Plan2Space", False,
+          bg="#fbfaf7", surface="#ffffff", surface_alt="#f1efe9", border="#dddad2", text="#202020", text_muted="#55534e", accent="#e2a400", accent_text="#202020", selection="#fbefc8", focus="#b98600", success="#2a6e36", warning="#7a5200", danger="#a8261d", info="#285a87", source=P2S),
+    Theme("charcoal-sketch", "Charcoal Sketch", "Plan2Space", True,
+          bg="#232323", surface="#2b2b2b", surface_alt="#343434", border="#4a4a4a", text="#f2f2f0", text_muted="#bdbdb8", accent="#f2f2f0", accent_text="#232323", selection="#454545", focus="#d9d9d4", success="#9bd8a8", warning="#e8cf7a", danger="#f2a0a0", info="#a8c8e8", source=P2S),
+    Theme("brass-smoke", "Brass & Smoke", "Plan2Space", True,
+          bg="#1b1d1f", surface="#23262a", surface_alt="#2c3035", border="#474c52", text="#e7e4dc", text_muted="#aeaaa0", accent="#c9a227", accent_text="#1b1d1f", selection="#3a3a2e", focus="#d6b54a", success="#86cf9a", warning="#e2c25a", danger="#ef8f86", info="#93b9de", source=P2S),
+    Theme("moss-studio", "Moss Studio", "Plan2Space", False,
+          bg="#eef1e8", surface="#f8faf4", surface_alt="#e2e7d8", border="#c3ccb1", text="#1f2a18", text_muted="#4c5a40", accent="#556b2f", accent_text="#ffffff", selection="#d7e2c4", focus="#556b2f", success="#2a6a2e", warning="#7a5200", danger="#a3261d", info="#2d5c80", source=P2S),
+    Theme("clay-model", "Clay Model", "Plan2Space", False,
+          bg="#ece6df", surface="#f6f2ed", surface_alt="#e0d8ce", border="#c6b9aa", text="#2b2622", text_muted="#5e554c", accent="#7a6a5a", accent_text="#ffffff", selection="#ddd2c4", focus="#7a6a5a", success="#2f6b3a", warning="#7a5200", danger="#a3261d", info="#2d5c80", source=P2S),
+    Theme("ink-paper", "Ink & Paper", "Plan2Space", False,
+          bg="#fffdf8", surface="#ffffff", surface_alt="#f3f0e8", border="#d6d1c4", text="#0f1a2e", text_muted="#45506a", accent="#1b3a8a", accent_text="#ffffff", selection="#dfe6f6", focus="#1b3a8a", success="#1f6b34", warning="#7a5200", danger="#a8231d", info="#1b3a8a", source=P2S),
 )
 
 DEFAULT = "p2s-escuro"

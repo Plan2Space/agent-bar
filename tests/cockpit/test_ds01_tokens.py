@@ -28,6 +28,11 @@ def test_the_first_batch_has_github_high_contrast_and_the_eight_originals():
     assert len({t.key for t in C.THEMES}) == len(C.THEMES)                     # chaves únicas
 
 
+def test_the_catalog_reaches_forty_distinct_themes():
+    """Pedido do Felipe (§5.2): pelo menos 40 temas completos e distintos (a distinção é o teste de duplicatas)."""
+    assert len(C.THEMES) >= 40
+
+
 def test_the_default_is_todays_look():
     d = C.get(C.DEFAULT)
     assert (d.bg, d.text, d.border) == ("#16161a", "#e6e6e6", "#3a3a44")

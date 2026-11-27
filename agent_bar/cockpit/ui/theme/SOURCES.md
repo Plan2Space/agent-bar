@@ -10,6 +10,7 @@ semânticos do nosso Design System, sem código nem ativo de terceiros.
 | P2S Escuro (atual) | as cores que o P2S Studio já usava (agent-bar) | do projeto | 2026-11-27 |
 | Alto contraste escuro e claro | original Plan2Space | do projeto | 2026-11-27 |
 | Studio Sage, Industrial Black, Walnut Boutique, Bronze Luxury, Concrete, Architectural White, Warm Studio, Graphite | originais Plan2Space | do projeto | 2026-11-27 |
+| Blueprint, Terracotta, Marble, Night Render, Linen, Forest Cabin, Daylight Atelier, Charcoal Sketch, Brass & Smoke, Moss Studio, Clay Model, Ink & Paper | originais Plan2Space (lote 4) | do projeto | 2026-11-27 |
 | Dracula | [dracula/dracula-theme](https://github.com/dracula/dracula-theme/blob/main/LICENSE) | MIT | 2026-11-27 |
 | Nord | [nordtheme/nord](https://github.com/nordtheme/nord/blob/develop/license) | MIT | 2026-11-27 |
 | Tokyo Night, Tokyo Night Storm, Tokyo Night Day | [tokyo-night/tokyo-night-vscode-theme](https://github.com/tokyo-night/tokyo-night-vscode-theme/blob/master/LICENSE.txt) | MIT | 2026-11-27 |
