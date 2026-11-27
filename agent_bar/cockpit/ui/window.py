@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from agent_bar import controls as ctl
 from agent_bar.cockpit import window_state as WS
 from agent_bar.cockpit.acp import AsyncRuntime
 from agent_bar.cockpit.evaluations import EvaluationStore
@@ -31,6 +32,7 @@ from agent_bar.cockpit.ui.chat_sessions import ChatSessions
 from agent_bar.cockpit.ui.dev_tab import DevTab
 from agent_bar.cockpit.ui.github_tabs import ActionsTab, PrsTab
 from agent_bar.cockpit.ui.library_tab import LibraryTab
+from agent_bar.cockpit.ui.notifications_area import NeedsYouPanel, NotificationsArea
 from agent_bar.cockpit.ui.notifications_tab import NotificationsTab
 from agent_bar.cockpit.ui.permissions_tab import PermissionsTab
 from agent_bar.cockpit.ui.review_tab import ReviewTab
@@ -129,16 +131,20 @@ class CockpitWindow(QMainWindow):
         self.review.set_vision(RunVision(self.platform_sessions, self.image_ledger))
         self.notifications = NotificationsTab(self.center, inbox=self.sessions.inbox, answer_fn=self.sessions.answer_permission,
                                               is_open_fn=self.sessions.broker.is_open)
-        self.sessions.permission_listeners += [lambda _id: self.permissions.refresh(), lambda _id: self.notifications.refresh()]
+        # UX-08: Permissões e "Precisa de você" dentro de Notificações (uma área só para o que pede o Felipe)
+        self.needs = NeedsYouPanel(self.center)
+        self.notifications_area = NotificationsArea(self.notifications, self.needs, self.permissions)
+        self.sessions.permission_listeners += [lambda _id: self.permissions.refresh(), lambda _id: self.notifications.refresh(),
+                                               lambda _id: self.notifications_area.update_counts()]
         # UX-07 (D-UX-2): exatamente 4 áreas principais, nessa ordem
         for page, title in ((self.sessions, "Chat"), (self.review, "Design"), (self.prs, "PRs"),
-                            (self.notifications, "Notificações")):
+                            (self.notifications_area, "Notificações")):
             self.tabs.addTab(page, title)
         # Configurações → Avançado: o que saiu da navegação principal continua a um clique (VS-I1)
         self.advanced = ScrollTabs()
         self.advanced.setStyleSheet(TAB_CSS)
-        for page, title in ((self.workflows, "Fluxos"), (self.dev, "Dev"), (self.permissions, "Permissões"),
-                            (self.library, "Biblioteca"), (self.actions, "Actions")):
+        for page, title in ((self.workflows, "Fluxos"), (self.dev, "Dev"), (self.library, "Biblioteca"),
+                            (self.actions, "Actions")):
             self.advanced.addTab(page, title)
         corner = QWidget()                                                     # sino + engrenagem no canto das abas
         cl = QHBoxLayout(corner)
@@ -237,8 +243,13 @@ class CockpitWindow(QMainWindow):
         self.notifications.refresh()
 
     def show_page(self, obj) -> None:
-        """Abre o objeto onde ele mora agora (UX-07): uma das 4 áreas, Configurações, ou Configurações → Avançado."""
-        if self.tabs.indexOf(obj) >= 0:
+        """Abre o objeto onde ele mora agora (UX-07/08): uma das 4 áreas, uma seção de Notificações, Configurações, ou
+        Configurações → Avançado."""
+        if obj in (self.notifications, self.needs, self.permissions):
+            self.stack.setCurrentWidget(self.tabs)
+            self.tabs.setCurrentWidget(self.notifications_area)
+            self.notifications_area.show_section(obj)
+        elif self.tabs.indexOf(obj) >= 0:
             self.stack.setCurrentWidget(self.tabs)
             self.tabs.setCurrentWidget(obj)
         elif obj is self.settings:
@@ -254,13 +265,17 @@ class CockpitWindow(QMainWindow):
     def current_page(self):
         """O objeto que o Felipe está vendo: a área atual, Configurações, ou a subpágina de Avançado."""
         if self.stack.currentWidget() is self.tabs:
-            return self.tabs.currentWidget()
+            page = self.tabs.currentWidget()
+            return page.sections.currentWidget() if page is self.notifications_area else page
         if self.settings.pages.currentWidget() is self.advanced:
             return self.advanced.currentWidget()
         return self.settings
 
     def open_link(self, link: str) -> None:
-        """Leva a origem de uma notificacao: `permissions:<id>`, `chat`, `workflows`."""
+        """Leva a origem de uma notificacao: `permissions:<id>`, `chat`, `workflows`, ou um PR (`https://…`, no navegador)."""
+        if link.startswith(("http://", "https://")):
+            ctl.open_url(link)
+            return
         kind, _, ref = link.partition(":")
         target = {"permissions": self.permissions, "chat": self.sessions, "workflows": self.workflows}.get(kind)
         if target is None:
@@ -326,6 +341,7 @@ class CockpitWindow(QMainWindow):
             self.save_window()
         self._closed = True
         self.notifications.shutdown()
+        self.notifications_area.shutdown()
         self.permissions.shutdown()
         self.workflows.shutdown()
         self.review.shutdown()
