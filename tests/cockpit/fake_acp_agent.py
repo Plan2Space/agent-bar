@@ -4,6 +4,7 @@ O comportamento do `session/prompt` e escolhido pela primeira palavra do texto:
   echo N     -> N chunks "c0 ", "c1 ", ... e stopReason end_turn
   env        -> um chunk com o JSON ordenado das CHAVES do ambiente recebido
   caps       -> um chunk com o JSON das clientCapabilities recebidas no initialize
+  mcp        -> um chunk com o JSON dos mcpServers recebidos no session/new (ou session/load)
   perm       -> tool_call + session/request_permission; chunk "outcome=<selected:ID|cancelled>"; tool_call_update
   slow       -> chunks a cada 50 ms ate session/cancel -> stopReason cancelled
   garbage    -> uma linha invalida, depois um chunk "after-garbage"
@@ -27,6 +28,7 @@ _waiting: dict[int, dict] = {}
 _events: dict[int, threading.Event] = {}
 _cancelled: set[str] = set()
 _caps: dict = {}
+_mcp: list = []                                      # mcpServers do ultimo session/new|load (UX-12)
 _next = [1000]
 _sessions = [0]
 _closed_sessions: set[str] = set()
@@ -118,6 +120,8 @@ def handle_prompt(rid: int, params: dict) -> None:
             chunk(sid, f"c{i} ")
     elif word == "env":
         chunk(sid, json.dumps(sorted(os.environ)))
+    elif word == "mcp":
+        chunk(sid, json.dumps(_mcp, sort_keys=True))
     elif word == "caps":
         chunk(sid, json.dumps(_caps, sort_keys=True))
     elif word in ("perm", "permrm") and _mode.get(sid) == "bypassPermissions":
@@ -215,6 +219,7 @@ def main() -> None:
                                                           "agentCapabilities": {"loadSession": True, "sessionCapabilities": {"close": {}},
                                                           "promptCapabilities": {"image": bool(os.environ.get("AGENT_BAR_FAKE_IMAGES"))}}, "authMethods": []}})
         elif method == "session/new":
+            _mcp[:] = params.get("mcpServers") or []
             # AGENT_BAR_FAKE_START_MODE simula o claude-agent-acp 0.109, que abre a sessao em "auto"
             available = [{"id": "default", "name": "Ask"}, {"id": "acceptEdits", "name": "Accept edits"},
                          {"id": "plan", "name": "Plan"}, {"id": "auto", "name": "Auto"},
@@ -237,6 +242,7 @@ def main() -> None:
             _closed_sessions.add(params.get("sessionId", ""))
             send({"jsonrpc": "2.0", "id": rid, "result": {}})
         elif method == "session/load":
+            _mcp[:] = params.get("mcpServers") or []
             state = os.environ.get("AGENT_BAR_FAKE_STATE_DIR")
             if state and not os.path.exists(os.path.join(state, str(params.get("sessionId", "")))):
                 send({"jsonrpc": "2.0", "id": rid, "error": {"code": -32002, "message": "Session not found"}})
