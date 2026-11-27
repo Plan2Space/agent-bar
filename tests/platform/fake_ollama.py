@@ -42,6 +42,9 @@ class FakeOllama:
         # {"calls": [...raw tool_calls...], "content": "texto", "drop": True (corta antes do done),
         #  "again": True (devolve tool_calls tambem na rodada com o resultado)}
         self.tool_script: dict | None = None
+        # roteiro por prompt (benchmark): {trecho do ultimo texto do usuario: script}; o primeiro trecho achado vale
+        # no lugar de `tool_script` naquele pedido. Chave "@<modelo>|<trecho>" vale so para aquele modelo.
+        self.script_by_prompt: dict[str, dict] = {}
         self.digests: dict[str, str] = {}                                   # digest substituto (modelo re-baixado)
         self.reply_model: str | None = None                                 # o servidor diz ter usado OUTRO modelo
         outer = self
@@ -99,6 +102,13 @@ class FakeOllama:
                     if body.get("think") is True:
                         line({"model": model_reply or model, "message": {"role": "assistant", "thinking": "pensando..."}, "done": False})
                     script = outer.tool_script
+                    user_text = next((str(m.get("content") or "") for m in reversed(body["messages"])
+                                      if m.get("role") == "user"), "")
+                    for key, s in outer.script_by_prompt.items():
+                        who, _, frag = key[1:].partition("|") if key.startswith("@") else (None, "", key)
+                        if (who is None or who == model) and frag in user_text:
+                            script = s
+                            break
                     role = body["messages"][-1].get("role")
                     if script is not None and role == "user" and ("tools" in body or script.get("untold")):
                         if script.get("content"):
