@@ -416,6 +416,7 @@ class DesignView(QWidget):
         self.compare.hide()
         self.compared = None
         self.compared_images = None
+        self._refresh_context()                                                   # o preview segue o que será enviado
 
     def _fill_cards(self) -> None:
         ref = self.reference

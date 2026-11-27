@@ -159,3 +159,18 @@ def test_the_choice_is_consumed_by_the_send_so_a_second_send_carries_no_design_c
     first, second = [m["text"] for m in win.chat.chat.messages if m["role"] == "agent"]
     assert first == compose_prompt(preview, "ECHO-PROMPT primeiro")
     assert second == "ECHO-PROMPT segundo"                                         # sem contexto do Design
+
+
+def test_a_gallery_reload_keeps_the_preview_equal_to_what_is_sent(win):
+    """MUST do fmmodesto (#124 @ a102e56 e @ 44aa356): `set_items` (recarga da galeria, avaliação salva) fecha a
+    comparação, mas o preview continuava com "comparando com: …" enquanto o texto enviado já não trazia. O preview é o
+    que vai: tem de ser igual a `attach_text()` depois da recarga."""
+    d = win.review.design
+    d.attach_box.setChecked(True)
+    d.compare_with_reference()
+    assert "comparando com:" in d.attach_preview.toPlainText()
+    assert d.attach_preview.toPlainText() == d.attach_text()
+    d.set_items(list(d.items))                                                      # o que o ReviewTab._cards faz
+    assert d.compared is None
+    assert d.attach_preview.toPlainText() == d.attach_text()
+    assert "comparando com:" not in d.attach_preview.toPlainText()

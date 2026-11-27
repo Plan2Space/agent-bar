@@ -75,10 +75,17 @@ def win(request, real_font, tmp_path, monkeypatch):
     from agent_bar.cockpit.profiles import AgentProfile
     from agent_bar.cockpit.ui.window import CockpitWindow
     monkeypatch.setenv("AGENT_BAR_COCKPIT_DATA", str(tmp_path / "data"))
+    for var in ("AGENT_BAR_EVIDENCE_DIR", "AGENT_BAR_ENGINE_DIR", "AGENT_BAR_DESIGN_LIBRARY_DIR"):
+        (tmp_path / var).mkdir()                                                   # nada da máquina entra no teste
+        monkeypatch.setenv(var, str(tmp_path / var))
     (tmp_path / "ws").mkdir()
     w = CockpitWindow(repos=["o/r"], window_store=WS.WindowStateStore(tmp_path / "window.json"),
                       profiles_fn=lambda: [AgentProfile("stub", "Stub", (sys.executable, str(STUB)))],
                       workspaces_fn=lambda: [tmp_path / "ws"])
+    # A primeira visita à aba Design relê o evidence em outra thread e TROCA os itens da galeria: no CI (#124 @ 44aa356)
+    # isso chegava antes da conferência ("nenhum render selecionado"); aqui, com o evidence real da máquina, trazia o
+    # run rc7b-render e passava por coincidência. Este teste mede LAYOUT com itens dele: a leitura fica de fora.
+    w.review.reload = lambda: None
     w.review.design.set_items([render(tmp_path, request.param)])
     w.show()
     yield w
@@ -106,7 +113,7 @@ def test_the_design_page_fits_and_the_attach_control_clears_the_sources_footer(w
     win.tabs.setCurrentWidget(win.review)
     d = win.review.design
     d.attach_box.setChecked(True)                                                  # com o preview aberto
-    pump()
+    pump(1.0)
     page = win.review
     scroll = page.parentWidget().parentWidget()
     assert isinstance(scroll, QScrollArea)
