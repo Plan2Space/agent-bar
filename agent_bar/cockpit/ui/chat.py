@@ -129,6 +129,35 @@ BTN_CSS = ("QPushButton{background:#2a2a30;color:#e6e6e6;border:1px solid #3a3a4
            "QPushButton:hover{background:#34343c}QPushButton:disabled{color:#666}")
 
 
+class FitCombo(QComboBox):
+    """Combo que não alarga a página (UX-16 run 6): a largura mínima vem de `chars` caracteres, não do item mais
+    comprido. O texto inteiro do item atual fica na dica (`full_tip`) e a lista aberta mostra os itens inteiros."""
+
+    def __init__(self, chars: int = 10, full_tip: bool = False) -> None:
+        super().__init__()
+        self.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self.setMinimumContentsLength(chars)
+        self._hint = ""
+        if full_tip:
+            self.currentIndexChanged.connect(lambda _i: self._full_tip())
+
+    def setToolTip(self, text: str) -> None:                                   # noqa: N802
+        self._hint = text
+        super().setToolTip(text)
+
+    def _full_tip(self) -> None:
+        text = self.currentText()
+        data = self.currentData()
+        if isinstance(data, str) and data and data != text:
+            text = f"{text}\n{data}"
+        super().setToolTip(f"{text}\n\n{self._hint}" if self._hint else text)
+
+    def showPopup(self) -> None:                                                # noqa: N802
+        view = self.view()
+        view.setMinimumWidth(min(view.sizeHintForColumn(0) + 24, 900))
+        super().showPopup()
+
+
 class _Bridge(QObject):
     update = Signal(int, object)
     permission = Signal(int, object, object)
@@ -228,7 +257,7 @@ class ChatView(QWidget):
         lay.setContentsMargins(10, 8, 10, 8)
         lay.setSpacing(6)
         head = QHBoxLayout()
-        self.agent_box = QComboBox()
+        self.agent_box = FitCombo(14, full_tip=True)
         for p in self.profiles:
             ok, why = p.available()
             self.agent_box.addItem(R.label(p) if ok else f"{R.role_of(p)} · {p.label} — indisponível: {why}", p.key)
@@ -236,18 +265,18 @@ class ChatView(QWidget):
                 self.agent_box.model().item(self.agent_box.count() - 1).setEnabled(False)
         first_ok = next((i for i, p in enumerate(self.profiles) if p.available()[0]), 0)
         self.agent_box.setCurrentIndex(first_ok)
-        self.workspace_box = QComboBox()
+        self.workspace_box = FitCombo(10, full_tip=True)
         for s in spaces:
             self.workspace_box.addItem(s.name, str(s))
         self.workspace_box.addItem("Escolher pasta…", "")
-        self.mode_box = QComboBox()
+        self.mode_box = FitCombo(6)
         self.mode_box.setToolTip("Modos anunciados pelo agente. O padrão pede permissão.")
-        self.model_box, self.effort_box = QComboBox(), QComboBox()
+        self.model_box, self.effort_box = FitCombo(10), FitCombo(6)
         self.model_box.setToolTip("Modelos anunciados pelo agente. Vale o que o agente confirmar.")
         self.effort_box.setToolTip("Esforços que o agente anuncia para ESTE modelo. Vale o que o agente confirmar.")
         self.confirmed = QLabel("")
         self.confirmed.setStyleSheet("color:#7ee2a8;font-size:11px")
-        self.history_box = QComboBox()
+        self.history_box = FitCombo(10)
         self.history_box.setToolTip("Conversas salvas")
         self.new_btn = QPushButton("Nova conversa")
         for w in (self.agent_box, self.workspace_box, self.mode_box, self.history_box, self.model_box, self.effort_box):
