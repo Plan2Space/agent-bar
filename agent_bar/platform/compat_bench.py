@@ -88,6 +88,7 @@ class Case:
     check: Callable[[Trace, dict], tuple[str, list[str]]] | None = None
     blocked: str | None = None                                               # motivo de BLOCKED (falta no motor)
     owner: str | None = None                                                 # quem desbloqueia
+    allow_tools: bool = True                                                 # False: permissao negada (nada abre)
 
 
 # ------------------------------------------------------------------------------------------------ criterios
@@ -148,7 +149,7 @@ ENGINE_GAP = "o motor ainda nao publica a ferramenta necessaria (matriz §9, Fre
 CASES: tuple[Case, ...] = (
     Case("C0", "Descoberta", "operation",
          ("Sem chamar nenhuma ferramenta, liste os nomes exatos das ferramentas que voce pode chamar agora, um por "
-          "linha.",), check_c0),
+          "linha.",), check_c0, allow_tools=False),
     Case("C1", "Chamada simples", "operation",
          ("Chame a ferramenta build_room_sample com fixture_ref igual a room_001.",), check_c1),
     Case("C2", "Construcao existente", "operation",
@@ -292,11 +293,15 @@ def run_model(adapter: Any, host: RecordingHost, model: str, case_ids: list[str]
     wall = wall or (lambda: time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
     machine = machine or (lambda: {})
     perms: list[dict] = []
+    current: dict[str, Case] = {}
 
     def on_permission(req, respond) -> None:
         tc = dict(getattr(req, "tool_call", {}) or {})
-        perms.append({"at": wall(), "title": tc.get("title"), "decided": "allow_once", "decided_by": "runner"})
-        respond("allow_once")
+        case = current.get("case")
+        choice = "allow_once" if case is None or case.allow_tools else "reject_once"
+        perms.append({"at": wall(), "case": case.id if case else None, "title": tc.get("title"), "decided": choice,
+                      "decided_by": "runner"})
+        respond(choice)
     adapter.on_permission = on_permission
     ctx = conditions(adapter, host, model)
     run = {"schema": SCHEMA, "started_at": wall(), "versions": versions(adapter, host, model), "conditions": ctx,
@@ -304,6 +309,7 @@ def run_model(adapter: Any, host: RecordingHost, model: str, case_ids: list[str]
     for case in CASES:
         if case.id not in case_ids:
             continue
+        current["case"] = case
         rec = run_case(adapter, host, model, case, ctx, timeout_s=timeout_s, clock=clock)
         run["cases"].append(rec)
     run["permissions"] = perms

@@ -108,8 +108,14 @@ def test_c0_fails_on_a_missing_or_invented_tool(server, engine_root, tmp_path, c
 def test_c0_fails_when_the_model_calls_instead_of_listing(server, engine_root, tmp_path):
     server.script_by_prompt[C0] = {"calls": [raw("room_001")]}
     a, host = bench(server, engine_root, tmp_path)
-    c0 = case(cb.run_model(a, host, "tool-a", ["C0"]), "C0")
+    run = cb.run_model(a, host, "tool-a", ["C0"])
+    c0 = case(run, "C0")
     assert c0["status"] == "FAIL" and "chamou ferramenta" in c0["reasons"][0]
+    # descoberta nunca abre o SketchUp: a permissao e negada e o motor nao roda
+    assert c0["tool_calls"][0]["result"]["error"]["code"] == "PERMISSION_DENIED"
+    assert run["permissions"] == [{**run["permissions"][0], "case": "C0", "decided": "reject_once"}]
+    assert not (engine_root / "runs" / "local-executor").exists() or not any(
+        p.name.startswith("lx-") for p in (engine_root / "runs" / "local-executor").iterdir())
 
 
 def test_c0_accepts_published_fixtures_and_parameter_names_in_the_answer(server, engine_root, tmp_path):

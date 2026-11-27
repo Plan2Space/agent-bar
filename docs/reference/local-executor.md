@@ -133,7 +133,7 @@ geometria": construção, validação, `.skp` e render são do motor.
 
 | Caso | Eixo | Hoje |
 |---|---|---|
-| C0 Descoberta | operação | listar as ferramentas publicadas sem chamar nenhuma e sem inventar outra |
+| C0 Descoberta | operação | listar as ferramentas publicadas sem chamar nenhuma e sem inventar outra (se chamar, a permissão é negada: nada abre) |
 | C1 Chamada simples | operação | `build_room_sample(room_001)`, com nome e argumento dados no pedido |
 | C2 Construção existente | operação | "sala de 5 x 3 metros com cama" → o modelo escolhe `plan_alt_5x3_e3a` pela descrição |
 | C3 Parametrização | operação | BLOCKED: o motor não publica construção com parâmetros novos (Frente A) |
