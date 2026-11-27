@@ -74,3 +74,21 @@ def test_model_and_session_records_validate_and_reject_bad_types():
 def test_all_capabilities_refuses_an_unknown_name():
     with pytest.raises(c.ContractError):
         c.all_capabilities(teleport=c.capability("SUPPORTED", "x"))
+
+
+@pytest.mark.parametrize("value, schema, ok", [
+    (1.5, {"type": "number"}, True), (True, {"type": "number"}, False), ("1", {"type": "number"}, False),
+    ("abc", {"type": "string", "pattern": "^[a-c]+$"}, True), ("abd", {"pattern": "^[a-c]+$"}, False),
+    (5, {"minimum": 0, "maximum": 5}, True), (6, {"maximum": 5}, False), (-1, {"minimum": 0}, False),
+    ([1], {"minItems": 1, "maxItems": 2}, True), ([], {"minItems": 1}, False), ([1, 2, 3], {"maxItems": 2}, False),
+    (["a", "b"], {"uniqueItems": True}, True), (["a", "a"], {"uniqueItems": True}, False),
+    ({"a": 1}, {"oneOf": [{"required": ["a"]}, {"required": ["b"]}]}, True),
+    ({"a": 1, "b": 2}, {"oneOf": [{"required": ["a"]}, {"required": ["b"]}]}, False),   # casa com as duas
+    ({}, {"oneOf": [{"required": ["a"]}, {"required": ["b"]}]}, False),                 # casa com nenhuma
+])
+def test_validate_covers_the_keywords_used_by_the_local_job_contracts(value, schema, ok):
+    if ok:
+        c.validate(value, schema)
+    else:
+        with pytest.raises(c.ContractError):
+            c.validate(value, schema)

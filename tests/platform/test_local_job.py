@@ -6,7 +6,6 @@ Schemas de docs/contracts; agregado de prova por (executor, task_type)."""
 from __future__ import annotations
 
 import json
-import re
 from pathlib import Path
 
 import pytest
@@ -14,6 +13,7 @@ import pytest
 from agent_bar.platform import capability_proofs as cp
 from agent_bar.platform import compat_bench as cb
 from agent_bar.platform import local_job as lj
+from agent_bar.platform.contracts import validate
 from agent_bar.platform.ollama import OllamaAdapter
 from agent_bar.platform.render_sample import ToolBox
 from tests.platform.fake_ollama import FakeOllama, fake_digest
@@ -24,50 +24,9 @@ CONTRACTS = Path(__file__).resolve().parents[2] / "docs" / "contracts"
 MODELS = {"tool-a": {"capabilities": ["completion", "tools"], "model_info": {"llama.context_length": 8192}}}
 
 
-# ------------------------------------------------------------------------------- verificador minimo de JSON Schema
-def check(doc, schema, path="$"):
-    """Subconjunto de JSON Schema usado em docs/contracts (type, const, enum, required, properties,
-    additionalProperties false, items, min/maxItems, uniqueItems, pattern, minimum, maximum, oneOf). Levanta no erro."""
-    types = {"object": dict, "array": list, "string": str, "integer": int, "number": (int, float), "boolean": bool,
-             "null": type(None)}
-    if "oneOf" in schema:
-        ok = 0
-        for sub in schema["oneOf"]:
-            try:
-                check(doc, sub, path)
-                ok += 1
-            except AssertionError:
-                pass
-        assert ok == 1, f"{path}: casa com {ok} alternativas de oneOf"
-    t = schema.get("type")
-    if t:
-        ts = t if isinstance(t, list) else [t]
-        assert any(isinstance(doc, types[x]) and not (x in ("integer", "number") and isinstance(doc, bool))
-                   for x in ts), f"{path}: tipo {type(doc).__name__} fora de {ts}"
-    if "const" in schema:
-        assert doc == schema["const"], f"{path}: {doc!r} != {schema['const']!r}"
-    if "enum" in schema:
-        assert doc in schema["enum"], f"{path}: {doc!r} fora de {schema['enum']}"
-    if isinstance(doc, str) and "pattern" in schema:
-        assert re.search(schema["pattern"], doc), f"{path}: {doc!r} nao casa {schema['pattern']}"
-    if isinstance(doc, (int, float)) and not isinstance(doc, bool):
-        assert doc >= schema.get("minimum", doc) and doc <= schema.get("maximum", doc), f"{path}: fora do intervalo"
-    if isinstance(doc, dict):
-        for k in schema.get("required", []):
-            assert k in doc, f"{path}: falta {k}"
-        props = schema.get("properties", {})
-        if schema.get("additionalProperties") is False:
-            assert not set(doc) - set(props), f"{path}: campos fora do contrato {set(doc) - set(props)}"
-        for k, sub in props.items():
-            if k in doc:
-                check(doc[k], sub, f"{path}.{k}")
-    if isinstance(doc, list):
-        assert len(doc) >= schema.get("minItems", 0) and len(doc) <= schema.get("maxItems", len(doc)), f"{path}: tamanho"
-        if schema.get("uniqueItems"):
-            assert len({json.dumps(x, sort_keys=True) for x in doc}) == len(doc), f"{path}: itens repetidos"
-        for i, x in enumerate(doc):
-            if "items" in schema:
-                check(x, schema["items"], f"{path}[{i}]")
+# ------------------------------------------------------------------------------- contratos (validador do produto)
+def check(doc, schema):
+    validate(doc, schema)                                                    # levanta ContractError no 1o desvio
 
 
 def contract(name):
