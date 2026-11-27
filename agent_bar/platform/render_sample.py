@@ -25,7 +25,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from agent_bar.platform.local_tools import ToolCall, ToolContext
+from agent_bar.platform.local_tools import ToolCall, ToolContext, coerce_json_array_args
 from agent_bar.platform.sketchup_sample import (
     _ENGINE_LOCK,
     TOOL_NAME,
@@ -94,7 +94,7 @@ class RenderSampleTool:
             "parameters": {"type": "object", "properties": {
                 "run_id": {"type": "string", "description": "run_id de um build completed deste executor"},
                 "cameras": {"type": "array", "items": {"type": "string", "enum": cams}, "minItems": 1,
-                            "maxItems": MAX_CAMERAS}},
+                            "maxItems": MAX_CAMERAS, "uniqueItems": True}},
                 "required": ["run_id", "cameras"]}}}]
 
     def names(self) -> set[str]:
@@ -102,9 +102,10 @@ class RenderSampleTool:
 
     # -------------------------------------------------------------------------------------------- execucao
     def _check(self, call: ToolCall) -> dict:
-        """Argumentos -> {build_run, fixture_ref, skp, skp_sha, spec, cameras} ou {'error': ...}. Nada abre aqui."""
+        """Argumentos -> {build_run, fixture_ref, skp, skp_sha, spec, cameras, coercion} ou {'error': ...}. Nada abre
+        aqui. Um `array` mandado como string JSON so vira lista pela coercao estrita (schema publicado), registrada."""
         b = self.build
-        args = dict(call.arguments)
+        args, coercion = coerce_json_array_args(call.arguments, self.specs()[0]["function"]["parameters"])
         extra = sorted(set(args) - {"run_id", "cameras"})
         if extra:
             return _error("ARGUMENT_NOT_ALLOWED", f"argumentos nao publicados: {extra} (so run_id e cameras)")
@@ -127,7 +128,7 @@ class RenderSampleTool:
         if sha256_file(skp) != prior.get("skp_sha256"):
             return _error("SKP_CHANGED", "o .skp do build mudou desde a inspecao: nao renderizo outro arquivo")
         return {"build_run": run_id, "fixture_ref": ref, "skp": skp, "skp_sha": prior["skp_sha256"], "spec": spec,
-                "cameras": list(cams)}
+                "cameras": list(cams), "coercion": coercion}
 
     def run(self, call: ToolCall, ctx: ToolContext) -> dict:
         b = self.build
@@ -160,7 +161,8 @@ class RenderSampleTool:
                 "model": ctx.model_id, "model_digest": ctx.model_digest, "request_id": rid, "run_id": run_id,
                 "render_spec": str(chk["spec"].relative_to(b.engine_root).as_posix()),
                 "workspace_id": str(b.engine_root), "studio_commit": studio.get("commit"),
-                "call_digest": call.digest, "model_tool_call": dict(call.raw)},
+                "call_digest": call.digest, "model_tool_call": dict(call.raw),
+                "argument_coercion": chk["coercion"]},
             "locations": [{"path": str(run_dir)}],
         }
         ctx.emit("tool_call", tool_call)
@@ -201,7 +203,8 @@ class RenderSampleTool:
                 "input_skp_sha256": chk["skp_sha"], "engine_commit": (head or {}).get("commit"),
                 "workspace_id": str(b.engine_root), "mode": b.mode, "studio_commit": studio.get("commit"),
                 "model": ctx.model_id, "model_digest": ctx.model_digest, "provider_version": ctx.provider_version,
-                "session_id": ctx.session_id, "turn": ctx.turn, "call_digest": call.digest, "provenance": prov}
+                "session_id": ctx.session_id, "turn": ctx.turn, "call_digest": call.digest,
+                "argument_coercion": chk["coercion"], "provenance": prov}
         b.registry.insert({**base, "fixture_ref": f"render:{chk['build_run']}", "fixture_hash": chk["skp_sha"],
                            "status": "running", "result": {**base, "status": "running"}}, b.clock())
         ctx.emit("tool_update", {"toolCallId": call.call_id, "status": "in_progress",
@@ -245,9 +248,7 @@ class RenderSampleTool:
         return read_render(run_dir, prior["fixture_hash"])
 
     def _refuse(self, call: ToolCall, ctx: ToolContext, rid: str, err: dict, **extra: Any) -> dict:
-        res = self.build._refuse(call, ctx, rid, err, **extra)
-        res["tool"] = RENDER_TOOL
-        return res
+        return self.build._refuse(call, ctx, rid, err, tool=RENDER_TOOL, **extra)
 
     # -------------------------------------------------------------------------------------------- texto
     @staticmethod

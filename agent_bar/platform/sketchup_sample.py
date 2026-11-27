@@ -578,10 +578,13 @@ class SketchUpSampleTool:
                 self._finish(None, None, prior["request_id"], result)
         return {**result, "replayed": True}
 
-    def _refuse(self, call: ToolCall, ctx: ToolContext, rid: str, err: dict, **extra: Any) -> dict:
-        result = {"tool": TOOL_NAME, "status": "refused", "request_id": rid, "mode": self.mode,
-                  "error": err["error"], **extra}
-        ctx.emit("tool_update", {"toolCallId": call.call_id, "title": f"Executor local (amostra): {TOOL_NAME}",
+    def _refuse(self, call: ToolCall, ctx: ToolContext, rid: str, err: dict, *, tool: str = TOOL_NAME,
+                **extra: Any) -> dict:
+        """Recusa antes de abrir o motor: o cartao leva o nome da ferramenta PEDIDA (build ou render) e o que o modelo
+        mandou, para a recusa ser auditavel sem o log do driver."""
+        result = {"tool": tool, "status": "refused", "request_id": rid, "mode": self.mode,
+                  "error": err["error"], "model_arguments": dict(call.arguments), **extra}
+        ctx.emit("tool_update", {"toolCallId": call.call_id, "title": f"Executor local (amostra): {tool}",
                                  "kind": "execute", "status": "failed", "content": _text(summary(result))})
         return result
 
@@ -672,9 +675,14 @@ def summary(result: dict) -> str:
     su = result.get("sketchup") or {}
     if su:
         lines.append(f"SketchUp {su.get('version')} · PID build {su.get('build_pid')} · PID reabertura {su.get('reopen_pid')}")
+    for c in result.get("argument_coercion") or []:
+        lines.append(f"coercao de argumento: {c.get('param')} veio como string JSON {c.get('raw')} -> usado "
+                     f"{json.dumps(c.get('used'), ensure_ascii=False)}")
     if result.get("error"):
         e = result["error"]
         lines.append(f"erro {e.get('code')}: {e.get('message')}")
+    if result.get("status") == "refused" and "model_arguments" in result:
+        lines.append(f"argumentos do modelo: {json.dumps(result['model_arguments'], ensure_ascii=False, sort_keys=True)}")
     return "\n".join(lines)
 
 

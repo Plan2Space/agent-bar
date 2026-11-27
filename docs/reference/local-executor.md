@@ -90,6 +90,15 @@ amostra, o perfil publica uma segunda ferramenta, `render_room_sample(run_id, ca
 - `completed` só com `render_manifest` OK + veredito PASS + cada PNG dentro do run, não vazio e com o sha256
   registrado pelo motor; visual sempre pendente (humano). O papel `renderer` só entra quando o motor gravou quadros, e
   `parent_run_id` liga o render ao build.
+- coerção estrita de `array` vindo como string JSON (prova pós-merge de 2026-11-27: o llama3.1:8b mandou
+  `"cameras": "[\"amostra_perspectiva\", \"amostra_lateral\"]"`). O Studio só aceita a string quando o parâmetro é
+  `array` no schema publicado e ela decodifica para uma lista que passa no mesmo schema: itens `string` do enum,
+  `minItems`, `maxItems` e `uniqueItems`. Qualquer outra coisa continua `CAMERA_NOT_ALLOWED`: texto que não é JSON,
+  JSON que vira objeto, câmera fora da spec, mais de 2 câmeras ou câmera repetida. A coerção fica registrada como
+  `argument_coercion: [{param, raw, used}]` no cartão de permissão (`rawInput`), no resultado gravado e no texto do
+  cartão. O `call_digest`/`request_id` continua sendo o do que o modelo mandou;
+- toda recusa leva o nome da ferramenta pedida (build ou render) e os argumentos que o modelo mandou
+  (`model_arguments`, também no texto do cartão), para ser auditável sem o log do driver.
 
 ## Guardas de borda do motor (`--via tool-cli`)
 
