@@ -341,7 +341,7 @@ class AcpClient:
                  on_permission: PermissionCallback | None = None, on_exit: Callable[[int | None], None] | None = None,
                  runtime: AsyncRuntime | None = None, env: Mapping[str, str] | None = None,
                  stderr_path: str | Path | None = None, timeouts: Timeouts | None = None,
-                 enforce_safe_mode: bool = True) -> None:
+                 enforce_safe_mode: bool = True, mcp_servers: Sequence[Mapping[str, Any]] = ()) -> None:
         if not argv:
             raise ValueError("argv vazio")
         self.argv = list(argv)
@@ -355,6 +355,7 @@ class AcpClient:
         self.stderr_path = Path(stderr_path) if stderr_path else None
         self.timeouts = timeouts or Timeouts()
         self.enforce_safe_mode = enforce_safe_mode
+        self.mcp_servers = [dict(m) for m in mcp_servers]                    # UX-12: declarados no session/new
         self.proc: asyncio.subprocess.Process | None = None
         self.pid: int | None = None
         self.session_id: str | None = None
@@ -526,7 +527,7 @@ class AcpClient:
         return self.agent_info
 
     async def _new_session(self, cwd: str) -> dict:
-        res = await self._request("session/new", {"cwd": cwd, "mcpServers": []}, self.timeouts.new_session)
+        res = await self._request("session/new", {"cwd": cwd, "mcpServers": self.mcp_servers}, self.timeouts.new_session)
         res = res if isinstance(res, dict) else {}
         self.session_id = str(res.get("sessionId", "")) or None
         if not self.session_id:
@@ -540,7 +541,7 @@ class AcpClient:
         if not caps.get("loadSession"):
             raise AcpError("RPC", "agente nao anuncia loadSession")
         self.session_id = session_id
-        res = await self._request("session/load", {"sessionId": session_id, "cwd": cwd, "mcpServers": []},
+        res = await self._request("session/load", {"sessionId": session_id, "cwd": cwd, "mcpServers": self.mcp_servers},
                                   self.timeouts.new_session)
         return res if isinstance(res, dict) else {}
 

@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from agent_bar.cockpit import acp_mcp
 from agent_bar.cockpit import permission_mode as PM
 from agent_bar.cockpit import profiles as prof
 from agent_bar.cockpit import roles as R
@@ -177,9 +178,12 @@ class ChatView(QWidget):
                  provider_factory: Callable[..., object] | None = None,
                  inbox: PermissionInbox | None = None, broker: PermissionBroker | None = None,
                  session_gate: Callable[[prof.AgentProfile], str | None] | None = None,
-                 permission_mode_fn: Callable[[], str] | None = None) -> None:
+                 permission_mode_fn: Callable[[], str] | None = None,
+                 mcp_config_fn: Callable[[], acp_mcp.McpConfig] | None = None) -> None:
         super().__init__()
         self.permission_mode_fn = permission_mode_fn or PM.current           # Felipe: bypass sempre (reversível)
+        self.mcp_config_fn = mcp_config_fn or (lambda: acp_mcp.load(data_dir() / acp_mcp.CONFIG_NAME))
+        self.mcp = acp_mcp.McpConfig()                                    # o que a sessão atual declarou (UX-12)
         self.context_provider = context_provider                          # F4: biblioteca (texto exato do preview)
         self.store = store or ChatStore()
         self.rt = runtime or AsyncRuntime("cockpit-chat")
@@ -353,8 +357,13 @@ class ChatView(QWidget):
         self.status.setStyleSheet("color:#8f8f98;font-size:11px")
         self.permission_label = QLabel(PM.label(self.permission_mode_fn()))  # o Felipe sabe em que modo está
         self.permission_label.setStyleSheet("color:#8f8f98;font-size:11px")
+        self.mcp_label = QLabel("")                                            # UX-12: o que a sessão declarou
+        self.mcp_label.setStyleSheet("color:#8f8f98;font-size:11px")
+        self.mcp_label.setWordWrap(True)
+        self.mcp_label.setAccessibleName("Servidores MCP declarados ao agente")
         status_row = QHBoxLayout()
         status_row.addWidget(self.status, 1)
+        status_row.addWidget(self.mcp_label)
         status_row.addWidget(self.permission_label)
         lay.addLayout(status_row)
         self.send_btn.clicked.connect(self._send_or_stop)
@@ -485,6 +494,10 @@ class ChatView(QWidget):
         self.banner.setVisible(False)
         self.status.setText(f"conectando a {p.label} em {Path(ws).name}…")
         if p.adapter != "acp":                                               # provedor da plataforma (F1/F2): mesmo Chat
+            self.mcp = acp_mcp.McpConfig()
+            # revisão do #123: dizer só o que é verdade para o PAPEL (o Executor local tem ferramenta, do Studio)
+            self.mcp_label.setText("MCP: não se aplica (ferramentas do Studio, não MCP)"
+                                   if R.role_of(p) == R.EXECUTOR_LOCAL else "MCP: não se aplica (Conversa, sem ferramentas)")
             self.client = self.provider_factory(
                 p, ws, on_update=lambda u, g=gen: self.bridge.update.emit(g, u),
                 on_permission=lambda req, respond, g=gen: self.bridge.permission.emit(g, req, respond),
@@ -492,8 +505,11 @@ class ChatView(QWidget):
             fut = self.client.connect(None)
             fut.add_done_callback(lambda f, g=gen: self._emit_done(g, "connect", f))
             return
+        self.mcp = self.mcp_config_fn()
+        self.mcp_label.setText(self.mcp.status_text())
+        self.mcp_label.setToolTip(self.mcp.source)
         self.client = self.client_factory(
-            list(p.argv), ws, runtime=self.rt,
+            list(p.argv), ws, runtime=self.rt, mcp_servers=self.mcp.servers,
             on_update=lambda u, g=gen: self.bridge.update.emit(g, u),
             on_permission=lambda req, respond, g=gen: self.bridge.permission.emit(g, req, respond),
             on_exit=lambda code, g=gen: self.bridge.exited.emit(g, code),
