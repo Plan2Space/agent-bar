@@ -156,6 +156,16 @@ class CockpitWindow(QMainWindow):
         self.gear.setAccessibleName("Configurações")
         self.gear.setStyleSheet("QToolButton{color:#cfcfd4;font-size:16px;border:0;padding:2px 6px}"
                                 "QToolButton:hover{color:#ffffff;background:#2a2a30;border-radius:4px}")
+        from agent_bar.cockpit.ui.theme import (
+            catalog as theme_catalog,  # TE-01: Temas no canto superior direito
+        )
+        from agent_bar.cockpit.ui.theme import qt as theme_qt
+        from agent_bar.cockpit.ui.theme_picker import themes_button
+        self.theme_manager = theme_qt.manager()
+        self.themes_btn = themes_button(self.theme_manager, self.open_themes)
+        if self.theme_manager.saved.key != theme_catalog.DEFAULT:            # o tema salvo, ao abrir (padrão: nada muda)
+            self.theme_manager.apply(self.theme_manager.saved)
+        cl.addWidget(self.themes_btn)
         cl.addWidget(self.notifications.bell)
         cl.addWidget(self.gear)
         self.tabs.setCornerWidget(corner, Qt.Corner.TopRightCorner)
@@ -261,6 +271,14 @@ class CockpitWindow(QMainWindow):
         else:
             raise ValueError(f"objeto sem destino na navegação: {obj!r}")
         self._page_shown(self.current_page())
+
+    def open_themes(self):
+        """TE-01: o modal de temas (prévia por hover; Salvar grava; Esc/Cancelar restauram)."""
+        from agent_bar.cockpit.ui.theme_picker import ThemePicker
+        picker = ThemePicker(self.theme_manager, self)
+        picker.open()
+        self._theme_picker = picker
+        return picker
 
     def current_page(self):
         """O objeto que o Felipe está vendo: a área atual, Configurações, ou a subpágina de Avançado."""

@@ -127,18 +127,23 @@ class ThemeManager:
                 self._bridge = LegacyBridge(lambda: self.current)
                 app.installEventFilter(self._bridge)
             if self._original is None:                                         # o visual de antes do 1º tema
-                self._original = (app.palette(), app.styleSheet(), app.font())
+                self._original = (app.palette(), app.font())
+            tops = [w for w in app.topLevelWidgets() if w.isVisible() and w.updatesEnabled()]
+            for w in tops:                                                     # sem flicker: pinta uma vez, no fim
+                w.setUpdatesEnabled(False)
             with self._bridge.quiet():
                 if theme.key == C.DEFAULT:                                     # padrão = o visual atual, idêntico
-                    pal, sheet, font = self._original
+                    pal, font = self._original
                     app.setPalette(pal)
                     app.setFont(font)
-                    app.setStyleSheet(sheet)
                 else:
                     app.setPalette(palette(theme))
                     app.setFont(QFont(theme.font_family, theme.font_size))
-                    app.setStyleSheet(stylesheet(theme))
+            # o QSS global vai em cada JANELA (a ponte compõe com o estilo dela), não no QApplication: assim só o que
+            # está na tela é repolido agora (~0,1 s), e o resto ao aparecer
             self._bridge.restyle_all()
+            for w in tops:
+                w.setUpdatesEnabled(True)
         alive = []
         for ref, template in self._themed:
             w = ref()
