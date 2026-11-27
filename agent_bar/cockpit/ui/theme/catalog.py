@@ -6,6 +6,10 @@
 - **Alto contraste:** escuro e claro, texto ≥ 7:1.
 - **Plan2Space (originais):** Studio Sage, Industrial Black, Walnut Boutique, Bronze Luxury, Concrete, Architectural White,
   Warm Studio, Graphite.
+- **Inspirados (lote 2):** Dracula, Nord, Tokyo Night (Night, Storm, Day), Catppuccin (Latte, Mocha),
+  Gruvbox (Dark, Light), One Dark, One Light, Solarized (Dark, Light), Rosé Pine. Licenças MIT conferidas no repositório
+  de cada um (SOURCES.md). Frappé e Macchiato ficaram fora por serem quase idênticos entre si (teste de
+  duplicatas). Darcula ficou fora: o repositório da JetBrains não declara licença (NOASSERTION).
 
 Temas do Slack ficaram de fora deste lote: não achei licença que permita reproduzir as paletas (SOURCES.md).
 Cada tema passa no teste de contraste do catálogo. Não há temas quase idênticos para inflar a contagem.
@@ -58,8 +62,8 @@ THEMES: tuple[Theme, ...] = (
           text_muted="#c4b09a", accent="#d29a5f", accent_text="#1e1612", selection="#4a3423", focus="#e0ad73",
           success="#8ccf86", warning="#e8b55a", danger="#f08a7a", info="#97c1e6", source=P2S),
     Theme("bronze-luxury", "Bronze Luxury", "Plan2Space", True,
-          bg="#121212", surface="#1c1a17", surface_alt="#26231e", border="#46402f", text="#efe6d8",
-          text_muted="#bcae95", accent="#c9a15b", accent_text="#121212", selection="#3a3122", focus="#d8b170",
+          bg="#0b0b0c", surface="#161616", surface_alt="#222120", border="#46402f", text="#efe6d8",
+          text_muted="#bcae95", accent="#a8875a", accent_text="#0b0b0c", selection="#3a3122", focus="#c4a06c",
           success="#6fcf97", warning="#e9c46a", danger="#f4807a", info="#86b9ea", source=P2S),
     Theme("concrete", "Concrete", "Plan2Space", False,
           bg="#e8e8e6", surface="#f5f5f3", surface_alt="#dcdcd9", border="#b9b9b4", text="#1f1f1f",
@@ -77,6 +81,37 @@ THEMES: tuple[Theme, ...] = (
           bg="#1f2124", surface="#282b2f", surface_alt="#31353a", border="#454a51", text="#e4e6e8",
           text_muted="#a8aeb5", accent="#8ab4f8", accent_text="#1f2124", selection="#34465f", focus="#8ab4f8",
           success="#81c995", warning="#fdd663", danger="#f28b82", info="#8ab4f8", source=P2S),
+    # ------------------------------------------------------------------------------------------ lote 2: inspirados
+    # paletas oficiais de cada projeto (licença MIT conferida, ver SOURCES.md); só o que não passava no contraste foi
+    # ajustado (mistura em direção ao texto), e o ajuste está registrado no SOURCES.md
+    Theme("dracula", "Dracula", "Inspirados", True,
+          bg="#282a36", surface="#21222c", surface_alt="#343746", border="#44475a", text="#f8f8f2", text_muted="#9ea8c7", accent="#bd93f9", accent_text="#282a36", selection="#44475a", focus="#ff79c6", success="#50fa7b", warning="#f1fa8c", danger="#ff5555", info="#8be9fd", source="dracula/dracula-theme (MIT)"),
+    Theme("nord", "Nord", "Inspirados", True,
+          bg="#2e3440", surface="#3b4252", surface_alt="#434c5e", border="#4c566a", text="#eceff4", text_muted="#d8dee9", accent="#88c0d0", accent_text="#2e3440", selection="#4c566a", focus="#88c0d0", success="#a3be8c", warning="#ebcb8b", danger="#daa4a9", info="#97b1cb", source="nordtheme/nord (MIT)"),
+    Theme("tokyo-night", "Tokyo Night", "Inspirados", True,
+          bg="#1a1b26", surface="#16161e", surface_alt="#292e42", border="#3b4261", text="#c0caf5", text_muted="#a9b1d6", accent="#7aa2f7", accent_text="#1a1b26", selection="#33467c", focus="#7aa2f7", success="#9ece6a", warning="#e0af68", danger="#f7768e", info="#7dcfff", source="tokyo-night/tokyo-night-vscode-theme (MIT)"),
+    Theme("tokyo-night-storm", "Tokyo Night Storm", "Inspirados", True,
+          bg="#24283b", surface="#1f2335", surface_alt="#292e42", border="#3b4261", text="#c0caf5", text_muted="#a9b1d6", accent="#7aa2f7", accent_text="#1f2335", selection="#2e3c64", focus="#7aa2f7", success="#9ece6a", warning="#e0af68", danger="#f7768e", info="#7dcfff", source="tokyo-night/tokyo-night-vscode-theme (MIT)"),
+    Theme("tokyo-night-day", "Tokyo Night Day", "Inspirados", False,
+          bg="#e1e2e7", surface="#e9e9ed", surface_alt="#d0d5e3", border="#c4c8da", text="#2b4b95", text_muted="#515f92", accent="#2e7de9", accent_text="#000000", selection="#b7c1e3", focus="#2e7de9", success="#536e36", warning="#7c6037", danger="#bf214f", info="#007197", source="tokyo-night/tokyo-night-vscode-theme (MIT)"),
+    Theme("catppuccin-latte", "Catppuccin Latte", "Inspirados", False,
+          bg="#eff1f5", surface="#e6e9ef", surface_alt="#dce0e8", border="#bcc0cc", text="#4c4f69", text_muted="#606276", accent="#8839ef", accent_text="#ffffff", selection="#ccd0da", focus="#1e66f5", success="#2f7620", warning="#915c14", danger="#c50e36", info="#166e7d", source="catppuccin/catppuccin (MIT)"),
+    Theme("catppuccin-mocha", "Catppuccin Mocha", "Inspirados", True,
+          bg="#1e1e2e", surface="#181825", surface_alt="#313244", border="#45475a", text="#cdd6f4", text_muted="#a6adc8", accent="#cba6f7", accent_text="#11111b", selection="#45475a", focus="#89b4fa", success="#a6e3a1", warning="#f9e2af", danger="#f38ba8", info="#89dceb", source="catppuccin/catppuccin (MIT)"),
+    Theme("gruvbox-dark", "Gruvbox Dark", "Inspirados", True,
+          bg="#282828", surface="#32302f", surface_alt="#3c3836", border="#504945", text="#ebdbb2", text_muted="#bdae93", accent="#fabd2f", accent_text="#282828", selection="#504945", focus="#fe8019", success="#b8bb26", warning="#fabd2f", danger="#fb6856", info="#83a598", source="morhetz/gruvbox (MIT/X11, no README)"),
+    Theme("gruvbox-light", "Gruvbox Light", "Inspirados", False,
+          bg="#fbf1c7", surface="#f9f5d7", surface_alt="#ebdbb2", border="#d5c4a1", text="#3c3836", text_muted="#665c54", accent="#076678", accent_text="#fbf1c7", selection="#d5c4a1", focus="#af3a03", success="#726d0d", warning="#966211", danger="#9d0006", info="#076678", source="morhetz/gruvbox (MIT/X11, no README)"),
+    Theme("one-dark", "One Dark", "Inspirados", True,
+          bg="#282c34", surface="#21252b", surface_alt="#2c313a", border="#3e4451", text="#dcdfe4", text_muted="#abb2bf", accent="#c678dd", accent_text="#21252b", selection="#3e4451", focus="#c678dd", success="#98c379", warning="#e5c07b", danger="#e06c75", info="#56b6c2", source="atom/one-dark-syntax (MIT)"),
+    Theme("one-light", "One Light", "Inspirados", False,
+          bg="#fafafa", surface="#f0f0f1", surface_alt="#e5e5e6", border="#d4d4d6", text="#383a42", text_muted="#696c77", accent="#4078f2", accent_text="#000000", selection="#e5e5e6", focus="#4078f2", success="#3a763a", warning="#8d6101", danger="#b24339", info="#0175a6", source="atom/one-light-syntax (MIT)"),
+    Theme("solarized-dark", "Solarized Dark", "Inspirados", True,
+          bg="#002b36", surface="#073642", surface_alt="#0e4250", border="#586e75", text="#9facac", text_muted="#91a0a2", accent="#268bd2", accent_text="#000000", selection="#0e4250", focus="#b58900", success="#93a51d", warning="#bd971d", danger="#e97a78", info="#43aca4", source="altercation/solarized (MIT)"),
+    Theme("solarized-light", "Solarized Light", "Inspirados", False,
+          bg="#fdf6e3", surface="#eee8d5", surface_alt="#e6dfc8", border="#93a1a1", text="#4e6167", text_muted="#54666d", accent="#268bd2", accent_text="#000000", selection="#e6dfc8", focus="#aa8100", success="#5c6900", warning="#7d5f00", danger="#c32c29", info="#1d6f68", source="altercation/solarized (MIT)"),
+    Theme("rose-pine", "Rosé Pine", "Inspirados", True,
+          bg="#191724", surface="#1f1d2e", surface_alt="#26233a", border="#403d52", text="#e0def4", text_muted="#908caa", accent="#ebbcba", accent_text="#191724", selection="#403d52", focus="#c4a7e7", success="#9ccfd8", warning="#f6c177", danger="#eb6f92", info="#5e92a8", source="rose-pine/rose-pine-theme (MIT)"),
 )
 
 DEFAULT = "p2s-escuro"
