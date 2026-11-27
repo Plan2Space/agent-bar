@@ -97,9 +97,11 @@ class AppCore(QObject):
 
     def __init__(self, settings: cfg.Settings, *, center=None, quit_fn: Callable[[], None] | None = None,
                  tray_available: Callable[[], bool] = QSystemTrayIcon.isSystemTrayAvailable,
-                 cockpit_factory: Callable[[], object] | None = None) -> None:
+                 cockpit_factory: Callable[[], object] | None = None,
+                 first_run_check: Callable[[], bool] | None = None) -> None:
         super().__init__()
         self.settings = settings
+        self.first_run_check = first_run_check                                # FR-01: None = sem primeiro uso (testes)
         self.center = center
         self.quit_fn = quit_fn or QApplication.quit
         self.cockpit_factory = cockpit_factory
@@ -238,11 +240,24 @@ class AppCore(QObject):
             win.close_to_tray = self._close_to_tray
             win.quit_app = self.shutdown                                       # sem bandeja, fechar encerra o app inteiro
             self.cockpit = win
+            created = True
+        else:
+            created = False
         win.show()
         win.raise_()
         win.activateWindow()
+        if created and self.first_run_check is not None and hasattr(win, "open_first_run") and self._first_run_needed():
+            win.open_first_run()                                               # FR-01: falta algo, ou é a 1ª vez
+            return win
         win.chat.ensure_client()
         return win
+
+    def _first_run_needed(self) -> bool:
+        try:
+            return bool(self.first_run_check())
+        except Exception:                                                     # noqa: BLE001 - a lista nunca impede de abrir
+            traceback.print_exc()
+            return False
 
     # ------------------------------------------------------------------------------------------------ encerrar
     def shutdown(self) -> None:

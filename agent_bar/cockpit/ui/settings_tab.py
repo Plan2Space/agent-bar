@@ -33,13 +33,14 @@ STATE_COLOR = {H.OK: "#3ddc84", H.WARN: "#f5c542", H.BAD: "#ff6b6d", H.UNKNOWN: 
 STATE_GLYPH = {H.OK: "●", H.WARN: "▲", H.BAD: "✖", H.UNKNOWN: "○"}
 BTN_CSS = ("QPushButton{background:#2a2a30;color:#e6e6e6;border:1px solid #3a3a44;border-radius:5px;padding:4px 10px}"
            "QPushButton:hover{background:#34343c}")
-SECTIONS = ("Saúde do sistema", "Diagnóstico", "Geral")
+SECTIONS = ("Saúde do sistema", "Diagnóstico", "Geral", "Primeiro uso")
 
 
 class SettingsTab(QWidget):
     def __init__(self, core=None, chat=None, review=None, checkout_sha_fn: Callable[[], str] | None = None,
-                 chat_fn: Callable[[], object] | None = None) -> None:
+                 chat_fn: Callable[[], object] | None = None, first_run_kwargs: dict | None = None) -> None:
         super().__init__()
+        self.first_run_kwargs = first_run_kwargs or {}                     # FR-01: o teste troca a máquina por falsos
         self.core, self.review = core, review
         self._chat_fn = chat_fn or (lambda: chat)                          # #106: a sessão do Chat aberta AGORA
         self.checkout_sha_fn = checkout_sha_fn or _checkout_sha
@@ -108,9 +109,14 @@ class SettingsTab(QWidget):
         gl.addWidget(hint)
         gl.addStretch(1)
         self.pages.addWidget(general)                                        # "Geral" já está em SECTIONS (#114)
+        self.first_run_box = QWidget()                                       # FR-01: montada na 1ª visita (checa a máquina)
+        QVBoxLayout(self.first_run_box).setContentsMargins(0, 0, 0, 0)
+        self.first_run_page = None
+        self.pages.addWidget(_scroll(self.first_run_box))
         lay.addWidget(self.sections)
         lay.addWidget(self.pages, 1)
         self.sections.currentRowChanged.connect(self.pages.setCurrentIndex)
+        self.sections.currentRowChanged.connect(lambda r: r == SECTIONS.index("Primeiro uso") and self.first_run())
         self.sections.setCurrentRow(0)
         self.copy_btn.clicked.connect(self.copy_diagnostic)
         self.refresh_btn.clicked.connect(self.refresh_now)
@@ -126,6 +132,16 @@ class SettingsTab(QWidget):
         self.sections.addItem(name)
         self.pages.addWidget(widget)
         return self.sections.count() - 1
+
+    def first_run(self):
+        """FR-01: a página "Vamos preparar o P2S Studio" (montada uma vez; cada visita relê a máquina)."""
+        if self.first_run_page is None:
+            from agent_bar.cockpit.ui.first_run import FirstRunPage
+            self.first_run_page = FirstRunPage(**self.first_run_kwargs)
+            self.first_run_box.layout().addWidget(self.first_run_page)
+        else:
+            self.first_run_page.recheck()
+        return self.first_run_page
 
     def show_section(self, name: str) -> None:
         rows = [self.sections.item(i).text() for i in range(self.sections.count())]

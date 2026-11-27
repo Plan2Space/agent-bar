@@ -19,6 +19,7 @@ class Settings:
     notify_human: bool = True          # aviso do Windows quando um PR passa a precisar do Felipe (uma vez por PR@HEAD)
     minimized: bool = False
     bar_enabled: bool = False          # D-UX-1: barra flutuante opcional e desligada; o atalho abre o Cockpit (janela principal)
+    first_run_done: bool = False       # FR-01: a lista "Vamos preparar o P2S Studio" já foi concluída uma vez
 
 
 def settings_path() -> Path:

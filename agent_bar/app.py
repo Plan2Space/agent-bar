@@ -123,10 +123,12 @@ def start_main(core, screenshot: bool = False):
 def build_core(settings):
     """UX-01: o núcleo sem janela. O aviso "PR precisa de você" vira item em Notificações no mesmo SQLite que a aba
     Notificações do Cockpit lê (`<dados do cockpit>/permissions.sqlite`)."""
+    from agent_bar.cockpit.first_run import needed_now
     from agent_bar.cockpit.notifications import NotificationCenter
     from agent_bar.cockpit.store import data_dir
     from agent_bar.core import AppCore
-    return AppCore(settings, center=NotificationCenter(data_dir() / "permissions.sqlite"))
+    return AppCore(settings, center=NotificationCenter(data_dir() / "permissions.sqlite"),
+                   first_run_check=needed_now)                                 # FR-01: 1ª vez ou falta algo essencial
 
 
 def _replace_older_instance(app, instance, activate, quit_for_update, log: logging.Logger) -> bool:
