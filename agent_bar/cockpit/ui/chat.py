@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from agent_bar.cockpit import acp_mcp
 from agent_bar.cockpit import permission_mode as PM
 from agent_bar.cockpit import profiles as prof
 from agent_bar.cockpit import roles as R
@@ -129,6 +130,35 @@ BTN_CSS = ("QPushButton{background:#2a2a30;color:#e6e6e6;border:1px solid #3a3a4
            "QPushButton:hover{background:#34343c}QPushButton:disabled{color:#666}")
 
 
+class FitCombo(QComboBox):
+    """Combo que não alarga a página (UX-16 run 6): a largura mínima vem de `chars` caracteres, não do item mais
+    comprido. O texto inteiro do item atual fica na dica (`full_tip`) e a lista aberta mostra os itens inteiros."""
+
+    def __init__(self, chars: int = 10, full_tip: bool = False) -> None:
+        super().__init__()
+        self.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self.setMinimumContentsLength(chars)
+        self._hint = ""
+        if full_tip:
+            self.currentIndexChanged.connect(lambda _i: self._full_tip())
+
+    def setToolTip(self, text: str) -> None:                                   # noqa: N802
+        self._hint = text
+        super().setToolTip(text)
+
+    def _full_tip(self) -> None:
+        text = self.currentText()
+        data = self.currentData()
+        if isinstance(data, str) and data and data != text:
+            text = f"{text}\n{data}"
+        super().setToolTip(f"{text}\n\n{self._hint}" if self._hint else text)
+
+    def showPopup(self) -> None:                                                # noqa: N802
+        view = self.view()
+        view.setMinimumWidth(min(view.sizeHintForColumn(0) + 24, 900))
+        super().showPopup()
+
+
 class _Bridge(QObject):
     update = Signal(int, object)
     permission = Signal(int, object, object)
@@ -148,9 +178,12 @@ class ChatView(QWidget):
                  provider_factory: Callable[..., object] | None = None,
                  inbox: PermissionInbox | None = None, broker: PermissionBroker | None = None,
                  session_gate: Callable[[prof.AgentProfile], str | None] | None = None,
-                 permission_mode_fn: Callable[[], str] | None = None) -> None:
+                 permission_mode_fn: Callable[[], str] | None = None,
+                 mcp_config_fn: Callable[[], acp_mcp.McpConfig] | None = None) -> None:
         super().__init__()
         self.permission_mode_fn = permission_mode_fn or PM.current           # Felipe: bypass sempre (reversível)
+        self.mcp_config_fn = mcp_config_fn or (lambda: acp_mcp.load(data_dir() / acp_mcp.CONFIG_NAME))
+        self.mcp = acp_mcp.McpConfig()                                    # o que a sessão atual declarou (UX-12)
         self.context_provider = context_provider                          # F4: biblioteca (texto exato do preview)
         self.store = store or ChatStore()
         self.rt = runtime or AsyncRuntime("cockpit-chat")
@@ -226,7 +259,7 @@ class ChatView(QWidget):
         lay.setContentsMargins(10, 8, 10, 8)
         lay.setSpacing(6)
         head = QHBoxLayout()
-        self.agent_box = QComboBox()
+        self.agent_box = FitCombo(14, full_tip=True)
         for p in self.profiles:
             ok, why = p.available()
             self.agent_box.addItem(R.label(p) if ok else f"{R.role_of(p)} · {p.label} — indisponível: {why}", p.key)
@@ -234,18 +267,18 @@ class ChatView(QWidget):
                 self.agent_box.model().item(self.agent_box.count() - 1).setEnabled(False)
         first_ok = next((i for i, p in enumerate(self.profiles) if p.available()[0]), 0)
         self.agent_box.setCurrentIndex(first_ok)
-        self.workspace_box = QComboBox()
+        self.workspace_box = FitCombo(10, full_tip=True)
         for s in spaces:
             self.workspace_box.addItem(s.name, str(s))
         self.workspace_box.addItem("Escolher pasta…", "")
-        self.mode_box = QComboBox()
+        self.mode_box = FitCombo(6)
         self.mode_box.setToolTip("Modos anunciados pelo agente. O padrão pede permissão.")
-        self.model_box, self.effort_box = QComboBox(), QComboBox()
+        self.model_box, self.effort_box = FitCombo(10), FitCombo(6)
         self.model_box.setToolTip("Modelos anunciados pelo agente. Vale o que o agente confirmar.")
         self.effort_box.setToolTip("Esforços que o agente anuncia para ESTE modelo. Vale o que o agente confirmar.")
         self.confirmed = QLabel("")
         self.confirmed.setStyleSheet("color:#7ee2a8;font-size:11px")
-        self.history_box = QComboBox()
+        self.history_box = FitCombo(10)
         self.history_box.setToolTip("Conversas salvas")
         self.new_btn = QPushButton("Nova conversa")
         for w in (self.agent_box, self.workspace_box, self.mode_box, self.history_box, self.model_box, self.effort_box):
@@ -324,8 +357,13 @@ class ChatView(QWidget):
         self.status.setStyleSheet("color:#8f8f98;font-size:11px")
         self.permission_label = QLabel(PM.label(self.permission_mode_fn()))  # o Felipe sabe em que modo está
         self.permission_label.setStyleSheet("color:#8f8f98;font-size:11px")
+        self.mcp_label = QLabel("")                                            # UX-12: o que a sessão declarou
+        self.mcp_label.setStyleSheet("color:#8f8f98;font-size:11px")
+        self.mcp_label.setWordWrap(True)
+        self.mcp_label.setAccessibleName("Servidores MCP declarados ao agente")
         status_row = QHBoxLayout()
         status_row.addWidget(self.status, 1)
+        status_row.addWidget(self.mcp_label)
         status_row.addWidget(self.permission_label)
         lay.addLayout(status_row)
         self.send_btn.clicked.connect(self._send_or_stop)
@@ -456,6 +494,10 @@ class ChatView(QWidget):
         self.banner.setVisible(False)
         self.status.setText(f"conectando a {p.label} em {Path(ws).name}…")
         if p.adapter != "acp":                                               # provedor da plataforma (F1/F2): mesmo Chat
+            self.mcp = acp_mcp.McpConfig()
+            # revisão do #123: dizer só o que é verdade para o PAPEL (o Executor local tem ferramenta, do Studio)
+            self.mcp_label.setText("MCP: não se aplica (ferramentas do Studio, não MCP)"
+                                   if R.role_of(p) == R.EXECUTOR_LOCAL else "MCP: não se aplica (Conversa, sem ferramentas)")
             self.client = self.provider_factory(
                 p, ws, on_update=lambda u, g=gen: self.bridge.update.emit(g, u),
                 on_permission=lambda req, respond, g=gen: self.bridge.permission.emit(g, req, respond),
@@ -463,8 +505,11 @@ class ChatView(QWidget):
             fut = self.client.connect(None)
             fut.add_done_callback(lambda f, g=gen: self._emit_done(g, "connect", f))
             return
+        self.mcp = self.mcp_config_fn()
+        self.mcp_label.setText(self.mcp.status_text())
+        self.mcp_label.setToolTip(self.mcp.source)
         self.client = self.client_factory(
-            list(p.argv), ws, runtime=self.rt,
+            list(p.argv), ws, runtime=self.rt, mcp_servers=self.mcp.servers,
             on_update=lambda u, g=gen: self.bridge.update.emit(g, u),
             on_permission=lambda req, respond, g=gen: self.bridge.permission.emit(g, req, respond),
             on_exit=lambda code, g=gen: self.bridge.exited.emit(g, code),
