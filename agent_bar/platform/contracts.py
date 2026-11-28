@@ -9,6 +9,7 @@ para nao trazer dependencia nova ao produto.
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -141,11 +142,25 @@ _TYPES = {"string": str, "object": dict, "array": list, "null": type(None), "boo
 def _type_ok(value: Any, name: str) -> bool:
     if name == "integer":
         return isinstance(value, int) and not isinstance(value, bool)
+    if name == "number":
+        return isinstance(value, (int, float)) and not isinstance(value, bool)
     return isinstance(value, _TYPES[name])
 
 
 def validate(value: Any, schema: Mapping[str, Any], path: str = "") -> None:
-    """Levanta ContractError no primeiro desvio. Nao converte nem completa nada."""
+    """Levanta ContractError no primeiro desvio. Nao converte nem completa nada. Subconjunto de JSON Schema: type
+    (inclui number/integer), const, enum, required, properties, additionalProperties false, items, minItems, maxItems,
+    uniqueItems, pattern, minimum, maximum e oneOf (exatamente uma alternativa)."""
+    if "oneOf" in schema:
+        hits = 0
+        for alt in schema["oneOf"]:
+            try:
+                validate(value, alt, path)
+                hits += 1
+            except ContractError:
+                pass
+        if hits != 1:
+            raise ContractError(path, f"casa com {hits} alternativas de oneOf (esperado 1)")
     if "const" in schema and value != schema["const"]:
         raise ContractError(path, f"esperado {schema['const']!r}, veio {value!r}")
     if "enum" in schema and value not in schema["enum"]:
@@ -166,8 +181,20 @@ def validate(value: Any, schema: Mapping[str, Any], path: str = "") -> None:
         for key, sub in props.items():
             if key in value:
                 validate(value[key], sub, f"{path}.{key}".lstrip("."))
-    if isinstance(value, list) and "items" in schema:
-        for i, item in enumerate(value):
+    if isinstance(value, str) and "pattern" in schema and not re.search(schema["pattern"], value):
+        raise ContractError(path, f"{value!r} nao casa {schema['pattern']}")
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        if "minimum" in schema and value < schema["minimum"]:
+            raise ContractError(path, f"{value} < minimo {schema['minimum']}")
+        if "maximum" in schema and value > schema["maximum"]:
+            raise ContractError(path, f"{value} > maximo {schema['maximum']}")
+    if isinstance(value, list):
+        if len(value) < schema.get("minItems", 0) or ("maxItems" in schema and len(value) > schema["maxItems"]):
+            raise ContractError(path, f"{len(value)} itens fora de [{schema.get('minItems', 0)}, "
+                                      f"{schema.get('maxItems', '...')}]")
+        if schema.get("uniqueItems") and len({json.dumps(x, sort_keys=True) for x in value}) != len(value):
+            raise ContractError(path, "itens repetidos")
+        for i, item in enumerate(value if "items" in schema else []):
             validate(item, schema["items"], f"{path}[{i}]")
 
 
