@@ -97,7 +97,7 @@ Legenda: **OK** = visto funcionando com dado real · **OK\*** = funciona, com d�
 | D10 | `develop` não tem CI; só `main` tem `ci.yml` | PR #6 | merges sem check | M0 |
 | D11 | Cache de login no módulo não é invalidado por "Atualizar"; `_UNUSED_JQ` morto (já listado em `docs/limitacoes-e-roadmap.md` no `develop`) | doc do `develop` | menor | M1 |
 
-**Dependências externas:** `claude`, `codex`, `gh` no PATH (verificadas: `%APPDATA%\npm\claude`, `codex`, `C:\Program Files\GitHub CLI\gh.exe`); PySide6-Essentials 6.12; Windows (CIM/PowerShell para processos, Win32 para topmost); EventStore SQLite **do `agent-runtime`** (Frente B, dona do schema); schemas de `manifest`/`geometry_report`/`validation_report` **da Frente A** (`engineering-specs` #5/#6), ainda não publicados; S00-02 (`engineering-specs#8`) ainda aberto.
+**Dependências externas:** `claude`, `codex`, `gh` no PATH (verificadas: `%APPDATA%\npm\claude`, `codex`, `C:\Program Files\GitHub CLI\gh.exe`); PySide6-Essentials 6.12; Windows (CIM/PowerShell para processos, Win32 para topmost); EventStore SQLite **do `agent-runtime`** (Frente B, dona do schema); schemas de `manifest`/`geometry_report`/`validation_report` **da Frente A** (`engineering-specs` #5/#6), ainda não publicados; S00-02 (PR no `engineering-specs`, privado) ainda aberto.
 
 ## 5. Proposta de Mission Control (incremental)
 

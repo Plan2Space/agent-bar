@@ -1,9 +1,17 @@
-# agent-bar — instruções para Codex CLI
+# AGENTS.md — agent-bar
 
-## Conhecimento de engenharia Plan2Space
+Instruções para qualquer agente de código (Codex CLI, Claude Code, outros).
 
-Consulte `Plan2Space/claude-engineering-skills` na release `v0.9.3`, commit `3f93ccb001d4609527587ddfa1a716ca5a09b38c`. O catálogo autoritativo é `catalog/skills.json`; use `skills/spec-author/SKILL.md` para SPECs, `skills/spec-progress-keeper/SKILL.md` para marcos e `skills/backlog-governance/SKILL.md` para Issues/Board. Registre a skill e o SHA na evidência. A instalação automática por lockfile depende de [hub #29](https://github.com/Plan2Space/claude-engineering-skills/issues/29) e da integração de [agent-bar#4](https://github.com/Plan2Space/agent-bar/issues/4); não declare uma skill carregada sem verificá-la.
+**Regras deste repositório:** [CLAUDE.md](CLAUDE.md). Elas valem para qualquer agente, não só para o Claude.
 
-O [contrato de ownership](https://github.com/Plan2Space/claude-engineering-skills/blob/v0.9.3/contracts/ownership.v1.md) mantém skills reutilizáveis e contratos compartilhados no hub. SPECs, testes e interface operacional de `agent-bar` ficam aqui; o schema do EventStore pertence a `agent-runtime`. Cite referências externas por commit imutável, sem copiar decisões normativas. Issues e [Project #1](https://github.com/orgs/Plan2Space/projects/1) guardam o estado operacional.
+Regras comuns do Plan2Space, iguais para Claude Code e Codex, numa fonte só (não copiadas aqui):
 
-Próximo passo: expor a versão efetiva da skill e falhas de carga na UI, em modo somente leitura, após [agent-runtime#50](https://github.com/Plan2Space/agent-runtime/issues/50). Não altere permissões, proteção de branch ou políticas de aprovação sem autorização.
+- **Papéis, worktree, risco e `APROVADO <RISCO> <sha40>`, Board, Frente `CODEX`, dono da tarefa pelos fatos do
+  agent-runtime:** `Plan2Space/engineering-specs` → `plan2space/P2S-SESSION-OPERATING-MODEL.md` §12
+  (sempre pelo SHA do `main` do engineering-specs).
+- **SPECs:** `Plan2Space/engineering-specs`, mapa `<produto>/README.md`, sempre por SHA.
+- **Skills e contrato de ownership:** `Plan2Space/claude-engineering-skills` (`catalog/skills.json`,
+  `contracts/ownership.v2.md`), por SHA da release.
+- **Estado:** Issues e [Project #1](https://github.com/orgs/Plan2Space/projects/1).
+
+Regra nova que valha para os dois agentes entra numa dessas fontes, nunca neste arquivo.
