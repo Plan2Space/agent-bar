@@ -76,6 +76,20 @@ def test_risk_comes_from_the_runtime_classifier_not_from_the_ui():
     assert row.risk == "HIGH" and row.state == "aguardando" and row.can_approve is True and row.head_sha == SHA1
 
 
+@pytest.mark.parametrize("repo, path", [("Plan2Space/engineering-specs", "plan2space/P2S-X.md"),
+                                        ("Plan2Space/agent-bar", "agent_bar/cockpit/devmode.py")])
+def test_the_bar_classifies_with_the_pr_repo_profile_like_the_runtime_gate(repo, path):
+    """Achado do revisor no #228: com o runtime ca323420 o classify_risk aceita repo= (perfil por repo, #69) e o
+    merge_gate passa o repo. Sem o repo aqui, um SPEC do engineering-specs aparecia LOW na barra e HIGH no gate."""
+    from agent_runtime.approval import classify_risk
+    change = {"status": "modified", "patch": "@@ -1 +1 @@\n-a\n+b"}
+    prs = {(repo, 7): pr_state(files=[{"filename": path, **change}])}
+    row = collect(prs).rows[0]
+    gate = classify_risk([path], file_changes={path: change}, repo=repo)          # o que o merge_gate do runtime calcula
+    assert gate[0] == "HIGH"
+    assert (row.risk, row.risk_reasons) == gate
+
+
 def test_low_risk_with_green_ci_needs_no_human():
     prs = {(REPO, 7): pr_state(files=[{"filename": "docs/a.md", "status": "modified", "patch": "x"}])}
     row = collect(prs).rows[0]

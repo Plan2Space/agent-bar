@@ -247,7 +247,7 @@ def _one(gh: Gh, repo: str, number: int, approvers: Mapping[str, Sequence[str]],
     names = [f["filename"] for f in files]
     changes = {f["filename"]: {k: f.get(k) for k in ("status", "patch", "previous_filename")} for f in files}
     labels = [lbl.get("name", "") for lbl in pr.get("labels") or []]
-    row.risk, row.risk_reasons = classify_risk(names, labels, file_changes=changes)
+    row.risk, row.risk_reasons = classify_risk(names, labels, file_changes=changes, repo=repo)   # mesmo perfil do merge_gate
     author = str((pr.get("user") or {}).get("login") or "")
     level_approvers = tuple(approvers.get(row.risk, ()))                    # comentario: so quem aprova ESTE nivel (sem heranca)
     records: list[ApprovalRecord] = []

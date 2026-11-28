@@ -22,7 +22,7 @@ gui = [
 
 [package.metadata]
 requires-dist = [
-    { name = "agent-runtime", git = "https://github.com/Plan2Space/agent-runtime?rev=708eadf5c16a3f4ab452251e849d27d9e045d640" },
+    { name = "agent-runtime", git = "https://github.com/Plan2Space/agent-runtime?rev=ca323420b56eb81d7bc392e70c7573f9d12dc4c1" },
     { name = "pyside6-essentials", marker = "extra == 'dev'", specifier = ">=6.7,<7.0" },
     { name = "pyside6-essentials", marker = "extra == 'gui'", specifier = ">=6.7,<7.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.3,<9.0" },
@@ -33,7 +33,7 @@ provides-extras = ["gui", "dev"]
 [[package]]
 name = "agent-runtime"
 version = "0.1.0"
-source = { git = "https://github.com/Plan2Space/agent-runtime?rev=708eadf5c16a3f4ab452251e849d27d9e045d640#708eadf5c16a3f4ab452251e849d27d9e045d640" }
+source = { git = "https://github.com/Plan2Space/agent-runtime?rev=ca323420b56eb81d7bc392e70c7573f9d12dc4c1#ca323420b56eb81d7bc392e70c7573f9d12dc4c1" }
 
 [[package]]
 name = "colorama"
