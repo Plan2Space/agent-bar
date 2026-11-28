@@ -1,0 +1,332 @@
+{
+ "items": [
+  {
+   "aprovação humana pendente": "Não",
+   "classificação": "Epic",
+   "content": {
+    "number": 409,
+    "repository": "Plan2Space/sketchup-mcp",
+    "title": "[Epic] Pipeline inteligente integrado de geração de apartamento (P5 a P9)",
+    "type": "Issue",
+    "url": "https://github.com/Plan2Space/sketchup-mcp/issues/409"
+   },
+   "estado da prova": "NOT_TESTED",
+   "fase": "P5-P9",
+   "id": "PVTI_lADOFV8G784BsaorzhKVROk",
+   "labels": [
+    "fase:P5-P9",
+    "prio:P0",
+    "prova:NOT_TESTED",
+    "spec:FP-055",
+    "tipo:epic",
+    "dominio:sketchup",
+    "dominio:furnishing"
+   ],
+   "prioridade": "P0",
+   "repository": "https://github.com/Plan2Space/sketchup-mcp",
+   "sPEC vinculada": "FP-055",
+   "status": "In Progress",
+   "tipo": "Epic",
+   "title": "[Epic] Pipeline inteligente integrado de geração de apartamento (P5 a P9)"
+  },
+  {
+   "aprovação humana pendente": "Não",
+   "classificação": "Epic",
+   "content": {
+    "number": 410,
+    "repository": "Plan2Space/sketchup-mcp",
+    "title": "[Epic] Espaço utilizável, apoio físico e barreiras de interferência (FP-056, P2 a P6)",
+    "type": "Issue",
+    "url": "https://github.com/Plan2Space/sketchup-mcp/issues/410"
+   },
+   "estado da prova": "NOT_TESTED",
+   "fase": "P2-P6",
+   "id": "PVTI_lADOFV8G784BsaorzhKVRT4",
+   "labels": [
+    "fase:P2-P6",
+    "prio:P0",
+    "prova:NOT_TESTED",
+    "spec:FP-056",
+    "tipo:epic",
+    "dominio:geometry",
+    "dominio:furnishing"
+   ],
+   "prioridade": "P0",
+   "repository": "https://github.com/Plan2Space/sketchup-mcp",
+   "sPEC vinculada": "FP-056",
+   "status": "In Progress",
+   "tipo": "Epic",
+   "title": "[Epic] Espaço utilizável, apoio físico e barreiras de interferência (FP-056, P2 a P6)"
+  },
+  {
+   "aprovação humana pendente": "Não",
+   "classificação": "Epic",
+   "content": {
+    "number": 411,
+    "repository": "Plan2Space/sketchup-mcp",
+    "title": "[Epic] Núcleo espacial: fechar F3, F4 e F5 (FP-054)",
+    "type": "Issue",
+    "url": "https://github.com/Plan2Space/sketchup-mcp/issues/411"
+   },
+   "estado da prova": "NOT_TESTED",
+   "fase": "F3-F5",
+   "id": "PVTI_lADOFV8G784BsaorzhKVRZ8",
+   "labels": [
+    "fase:F3-F5",
+    "prio:P1",
+    "prova:NOT_TESTED",
+    "spec:FP-054",
+    "tipo:epic",
+    "dominio:sketchup"
+   ],
+   "prioridade": "P1",
+   "repository": "https://github.com/Plan2Space/sketchup-mcp",
+   "sPEC vinculada": "FP-054",
+   "status": "Backlog",
+   "tipo": "Epic",
+   "title": "[Epic] Núcleo espacial: fechar F3, F4 e F5 (FP-054)"
+  },
+  {
+   "aprovação humana pendente": "Não",
+   "classificação": "Epic",
+   "content": {
+    "number": 412,
+    "repository": "Plan2Space/sketchup-mcp",
+    "title": "[Epic] Modularização e dívida técnica residual (FP-042 e FP-043)",
+    "type": "Issue",
+    "url": "https://github.com/Plan2Space/sketchup-mcp/issues/412"
+   },
+   "estado da prova": "NOT_TESTED",
+   "fase": "P3b-P8",
+   "id": "PVTI_lADOFV8G784BsaorzhKVReY",
+   "labels": [
+    "fase:P3b-P8",
+    "prio:P1",
+    "prova:NOT_TESTED",
+    "spec:FP-043",
+    "tipo:epic",
+    "dominio:engineering-governance"
+   ],
+   "prioridade": "P1",
+   "repository": "https://github.com/Plan2Space/sketchup-mcp",
+   "sPEC vinculada": "FP-043",
+   "status": "Backlog",
+   "tipo": "Epic",
+   "title": "[Epic] Modularização e dívida técnica residual (FP-042 e FP-043)"
+  },
+  {
+   "aprovação humana pendente": "Não",
+   "classificação": "Feature",
+   "content": {
+    "number": 416,
+    "repository": "Plan2Space/sketchup-mcp",
+    "title": "[Feature] Receitas selecionam operação, implementação e prova no build",
+    "type": "Issue",
+    "url": "https://github.com/Plan2Space/sketchup-mcp/issues/416"
+   },
+   "dependências": "#409",
+   "estado da prova": "NOT_TESTED",
+   "fase": "P5",
+   "id": "PVTI_lADOFV8G784BsaorzhKVR0I",
+   "labels": [
+    "fase:P5",
+    "prio:P1",
+    "prova:UNIT_PASS",
+    "spec:FP-055",
+    "gpt-review-required",
+    "tipo:feature",
+    "dominio:furnishing"
+   ],
+   "prioridade": "P1",
+   "repository": "https://github.com/Plan2Space/sketchup-mcp",
+   "sPEC vinculada": "FP-055",
+   "status": "GPT Review",
+   "tipo": "Story",
+   "title": "[Feature] Receitas selecionam operação, implementação e prova no build"
+  },
+  {
+   "aprovação humana pendente": "Não",
+   "classificação": "Validação",
+   "content": {
+    "number": 418,
+    "repository": "Plan2Space/sketchup-mcp",
+    "title": "[Validação] Gates de CI, qualificação no SketchUp real e mutação de integração do pipeline",
+    "type": "Issue",
+    "url": "https://github.com/Plan2Space/sketchup-mcp/issues/418"
+   },
+   "dependências": "#409, #414",
+   "estado da prova": "UNIT_PASS",
+   "fase": "P7",
+   "id": "PVTI_lADOFV8G784BsaorzhKVSBA",
+   "labels": [
+    "fase:P7",
+    "prio:P1",
+    "prova:UNIT_PASS",
+    "spec:FP-055",
+    "gpt-review-required",
+    "tipo:validation",
+    "dominio:engineering-governance"
+   ],
+   "prioridade": "P1",
+   "repository": "https://github.com/Plan2Space/sketchup-mcp",
+   "sPEC vinculada": "FP-055",
+   "status": "GPT Review",
+   "tipo": "Story",
+   "title": "[Validação] Gates de CI, qualificação no SketchUp real e mutação de integração do pipeline"
+  },
+  {
+   "aprovação humana pendente": "Não",
+   "content": {
+    "number": 421,
+    "repository": "Plan2Space/sketchup-mcp",
+    "title": "FP-055 P4 — reconciliar: Banho 02 vertical no SketchUp real (INFEASIBLE comprovado ou UNKNOWN justificado)",
+    "type": "Issue",
+    "url": "https://github.com/Plan2Space/sketchup-mcp/issues/421"
+   },
+   "dependências": "#409",
+   "estado da prova": "SKETCHUP_PASS",
+   "fase": "P4",
+   "id": "PVTI_lADOFV8G784BsaorzhKVSXU",
+   "labels": [
+    "fase:P4",
+    "prio:P1",
+    "spec:FP-055",
+    "tipo:task",
+    "prova:SKETCHUP_PASS"
+   ],
+   "prioridade": "P1",
+   "repository": "https://github.com/Plan2Space/sketchup-mcp",
+   "sPEC vinculada": "FP-055",
+   "status": "Done",
+   "tipo": "Task",
+   "title": "FP-055 P4 — reconciliar: Banho 02 vertical no SketchUp real (INFEASIBLE comprovado ou UNKNOWN justificado)"
+  },
+  {
+   "aprovação humana pendente": "Não",
+   "content": {
+    "number": 422,
+    "repository": "Plan2Space/sketchup-mcp",
+    "title": "Perfil INTELLIGENT_BUILD: comparação proposta × construído no SketchUp",
+    "type": "Issue",
+    "url": "https://github.com/Plan2Space/sketchup-mcp/issues/422"
+   },
+   "dependências": "#409, #421",
+   "estado da prova": "SKETCHUP_PASS",
+   "fase": "P4/P8",
+   "id": "PVTI_lADOFV8G784BsaorzhKVSgI",
+   "labels": [
+    "fase:P4/P8",
+    "prio:P1",
+    "spec:FP-055",
+    "tipo:story",
+    "prova:SKETCHUP_PASS"
+   ],
+   "prioridade": "P1",
+   "repository": "https://github.com/Plan2Space/sketchup-mcp",
+   "sPEC vinculada": "FP-055",
+   "status": "Done",
+   "tipo": "Story",
+   "title": "Perfil INTELLIGENT_BUILD: comparação proposta × construído no SketchUp"
+  },
+  {
+   "aprovação humana pendente": "Não",
+   "classificação": "Feature",
+   "content": {
+    "number": 431,
+    "repository": "Plan2Space/sketchup-mcp",
+    "title": "[Feature] Planejadores adotam a região utilizável, um por cômodo, só com melhora estrita",
+    "type": "Issue",
+    "url": "https://github.com/Plan2Space/sketchup-mcp/issues/431"
+   },
+   "dependências": "#410, #447, #484",
+   "estado da prova": "NOT_TESTED",
+   "fase": "P2",
+   "id": "PVTI_lADOFV8G784BsaorzhKVTbw",
+   "labels": [
+    "blocked",
+    "fase:P2",
+    "prio:P0",
+    "prova:NOT_TESTED",
+    "prova:UNIT_PASS",
+    "spec:FP-056",
+    "bloqueio:dependency",
+    "tipo:feature",
+    "dominio:furnishing"
+   ],
+   "prioridade": "P0",
+   "repository": "https://github.com/Plan2Space/sketchup-mcp",
+   "sPEC vinculada": "FP-056",
+   "status": "Blocked",
+   "tipo": "Story",
+   "title": "[Feature] Planejadores adotam a região utilizável, um por cômodo, só com melhora estrita"
+  },
+  {
+   "aprovação humana pendente": "Não",
+   "classificação": "Validação",
+   "content": {
+    "number": 433,
+    "repository": "Plan2Space/sketchup-mcp",
+    "title": "[Validação] Fechar o xfail D-007 'nenhum móvel dentro da parede' sem alterar a laje",
+    "type": "Issue",
+    "url": "https://github.com/Plan2Space/sketchup-mcp/issues/433"
+   },
+   "dependências": "#431, #447, #484",
+   "estado da prova": "NOT_TESTED",
+   "fase": "P2",
+   "id": "PVTI_lADOFV8G784BsaorzhKVTog",
+   "labels": [
+    "blocked",
+    "fase:P2",
+    "prio:P0",
+    "prova:NOT_TESTED",
+    "spec:FP-056",
+    "bloqueio:dependency",
+    "tipo:validation",
+    "dominio:geometry"
+   ],
+   "prioridade": "P0",
+   "repository": "https://github.com/Plan2Space/sketchup-mcp",
+   "sPEC vinculada": "FP-056",
+   "status": "Blocked",
+   "tipo": "Story",
+   "title": "[Validação] Fechar o xfail D-007 'nenhum móvel dentro da parede' sem alterar a laje"
+  },
+  {
+   "content": {
+    "number": 29,
+    "repository": "Plan2Space/claude-engineering-skills",
+    "title": "[Feature] Carregador versionado de skills com cache e rollback",
+    "type": "Issue",
+    "url": "https://github.com/Plan2Space/claude-engineering-skills/issues/29"
+   },
+   "dependências": "PR #27 merged as v0.9.0; no open dependency",
+   "id": "PVTI_lADOFV8G784BsaorzhKXwys",
+   "prioridade": "P1",
+   "repository": "https://github.com/Plan2Space/claude-engineering-skills",
+   "sPEC vinculada": "claude-engineering-skills/docs/specs/plan2space-engineering-knowledge-hub.md@f995c1f7e8d34d2d92f8f3648ef692be464e0a1c",
+   "status": "Ready",
+   "title": "[Feature] Carregador versionado de skills com cache e rollback"
+  },
+  {
+   "classificação": "Validação",
+   "content": {
+    "number": 139,
+    "repository": "Plan2Space/agent-bar",
+    "title": "[LAB-23] Auditoria das correções anteriores de UX (P2S-STUDIO-LLM-LAB-001)",
+    "type": "Issue",
+    "url": "https://github.com/Plan2Space/agent-bar/issues/139"
+   },
+   "dependências": "—",
+   "estado da prova": "NOT_TESTED",
+   "fase": "LLM-LAB",
+   "id": "PVTI_lADOFV8G784BsaorzhMMXrk",
+   "prioridade": "P0",
+   "repository": "https://github.com/Plan2Space/agent-bar",
+   "sPEC vinculada": "P2S-STUDIO-LLM-LAB-001 (es#84, 832b220f)",
+   "status": "Ready",
+   "tipo": "Task",
+   "title": "[LAB-23] Auditoria das correções anteriores de UX (P2S-STUDIO-LLM-LAB-001)"
+  }
+ ],
+ "totalCount": 12
+}
