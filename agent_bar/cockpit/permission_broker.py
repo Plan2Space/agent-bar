@@ -11,12 +11,16 @@ de Notificacoes. Regras:
 """
 from __future__ import annotations
 
+import logging
+import sqlite3
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 
 from agent_bar.cockpit.acp import PermissionRequest
 from agent_bar.cockpit.permission_inbox import AlreadyDecided, Entry, PermissionInbox
+
+log = logging.getLogger(__name__)
 
 ALLOW_ONCE, DENY = "allow_once", "deny"
 
@@ -33,6 +37,7 @@ class PermissionBroker:
         self.on_change = on_change
         self._open: dict[str, _Open] = {}
         self._lock = threading.RLock()
+        self.last_expire_skip = ""                                            # por que a última volta do vigia pulou
 
     def register(self, entry_id: str, req: PermissionRequest, respond: Callable[[str | None], None]) -> None:
         with self._lock:
@@ -89,8 +94,20 @@ class PermissionBroker:
         return entry
 
     def expire(self) -> list[str]:
-        """Pedidos vencidos: EXPIRED no Inbox e recusa ao agente (o agente nao fica pendurado)."""
-        self.inbox.expire_due()
+        """Pedidos vencidos: EXPIRED no Inbox e recusa ao agente (o agente nao fica pendurado).
+
+        Roda num timer (a cada segundo). Com o SQLite ocupado por outra conexao (Inbox, NotificationCenter e ImageLedger
+        dividem o mesmo arquivo), pula esta volta e diz por que em `last_expire_skip`; a proxima volta vence. Antes, o
+        `database is locked` estourava dentro do slot do timer."""
+        try:
+            self.inbox.expire_due()
+        except sqlite3.OperationalError as exc:
+            if "locked" not in str(exc) and "busy" not in str(exc):
+                raise
+            self.last_expire_skip = f"banco ocupado, prazos vencem na proxima volta ({exc})"
+            log.warning("expire: %s", self.last_expire_skip)
+            return []
+        self.last_expire_skip = ""
         gone = []
         with self._lock:
             for eid, o in list(self._open.items()):
