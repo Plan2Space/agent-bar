@@ -49,7 +49,10 @@ def profiles() -> list[AgentProfile]:
 
 
 def workspaces(apps_root: Path | None = None) -> list[Path]:
-    """`AGENT_BAR_COCKPIT_WORKSPACES` (separado por ';') ou as pastas de primeiro nivel de E:\\Claude\\apps com .git."""
+    """`AGENT_BAR_COCKPIT_WORKSPACES` (separado por ';') ou as pastas de primeiro nivel de E:\\Claude\\apps com .git.
+
+    FR-02: `DEFAULT_APPS` e so uma SUGESTAO quando existe. Sem ela (maquina de outra pessoa), a lista vem vazia e o Chat
+    mostra "Escolher pasta…"; a escolha fica lembrada em `project_folders`."""
     env = os.environ.get("AGENT_BAR_COCKPIT_WORKSPACES", "").strip()
     if env:
         return [Path(p).resolve() for p in env.split(";") if p.strip() and Path(p.strip()).is_dir()]

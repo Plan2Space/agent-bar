@@ -30,6 +30,7 @@ from PySide6.QtWidgets import (
 from agent_bar.cockpit import acp_mcp
 from agent_bar.cockpit import permission_mode as PM
 from agent_bar.cockpit import profiles as prof
+from agent_bar.cockpit import project_folders as PF
 from agent_bar.cockpit import roles as R
 from agent_bar.cockpit.acp import (
     AcpClient,
@@ -113,6 +114,10 @@ def _confirm_irreversible_dialog(req: PermissionRequest, parent: QWidget) -> boo
     return bool(gate.confirmed)
 
 
+def _choose_folder_dialog(parent: QWidget) -> str:
+    return QFileDialog.getExistingDirectory(parent, "Pasta do projeto")
+
+
 RISKY_SUFFIX = " (decide sem pedir permissão)"
 
 
@@ -180,8 +185,10 @@ class ChatView(QWidget):
                  inbox: PermissionInbox | None = None, broker: PermissionBroker | None = None,
                  session_gate: Callable[[prof.AgentProfile], str | None] | None = None,
                  permission_mode_fn: Callable[[], str] | None = None,
-                 mcp_config_fn: Callable[[], acp_mcp.McpConfig] | None = None) -> None:
+                 mcp_config_fn: Callable[[], acp_mcp.McpConfig] | None = None,
+                 choose_folder: Callable[[QWidget], str] | None = None) -> None:
         super().__init__()
+        self.choose_folder = choose_folder or _choose_folder_dialog           # FR-02: o seletor de pasta (falso no teste)
         self.permission_mode_fn = permission_mode_fn or PM.current           # Felipe: bypass sempre (reversível)
         self.mcp_config_fn = mcp_config_fn or (lambda: acp_mcp.load(data_dir() / acp_mcp.CONFIG_NAME))
         self.mcp = acp_mcp.McpConfig()                                    # o que a sessão atual declarou (UX-12)
@@ -269,8 +276,11 @@ class ChatView(QWidget):
                 self.agent_box.model().item(self.agent_box.count() - 1).setEnabled(False)
         first_ok = next((i for i, p in enumerate(self.profiles) if p.available()[0]), 0)
         self.agent_box.setCurrentIndex(first_ok)
+        self.prefs_path = data_dir() / "preferences.json"
         self.workspace_box = FitCombo(10, full_tip=True)
-        for s in spaces:
+        remembered = PF.load(self.prefs_path)                                # FR-02: a última escolha vem primeiro
+        seen = {os.path.normcase(str(p)) for p in remembered}
+        for s in [*remembered, *(s for s in spaces if os.path.normcase(str(s)) not in seen)]:
             self.workspace_box.addItem(s.name, str(s))
         self.workspace_box.addItem("Escolher pasta…", "")
         self.mode_box = FitCombo(6)
@@ -324,6 +334,18 @@ class ChatView(QWidget):
         bl.addWidget(self.reconnect_btn)
         self.banner.setVisible(False)
         lay.addWidget(self.banner)
+        self.folder_empty = QFrame()                                         # FR-02: sem pasta, orientar (não é erro)
+        self.folder_empty.setStyleSheet("QFrame{background:#1e2430;border:1px solid #34405a;border-radius:6px}")
+        fl = QHBoxLayout(self.folder_empty)
+        fl.setContentsMargins(10, 8, 10, 8)
+        self.folder_empty_label = QLabel("Escolha a pasta do seu projeto para começar. O agente trabalha dentro dela.")
+        self.folder_empty_label.setWordWrap(True)
+        self.folder_empty_label.setStyleSheet("color:#dfe6f3;font-size:12px;border:0")
+        self.choose_folder_btn = QPushButton("Escolher pasta…")
+        self.choose_folder_btn.setStyleSheet(BTN_CSS)
+        fl.addWidget(self.folder_empty_label, 1)
+        fl.addWidget(self.choose_folder_btn)
+        lay.addWidget(self.folder_empty)
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
         self.scroll.setFrameShape(QFrame.Shape.NoFrame)
@@ -338,7 +360,6 @@ class ChatView(QWidget):
                             "Toda ferramenta que pedir permissão abre um diálogo; fechar o diálogo recusa.")
         self._add(self.empty)
         bottom = QHBoxLayout()
-        self.prefs_path = data_dir() / "preferences.json"
         self.input = Composer(enter_sends=load_enter_sends(self.prefs_path))
         self.input.setFixedHeight(84)
         self.input.setStyleSheet("QPlainTextEdit{background:#1e1e23;color:#e6e6e6;border:1px solid #3a3a44;"
@@ -373,6 +394,7 @@ class ChatView(QWidget):
         self.enter_box.toggled.connect(self._enter_pref_changed)
         self.new_btn.clicked.connect(self.new_chat)
         self.reconnect_btn.clicked.connect(self.reconnect)
+        self.choose_folder_btn.clicked.connect(self._pick_folder)
         self.agent_box.currentIndexChanged.connect(lambda _i: self._restart("agente trocado"))
         self.workspace_box.activated.connect(self._workspace_activated)
         self.mode_box.activated.connect(self._mode_activated)
@@ -381,6 +403,11 @@ class ChatView(QWidget):
         self.history_box.activated.connect(self._history_activated)
         self.chat.workspace = self.workspace()
         self.chat.agent = self.profile().key
+        self._show_folder_state()
+
+    def _show_folder_state(self) -> None:
+        """FR-02: sem pasta escolhida, o estado vazio com "Escolher pasta…"; com pasta, some."""
+        self.folder_empty.setVisible(not self.workspace())
 
     # ------------------------------------------------------------------------------------------------ helpers
     def profile(self) -> prof.AgentProfile:
@@ -475,8 +502,14 @@ class ChatView(QWidget):
         if self.client is not None:
             return
         ws = self.workspace()
-        if not ws:
-            self._show_error(None, "escolha um workspace")
+        if not ws:                                                           # FR-02: orientar, não acusar erro
+            if self.pending_prompt is not None:                              # o texto volta ao campo; nada se perde
+                self._set_busy(False)
+                self.pending_prompt = None
+                self._restore_draft()
+            self.banner.setVisible(False)
+            self._show_folder_state()
+            self.status.setText("escolha a pasta do projeto para começar")
             return
         refusal = self.session_gate(self.profile()) if self.session_gate is not None else None
         if refusal:                                                          # limite medido do provedor (F5)
@@ -554,13 +587,29 @@ class ChatView(QWidget):
 
     def _workspace_activated(self, idx: int) -> None:
         if not self.workspace_box.itemData(idx):
-            folder = QFileDialog.getExistingDirectory(self, "Workspace do agente")
-            if not folder:
-                return
-            self.workspace_box.insertItem(idx, Path(folder).name, str(Path(folder).resolve()))
-            self.workspace_box.setCurrentIndex(idx)
+            self._pick_folder()
+            return
         if self.workspace() != self.chat.workspace:
-            self._restart("workspace trocado")
+            self._restart("pasta do projeto trocada")
+
+    def _pick_folder(self) -> None:
+        """Abre o seletor; a pasta escolhida entra no combo, fica lembrada para a próxima abertura e conecta."""
+        folder = self.choose_folder(self)
+        if not folder or not Path(folder).is_dir():
+            idx = self.workspace_box.findData(self.chat.workspace) if self.chat.workspace else -1
+            self.workspace_box.setCurrentIndex(idx if idx >= 0 else self.workspace_box.count() - 1)
+            self._show_folder_state()
+            return
+        path = str(Path(folder).resolve())
+        idx = self.workspace_box.findData(path)
+        if idx < 0:
+            idx = 0
+            self.workspace_box.insertItem(idx, Path(path).name, path)
+        self.workspace_box.setCurrentIndex(idx)
+        PF.remember(self.prefs_path, Path(path))
+        self._show_folder_state()
+        if self.workspace() != self.chat.workspace:
+            self._restart("pasta do projeto trocada")
 
     def _mode_activated(self, _idx: int) -> None:
         mode = str(self.mode_box.currentData() or "")
