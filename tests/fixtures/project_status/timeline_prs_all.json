@@ -1,0 +1,17 @@
+[
+ {"number": 3, "title": "Tarefa sintética 03 — aberto, CI pendente", "url": "https://github.com/Plan2Space/exemplo/pull/3",
+  "createdAt": "2026-11-26T10:00:00Z", "mergedAt": null, "state": "OPEN", "headRefOid": "cccccccccccccccccccccccccccccccccccccccc",
+  "statusCheckRollup": [
+   {"__typename": "CheckRun", "name": "test (3.11)", "status": "COMPLETED", "conclusion": "SUCCESS", "completedAt": "2026-11-26T10:05:00Z"},
+   {"__typename": "CheckRun", "name": "test (3.12)", "status": "IN_PROGRESS", "conclusion": "", "completedAt": "0001-01-01T00:00:00Z"}]},
+ {"number": 2, "title": "Tarefa sintética 02 — aberto, CI falhou", "url": "https://github.com/Plan2Space/exemplo/pull/2",
+  "createdAt": "2026-11-25T09:00:00Z", "mergedAt": null, "state": "OPEN", "headRefOid": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "statusCheckRollup": [
+   {"__typename": "CheckRun", "name": "test (3.11)", "status": "COMPLETED", "conclusion": "SUCCESS", "completedAt": "2026-11-25T09:06:00Z"},
+   {"__typename": "CheckRun", "name": "test (3.12)", "status": "COMPLETED", "conclusion": "FAILURE", "completedAt": "2026-11-25T09:08:00Z"}]},
+ {"number": 1, "title": "Tarefa sintética 01 — mergeado com CI verde", "url": "https://github.com/Plan2Space/exemplo/pull/1",
+  "createdAt": "2026-11-20T08:00:00Z", "mergedAt": "2026-11-21T12:00:00Z", "state": "MERGED", "headRefOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "statusCheckRollup": [
+   {"__typename": "CheckRun", "name": "test (3.11)", "status": "COMPLETED", "conclusion": "SUCCESS", "completedAt": "2026-11-20T08:07:00Z"},
+   {"__typename": "StatusContext", "context": "ci/externo", "state": "SUCCESS", "createdAt": "2026-11-20T08:09:00Z"}]}
+]
