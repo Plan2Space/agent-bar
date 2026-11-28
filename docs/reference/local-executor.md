@@ -185,3 +185,28 @@ A CLI e a fila de produção gravam pelo mesmo helper (`local_job.record_outcome
   - `success_rate = passes/(passes+fails)`, com INFRA fora do denominador; `null` quando não há prova;
   - job `REFUSED` não conta como execução;
   - `failures.jsonl` sai ao lado, em `p2s.local_failure.v1`, com todas as falhas.
+
+## Fila de produção local (`production_queue`)
+
+Pedido do Felipe, P2S-LOCAL-FIRST-EXECUTION-001 §9. A fila recebe jobs `p2s.local_job.v1` e roda UM POR VEZ pelo
+`local_job`, sempre contra o motor de produção fixado por sha:
+
+`python -m agent_bar.platform.production_queue --queue <dir> enqueue|list|pause|resume|cancel|retry|cameras|reprocess|work`
+
+- **Um SketchUp por vez.** Há um único worker por fila (lock com PID e instante de criação; lock de worker morto é
+  retomado) e o lock do executor.
+- **Antes de cada job a máquina é conferida.** Precisa estar sem SketchUp e sem V-Ray abertos, com o C: acima de 2 GB,
+  com o usuário ocioso há 10 min (ociosidade desconhecida não conta como ociosa) e sem suíte pytest rodando. Máquina
+  não pronta: o job espera. A política vai registrada no job.
+- **Pausar e retomar.** Pausar faz o worker não começar o próximo job; o que está rodando termina.
+- **Cancelar.** Na fila, o job vira `cancelled` na hora. Um job que já está rodando não é morto, porque matar o Python
+  deixaria o SketchUp órfão: ele fica `cancel_requested` e o desfecho real do motor é registrado.
+- **Worker que morreu.** O worker seguinte, ao começar, marca o job `running` como `interrupted`. `retry` repete o mesmo
+  job e a mesma tentativa, e o `outcome.json` passa a ser o dessa nova execução (o anterior vai para o histórico). No
+  `deterministic`, o executor devolve o resultado real do motor por replay, sem construir de novo. No `local`, o modelo
+  faz um turno novo e o executor pode construir de novo, num run novo e ainda um SketchUp por vez.
+- **Trocar a versão do motor é explícito.** `reprocess <job_id> --sha40 <novo>` cria um job novo (`<id>.e<sha8>`),
+  ligado ao original, com o sha novo declarado.
+- **Todas as câmeras.** `cameras <run_id> --camera …` gera jobs de render com no máximo 2 câmeras cada, o limite do motor.
+- A Suíte 01, as variações de material e os demais ambientes entram na fila quando o motor publicar as ferramentas
+  deles (Frente A).
