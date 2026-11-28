@@ -31,6 +31,7 @@ def mgr():
     m.store = saved
     old_palette, old_sheet, old_font = _APP.palette(), _APP.styleSheet(), _APP.font()
     yield m
+    m.close()
     _APP.setPalette(old_palette)
     _APP.setStyleSheet(old_sheet)
     _APP.setFont(old_font)
