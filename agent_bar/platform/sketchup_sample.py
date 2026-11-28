@@ -597,13 +597,16 @@ def provenance(ctx: ToolContext, engine_head: dict | None, studio: dict) -> dict
     de construcao e do motor, derivado da fixture versionada, nunca do modelo. Sem modelo de reserva."""
     engine = f"sketchup-mcp-next@{(engine_head or {}).get('commit') or 'desconhecido'}"
     model = f"{ctx.model_id}@{ctx.model_digest or 'sem-digest'}"
+    # job deterministico do roteador (local_job): ninguem "pediu" como modelo; o Runtime chamou a ferramenta direto
+    requester = ({"kind": "runtime", "id": f"{ctx.adapter}:deterministic"} if ctx.provider == "runtime"
+                 else {"kind": "model", "id": model})
     return {
         "schema": "p2s.lab.provenance.v1", "provider": ctx.provider, "adapter": ctx.adapter,
         "provider_version": ctx.provider_version, "model_id": ctx.model_id, "model_digest": ctx.model_digest,
         "model_version": None,                                               # o Ollama so da a tag (no model_id) e o digest
         "experiment_id": None, "parent_run_id": None,
         "prompt_sha256": ctx.prompt_sha256, "inference": dict(ctx.inference),
-        "roles": {"tool_requester": {"kind": "model", "id": model}, "planner": None, "builder": None,
+        "roles": {"tool_requester": requester, "planner": None, "builder": None,
                   "renderer": None, "evaluator": None, "refiner": None,
                   "outcome_writer": {"kind": "studio", "id": f"agent-bar@{studio.get('commit')}"}},
         "roles_expected": {

@@ -144,3 +144,44 @@ geometria": construção, validação, `.skp` e render são do motor.
 | C7 Refinamento | planejamento | BLOCKED, G4 e G10 (sem refinamento e sem troca de material; Frente A, `material_overrides` no motor) |
 | C8 Fluxo até evidência | planejamento | BLOCKED, G5 e G3 (publicação e inspeção avulsa fora do motor; Frentes A e C) |
 | C9 Suíte 01 | layout | BLOCKED, G2 (a Suíte 01 rc7b/rc8 existe no motor, mas não na allowlist publicada; falta `list_fixtures` no motor) |
+
+## Interface com o roteador Local First (`local_job`)
+
+Contrato combinado com a Frente E (agent-runtime#72/#73). A fronteira é um arquivo, e o agent-runtime não importa o
+agent-bar:
+
+`python -m agent_bar.platform.local_job run <job.json> --out <dir>` grava `<dir>/<job_id>/outcome.json`, o arquivo
+que o roteador lê. Ele é sempre o desfecho da execução **mais recente** daquele `job_id`, porque rodar de novo o
+mesmo `job_id` é caminho previsto (retomar na fila, `<tarefa>-a<tentativa>` no runtime):
+
+- antes de executar, o desfecho anterior sai do caminho e vai para o histórico `outcome.<n>.json`, então o roteador
+  não lê um desfecho velho enquanto a execução nova roda;
+- o novo entra por escrita atômica (arquivo temporário + rename);
+- se a execução quebra, entra um `FAILED` com `INFRA:RUNNER_ERROR`: uma falha nunca deixa um sucesso antigo no lugar;
+- falha atribuível ao executor vai também para `<dir>/failures.jsonl`.
+
+A CLI e a fila de produção gravam pelo mesmo helper (`local_job.record_outcome`).
+
+- Job `p2s.local_job.v1` e desfecho `p2s.local_outcome.v1`. Os JSON Schemas estão em `docs/contracts/`.
+- `executor.kind = deterministic`: o motor roda direto, sem LLM e com zero token. Na proveniência, `tool_requester`
+  vira `runtime`. `executor.kind = local`: um modelo do Ollama opera as mesmas ferramentas do Studio, com as opções de
+  inferência do benchmark. O `feedback` do roteador entra no pedido da tentativa seguinte e fica em `assistance`.
+- Pino do motor: o job é `REFUSED` com `ENGINE_NOT_PINNED` se o motor configurado não é o checkout de produção
+  (`P2S_PRODUCTION_ENGINE`), se o HEAD difere de `engine_ref.sha40` ou se o checkout está sujo. Trocar de versão é um job
+  explícito com outro sha.
+- O desfecho sai do que chegou ao executor e do resultado do motor:
+  - `SUCCEEDED`;
+  - `TOOL_ERROR` com `PROTOCOL` (nome fora do publicado, JSON quebrado), `SCHEMA` (argumento fora do contrato) ou
+    `CONTEXT` (chamada válida, mas não a do job);
+  - `FAILED/CAPABILITY` (nenhuma chamada);
+  - `FAILED` ou `TIMEOUT` com `INFRA:<código>` (motor, máquina ou provedor; não conta contra o executor);
+  - `REFUSED`.
+- Sem provedor cloud no caminho: `cloud = {tokens: 0, providers_called: []}`. `tokens_measured` vem dos contadores do
+  Ollama (0 no determinístico). `tokens_estimated` fica `null`. Para isso valer, o job local é recusado quando o
+  modelo é um modelo cloud do Ollama (`…:cloud`, `…-cloud`; job inválido) ou quando o endpoint do Ollama não é
+  loopback (`REFUSED` com `NOT_LOCAL`): nos dois casos o modelo rodaria fora da máquina sem registro de nuvem.
+- Prova por (executor, task_type): `python -m agent_bar.platform.capability_proofs <pastas> --out
+  <pasta>/capability_proofs.json` agrega `benchmark_run.json` e `outcome*.json` em `p2s.local_capability.v1`:
+  - `success_rate = passes/(passes+fails)`, com INFRA fora do denominador; `null` quando não há prova;
+  - job `REFUSED` não conta como execução;
+  - `failures.jsonl` sai ao lado, em `p2s.local_failure.v1`, com todas as falhas.
