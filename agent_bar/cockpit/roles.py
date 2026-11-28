@@ -37,14 +37,18 @@ def role_of(profile) -> str:
     return ACP_OTHER
 
 
-def capabilities(profile, tools: Iterable[str] = (), mcp: str = "") -> str:
+def capabilities(profile, tools: Iterable[str] = (), mcp: str = "", published: Iterable[str] | None = None) -> str:
     """O que o agente FAZ, só com o que está conferido. `tools` = ferramentas vistas nesta sessão; `mcp` = estado do MCP
-    conferido (vazio = não conferido)."""
+    conferido (vazio = não conferido); `published` = ferramentas que o adaptador do executor local publicou (None =
+    ainda não conectado: nada é prometido)."""
     role = role_of(profile)
     if role == CONVERSA:
         return "sem ferramentas (demonstração, sem LLM)" if getattr(profile, "demo", False) else "sem ferramentas"
-    if role == EXECUTOR_LOCAL:
-        return "uma ferramenta: build_room_sample (amostra no SketchUp)"
+    if role == EXECUTOR_LOCAL:                                                  # o que o adaptador publicou, nunca fixo
+        if published is None:
+            return "ferramentas estreitas de amostra no SketchUp (conferidas ao conectar)"
+        names = sorted(set(published))
+        return f"ferramentas de amostra: {', '.join(names)}" if names else "nenhuma ferramenta publicada agora"
     if role == EXECUTOR_CLAUDE:
         used = sorted(set(tools))
         parts = ["ferramentas do Claude Code"]
@@ -55,8 +59,8 @@ def capabilities(profile, tools: Iterable[str] = (), mcp: str = "") -> str:
     return "capacidades não conferidas"
 
 
-def label(profile, tools: Iterable[str] = (), mcp: str = "") -> str:
-    return f"{role_of(profile)} · {profile.label} — {capabilities(profile, tools, mcp)}"
+def label(profile, tools: Iterable[str] = (), mcp: str = "", published: Iterable[str] | None = None) -> str:
+    return f"{role_of(profile)} · {profile.label} — {capabilities(profile, tools, mcp, published)}"
 
 
 # Pedido de EXECUÇÃO: um verbo de ação + um objeto do motor. Pergunta sobre a ferramenta ("o que é o SketchUp?") não é.

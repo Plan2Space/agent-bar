@@ -34,7 +34,7 @@ def test_each_profile_has_one_role():
 def test_capabilities_say_only_what_was_verified():
     assert R.capabilities(OLLAMA) == "sem ferramentas"
     assert R.capabilities(DEMO) == "sem ferramentas (demonstração, sem LLM)"
-    assert R.capabilities(LOCAL) == "uma ferramenta: build_room_sample (amostra no SketchUp)"
+    assert R.capabilities(LOCAL) == "ferramentas estreitas de amostra no SketchUp (conferidas ao conectar)"
     assert R.capabilities(CLAUDE) == "ferramentas do Claude Code · MCP não conferido"
     assert R.capabilities(CLAUDE, tools=["Read", "build_room"], mcp="p2s-engine conferido") == (
         "ferramentas do Claude Code · usadas nesta sessão: 2 · MCP: p2s-engine conferido")
@@ -174,3 +174,56 @@ def test_a_question_goes_to_the_conversation_model(chat):
     v.send("o que é o SketchUp?")
     assert _pump(app, lambda: bool(sent))
     assert sent == ["o que é o SketchUp?"]
+
+
+def test_the_local_executor_lists_exactly_what_its_adapter_published():
+    """Achado da PoC (LAB-16, agent-bar#142): com a fixture E3a + render_spec, o executor publica DUAS ferramentas; o texto
+    fixo "uma ferramenta: build_room_sample" mentia. O seletor diz o que o adaptador publicou, e nada antes de conferir."""
+    two = R.capabilities(LOCAL, published=["render_room_sample", "build_room_sample"])
+    assert two == "ferramentas de amostra: build_room_sample, render_room_sample"
+    assert R.capabilities(LOCAL, published=["build_room_sample"]) == "ferramentas de amostra: build_room_sample"
+    assert R.capabilities(LOCAL, published=[]) == "nenhuma ferramenta publicada agora"
+    assert "build_room_sample" in R.label(LOCAL, published=["build_room_sample"])
+
+
+def test_the_selector_shows_the_published_tools_after_connecting(tmp_path, monkeypatch):
+    pytest.importorskip("PySide6.QtWidgets")
+    import concurrent.futures as cf
+
+    from PySide6.QtWidgets import QApplication
+
+    from agent_bar.cockpit.store import ChatStore
+    from agent_bar.cockpit.ui.chat import ChatView
+    app = QApplication.instance() or QApplication([])
+    monkeypatch.setenv("AGENT_BAR_COCKPIT_DATA", str(tmp_path / "data"))
+    (tmp_path / "ws").mkdir()
+
+    class Exec:
+        def __init__(self, *_a, **_kw):
+            pass
+
+        def connect(self, _sid=None):
+            f = cf.Future()
+            f.set_result({"agent": {}, "session_id": "x-1", "modes": {}, "config_options": []})
+            return f
+
+        def published_tools(self):
+            return ["build_room_sample", "render_room_sample"]
+
+        def close(self):
+            f = cf.Future()
+            f.set_result(None)
+            return f
+    local = AgentProfile("ollama-executor", "Executor local (amostra)", ("python",), adapter="ollama-executor")
+    monkeypatch.setattr(AgentProfile, "available", lambda self: (True, ""))
+    v = ChatView(ChatStore(tmp_path / "data"), provider_factory=Exec, profiles_fn=lambda: [local],
+                 workspaces_fn=lambda: [tmp_path / "ws"])
+    try:
+        assert "conferidas ao conectar" in v.agent_box.itemText(0)                   # antes: nada prometido
+        v.ensure_client()
+        assert _pump(app, lambda: "render_room_sample" in v.agent_box.itemText(0))
+        assert v.agent_box.itemText(0) == ("Executor local (amostra) · Executor local (amostra) — "
+                                           "ferramentas de amostra: build_room_sample, render_room_sample")
+    finally:
+        v.shutdown()
+        v.deleteLater()
