@@ -156,7 +156,7 @@ class SettingsTab(QWidget):
             self.health_lay.addWidget(_wrap("núcleo do app indisponível: coleta e avisos não estão ligados a esta janela",
                                             "#ffb4b4"))
         for r in self.rows:
-            self.health_lay.addWidget(_row_widget(r))
+            self.health_lay.addWidget(_row_widget(r, self.refresh_now))
         self.health_lay.addStretch(1)
         self.diag_text.setPlainText(H.diagnostic_text(self.core, self.rows))
 
@@ -184,7 +184,7 @@ def _wrap(text: str, color: str = "#cfcfd4", size: int = 12) -> QLabel:
     return lb
 
 
-def _row_widget(r: H.HealthRow) -> QWidget:
+def _row_widget(r: H.HealthRow, on_retry=None) -> QWidget:
     w = QWidget()
     w.setObjectName("health_row")
     w.setProperty("health_name", r.name)
@@ -201,6 +201,13 @@ def _row_widget(r: H.HealthRow) -> QWidget:
     lay.addWidget(head)
     for line in r.lines:
         lay.addWidget(_wrap(line, "#bdbdc4", 12))
+    if r.action:                                                             # FR-04: o mesmo componente das abas PRs/Actions
+        from agent_bar.cockpit.ui.gh_connect import GhConnect
+        box = GhConnect("os PRs e o Project")
+        box.show_kind(r.action)
+        if on_retry is not None:
+            box.retry.connect(on_retry)
+        lay.addWidget(box)
     return w
 
 
