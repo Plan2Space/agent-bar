@@ -286,6 +286,16 @@ class CockpitWindow(QMainWindow):
             raise ValueError(f"objeto sem destino na navegação: {obj!r}")
         self._page_shown(self.current_page())
 
+    def open_first_run(self):
+        """FR-01: Configurações → Primeiro uso, relendo a máquina. "Começar" volta ao Chat."""
+        self.stack.setCurrentWidget(self.settings_page)
+        self.settings.show_section("Primeiro uso")                           # a troca de seção já monta/relê a página
+        page = self.settings.first_run_page or self.settings.first_run()
+        if not getattr(page, "_wired", False):
+            page.done.connect(lambda: self.show_page(self.sessions))
+            page._wired = True
+        return page
+
     def open_themes(self):
         """TE-01: o modal de temas (prévia por hover; Salvar grava; Esc/Cancelar restauram)."""
         from agent_bar.cockpit.ui.theme_picker import ThemePicker
