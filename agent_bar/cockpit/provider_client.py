@@ -22,7 +22,12 @@ from collections.abc import Callable
 from typing import Any
 
 from agent_bar.cockpit.acp import AcpError, Update
-from agent_bar.platform.adapter import AgentEvent, ProviderAdapter, SessionRequest
+from agent_bar.platform.adapter import (
+    AgentEvent,
+    CapabilityUnsupported,
+    ProviderAdapter,
+    SessionRequest,
+)
 
 log = logging.getLogger("agent_bar.cockpit.provider_client")
 
@@ -34,8 +39,11 @@ class ProviderClient:
 
     def __init__(self, adapter: ProviderAdapter, *, on_update: Callable[[Update], None] | None = None,
                  on_exit: Callable[[int | None], None] | None = None, on_permission: Callable | None = None,
+                 model_id: str | None = None, fallback: Callable[[], ProviderAdapter] | None = None,
                  **_ignored: Any) -> None:
         self.adapter = adapter
+        self.model_id = model_id or None                                     # entrada "Ollama · <modelo>": esse modelo
+        self._fallback = fallback                                            # modelo sem ferramenta: conversa, por baixo
         if on_permission is not None and hasattr(adapter, "on_permission"):  # so adaptador com executor usa
             adapter.on_permission = on_permission
         self.on_update = on_update
@@ -59,7 +67,16 @@ class ProviderClient:
 
     def _connect(self) -> dict:
         self.adapter.connect()
-        self._open(SessionRequest())
+        try:
+            self._open(SessionRequest(model_id=self.model_id))
+        except CapabilityUnsupported as exc:                                 # o modelo nao anuncia tools: so conversa
+            if self._fallback is None or exc.capability != "tool_calls":
+                raise
+            log.info("sem ferramentas para %s: conversa (%s)", self.model_id, exc)
+            getattr(self.adapter, "close", lambda: None)()
+            self.adapter = self._fallback()
+            self.adapter.connect()
+            self._open(SessionRequest(model_id=self.model_id))
         return {"agent": {"agentInfo": {"name": self.adapter.adapter_id}}, "session_id": self.session_id,
                 "modes": {}, "loaded": False, "mode_forced_from": None, "safe_mode": True,
                 "config_options": self.config_options}
