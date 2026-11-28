@@ -27,6 +27,7 @@ READ_ONLY: dict[tuple[str, str], frozenset[str]] = {
     ("run", "view"): frozenset({"--json", "--log", "--log-failed", "--job"}),
     ("repo", "list"): frozenset({"--json", "--limit", "--no-archived"}),
     ("auth", "status"): frozenset(),
+    ("project", "item-list"): frozenset({"--owner", "--format", "--limit"}),   # Central de acompanhamento (§7)
 }
 WRITE_VERBS = frozenset({"merge", "comment", "review", "rerun", "close", "reopen", "edit", "create", "delete", "ready",
                          "cancel", "lock", "unlock", "checkout", "api", "workflow", "secret", "variable", "release"})
@@ -64,7 +65,7 @@ def read_only_argv(sub: Sequence[str], repo: str | None, flags: Mapping[str, str
         if not _ARG_RE.match(str(p)) or str(p).startswith("-"):
             raise GhError("refused", f"argumento invalido: {p!r}")
         argv.append(str(p))
-    if key != ("auth", "status") and key != ("repo", "list"):
+    if key not in (("auth", "status"), ("repo", "list"), ("project", "item-list")):
         if not repo or not _REPO_RE.match(repo):
             raise GhError("refused", f"--repo obrigatorio e valido (recebido {repo!r})")
         argv += ["--repo", repo]
