@@ -105,6 +105,7 @@ def test_the_areas_follow_the_theme_tokens_like_the_themes_screen(win):
         assert other.accent.lower() in w.tabs.styleSheet().lower()             # a aba ativa usa o acento do tema
     finally:
         w.theme_manager.apply(catalog.get(catalog.DEFAULT))                    # o gerenciador é do processo: devolve
+        w.theme_manager.close()                                                # e tira a ponte do app (volta no próximo apply)
 
 
 # ---------------------------------------------------------------------------------------------------------- F3
