@@ -40,6 +40,7 @@ from agent_bar.cockpit import design_context as DC
 from agent_bar.cockpit import evaluations as V
 from agent_bar.cockpit import gallery as G
 from agent_bar.cockpit.ui.github_tabs import BTN_CSS
+from agent_bar.cockpit.ui.theme.qt import style
 
 NOT_EVALUATED = "Ainda não avaliado"
 THUMB = QSize(300, 169)
@@ -342,7 +343,7 @@ class DesignView(QWidget):
         self.breadcrumb.setAccessibleName("Seleção do Design")
         self.breadcrumb.setWordWrap(True)                                         # UX-16: o texto não alarga a página
         self.attach_box = QCheckBox("Anexar esta seleção ao próximo prompt do Chat")
-        self.attach_box.setStyleSheet("QCheckBox{color:#cfcfd4;font-size:12px}")
+        style(self.attach_box, "QCheckBox{color:@text;font-size:12px}")         # DS-01: tokens, não cor solta
         self.attach_box.setToolTip("Desligado por padrão. Vale para o próximo envio do Chat e se desmarca depois dele. "
                                    "O texto anexado é exatamente o do preview abaixo.")
         ctx.addWidget(self.breadcrumb, 1)
@@ -352,16 +353,16 @@ class DesignView(QWidget):
         self.attach_preview.setReadOnly(True)
         self.attach_preview.setAccessibleName("Texto anexado ao Chat")
         self.attach_preview.setMaximumHeight(120)
-        self.attach_preview.setStyleSheet("QPlainTextEdit{background:#121215;color:#cfcfd4;border:1px solid #2a2a30;"
-                                          "font-family:Consolas,monospace;font-size:11px}")
+        style(self.attach_preview, "QPlainTextEdit{background:@bg;color:@text;border:1px solid @border;"
+                                   "font-family:Consolas,monospace;font-size:11px}")
         self.attach_preview.hide()
         lay.addWidget(self.attach_preview)
         row = QHBoxLayout()                                                       # S01C-F1-11: comentário → Chat
         self.comment = QLineEdit()
         self.comment.setPlaceholderText("Comente o que está na tela (ex.: gostei mais da iluminação anterior, mas quero "
                                         "o edredom mais natural)")
-        self.comment.setStyleSheet("QLineEdit{background:#17171a;color:#e6e6ea;border:1px solid #2a2a30;padding:6px;"
-                                   "font-size:12px}")
+        style(self.comment, "QLineEdit{background:@surface;color:@text;border:1px solid @border;padding:6px;"
+                            "font-size:12px}")
         self.comment_btn = QPushButton("Levar ao Chat (sem enviar)")
         self.comment_btn.setStyleSheet(BTN_CSS)
         row.addWidget(self.comment, 1)

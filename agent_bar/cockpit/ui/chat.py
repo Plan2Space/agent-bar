@@ -46,6 +46,7 @@ from agent_bar.cockpit.permission_broker import PermissionBroker
 from agent_bar.cockpit.permission_inbox import InboxClosed, PermissionInbox
 from agent_bar.cockpit.store import Chat, ChatStore, data_dir
 from agent_bar.cockpit.ui.composer import Composer, load_enter_sends, save_enter_sends
+from agent_bar.cockpit.ui.theme.qt import style
 from agent_bar.cockpit.ui.widgets import (
     ExecutorOffer,
     Notice,
@@ -335,12 +336,12 @@ class ChatView(QWidget):
         self.banner.setVisible(False)
         lay.addWidget(self.banner)
         self.folder_empty = QFrame()                                         # FR-02: sem pasta, orientar (não é erro)
-        self.folder_empty.setStyleSheet("QFrame{background:#1e2430;border:1px solid #34405a;border-radius:6px}")
+        style(self.folder_empty, "QFrame{background:@surface_alt;border:1px solid @accent;border-radius:6px}")
         fl = QHBoxLayout(self.folder_empty)
         fl.setContentsMargins(10, 8, 10, 8)
         self.folder_empty_label = QLabel("Escolha a pasta do seu projeto para começar. O agente trabalha dentro dela.")
         self.folder_empty_label.setWordWrap(True)
-        self.folder_empty_label.setStyleSheet("color:#dfe6f3;font-size:12px;border:0")
+        style(self.folder_empty_label, "color:@text;font-size:12px;border:0")   # DS-01: tokens, não cor solta
         self.choose_folder_btn = QPushButton("Escolher pasta…")
         self.choose_folder_btn.setStyleSheet(BTN_CSS)
         fl.addWidget(self.folder_empty_label, 1)
