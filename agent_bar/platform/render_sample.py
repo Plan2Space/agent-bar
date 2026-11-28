@@ -201,8 +201,9 @@ class RenderSampleTool:
         base = {"tool": RENDER_TOOL, "request_id": rid, "run_id": run_id, "build_run_id": chk["build_run"],
                 "fixture_ref": chk["fixture_ref"], "cameras": chk["cameras"], "slot": slot,
                 "input_skp_sha256": chk["skp_sha"], "engine_commit": (head or {}).get("commit"),
+                "engine_dirty": (head or {}).get("dirty"),                  # como o build: None = nao medido
                 "workspace_id": str(b.engine_root), "mode": b.mode, "studio_commit": studio.get("commit"),
-                "model": ctx.model_id, "model_digest": ctx.model_digest, "provider_version": ctx.provider_version,
+                "studio_dirty": studio.get("dirty"), "model": ctx.model_id, "model_digest": ctx.model_digest, "provider_version": ctx.provider_version,
                 "session_id": ctx.session_id, "turn": ctx.turn, "call_digest": call.digest,
                 "argument_coercion": chk["coercion"], "provenance": prov}
         b.registry.insert({**base, "fixture_ref": f"render:{chk['build_run']}", "fixture_hash": chk["skp_sha"],
