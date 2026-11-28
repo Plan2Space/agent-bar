@@ -130,6 +130,9 @@ class OllamaAdapter(ProviderAdapter):
         self._sessions: dict[str, dict] = {}
         self._history: dict[str, list[dict]] = {}
         self._num_ctx: dict[str, int] = {}                                    # sid -> options.num_ctx pedido
+        # opcoes fixas de inferencia (ex.: benchmark: temperature/seed iguais para todos os modelos); vazio = padrao do
+        # modelo, como antes. Vao para options do /api/chat e para ToolContext.inference (proveniencia)
+        self.inference_options: dict[str, Any] = {}
         self._digests: dict[str, str] = {}                                    # model_id -> digest do /api/tags
         self._running: dict[str, dict] = {}                                   # sid -> {"resp": ..., "cancel": Event}
         self._ids = itertools.count(1)
@@ -399,9 +402,12 @@ class OllamaAdapter(ProviderAdapter):
         sent = [*messages[:-1], {**messages[-1], "images": [base64.b64encode(p.data).decode("ascii") for p in payloads]}] \
             if payloads else messages                                        # a imagem vai so neste turno
         body: dict = {"model": rec["model_accepted"], "messages": sent, "stream": True}
+        options = dict(self.inference_options)
         if self._num_ctx.get(session_id):
-            body["options"] = {"num_ctx": self._num_ctx[session_id]}
-        think = think_param(rec["effort_accepted"])
+            options["num_ctx"] = self._num_ctx[session_id]
+        if options:
+            body["options"] = options
+        think =think_param(rec["effort_accepted"])
         if think is not None:
             body["think"] = think
         if self.tool_host is not None:
