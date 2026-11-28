@@ -122,7 +122,8 @@ def classify(tool_call: dict, mode_decides_alone: bool = False) -> tuple[str, st
 
 
 class PermissionInbox:
-    def __init__(self, path: Path | str = ":memory:", clock: Callable[[], float] = time.time, ttl_s: float = DEFAULT_TTL_S):
+    def __init__(self, path: Path | str = ":memory:", clock: Callable[[], float] = time.time, ttl_s: float = DEFAULT_TTL_S,
+                 busy_timeout: float = 5.0):
         self.path = str(path)
         if self.path != ":memory:":
             Path(self.path).parent.mkdir(parents=True, exist_ok=True)
@@ -130,7 +131,7 @@ class PermissionInbox:
         self.ttl_s = ttl_s
         self._lock = threading.RLock()
         self.closed = False
-        self._db = sqlite3.connect(self.path, check_same_thread=False, isolation_level=None)
+        self._db = sqlite3.connect(self.path, check_same_thread=False, isolation_level=None, timeout=busy_timeout)
         self._db.row_factory = sqlite3.Row
         self._db.execute("PRAGMA journal_mode=WAL") if self.path != ":memory:" else None
         self._migrate()
