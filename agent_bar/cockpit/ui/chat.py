@@ -41,7 +41,7 @@ from agent_bar.cockpit.acp import (
     find_config,
     mode_is_safe,
 )
-from agent_bar.cockpit.library import compose_prompt
+from agent_bar.cockpit.library import SEPARATOR, compose_prompt
 from agent_bar.cockpit.permission_broker import PermissionBroker
 from agent_bar.cockpit.permission_inbox import InboxClosed, PermissionInbox
 from agent_bar.cockpit.store import Chat, ChatStore, data_dir
@@ -180,6 +180,7 @@ class ChatView(QWidget):
                  profiles_fn: Callable[[], list[prof.AgentProfile]] = prof.profiles,
                  workspaces_fn: Callable[[], list[Path]] = prof.workspaces,
                  context_provider: Callable[[], str] | None = None,
+                 context_sent: Callable[[list[str]], None] | None = None,
                  provider_factory: Callable[..., object] | None = None,
                  inbox: PermissionInbox | None = None, broker: PermissionBroker | None = None,
                  session_gate: Callable[[prof.AgentProfile], str | None] | None = None,
@@ -192,6 +193,7 @@ class ChatView(QWidget):
         self.mcp_config_fn = mcp_config_fn or (lambda: acp_mcp.load(data_dir() / acp_mcp.CONFIG_NAME))
         self.mcp = acp_mcp.McpConfig()                                    # o que a sessão atual declarou (UX-12)
         self.context_provider = context_provider                          # F4: biblioteca (texto exato do preview)
+        self.context_sent = context_sent                                  # UX-13: quem anexou é avisado do envio
         self.store = store or ChatStore()
         self.rt = runtime or AsyncRuntime("cockpit-chat")
         self._own_rt = runtime is None
@@ -666,14 +668,23 @@ class ChatView(QWidget):
         self.input.clear()
         self.empty.setVisible(False)
         self._add(UserBubble(text))
-        context = self.context_provider() if self.context_provider else ""
+        raw = self.context_provider() if self.context_provider else ""
+        parts = [(n, t) for n, t in raw if t] if isinstance(raw, list) else ([("biblioteca", raw)] if raw else [])
+        context = SEPARATOR.join(t for _n, t in parts)                         # UX-13: Biblioteca e/ou Design
         if context:
-            self._add(Notice(f"biblioteca anexada ao prompt: {len(context)} caracteres (texto exato na aba Biblioteca)", "#4aa8ff"))
+            names = [n for n, _t in parts]
+            if names == ["biblioteca"]:
+                self._add(Notice(f"biblioteca anexada ao prompt: {len(context)} caracteres (texto exato na aba Biblioteca)", "#4aa8ff"))
+            else:
+                self._add(Notice(f"anexado ao prompt ({' + '.join(names)}): {len(context)} caracteres (texto exato no "
+                                 "preview de cada um)", "#4aa8ff"))
             self.chat.add("user", text, context_chars=len(context))
         else:
             self.chat.add("user", text)
         full = compose_prompt(context, text)
         self.store.save(self.chat)
+        if parts and self.context_sent is not None:                         # o envio efetivo consome a escolha
+            self.context_sent([n for n, _t in parts])
         self._refresh_history()
         self._set_busy(True)
         self._start_wait()                                                   # sinal desde o envio, antes do 1º token
@@ -684,6 +695,16 @@ class ChatView(QWidget):
             self.ensure_client()
             return
         self._prompt(full)
+
+    def _show_published_tools(self) -> None:
+        """Executor local: o seletor passa a dizer as ferramentas que o adaptador PUBLICOU (achado da PoC no LAB-16)."""
+        fn = getattr(self.client, "published_tools", None)
+        published = fn() if callable(fn) else None
+        if published is None:
+            return
+        i = self.agent_box.findData(self.profile().key)
+        if i >= 0:
+            self.agent_box.setItemText(i, R.label(self.profile(), published=published))
 
     def _refuse_execution_in_conversation(self, text: str) -> bool:
         """UX-11: pedido de execução (SketchUp, build, render) numa Conversa não vai ao modelo como se ele pudesse. A
@@ -791,6 +812,7 @@ class ChatView(QWidget):
                 self._show_error(exc)  # type: ignore[arg-type]
                 return
             info = result if isinstance(result, dict) else {}
+            self._show_published_tools()
             self.ready = True
             if self.chat.session_id and not info.get("loaded"):                # R16: agente sem session/load
                 self._add(Notice("— o agente não recarrega sessões: sessão nova, histórico anterior só visual —", "#ffc233"))
