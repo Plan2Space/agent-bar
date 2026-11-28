@@ -15,6 +15,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
+from agent_bar import gh_exe
 from agent_bar.cockpit.acp import CREATE_NO_WINDOW
 
 # subcomando -> flags permitidas (alem de --repo). Qualquer outra coisa e recusada antes de virar processo.
@@ -178,13 +179,7 @@ def configured_repos(org: str) -> list[str]:
 
 
 def _default_exe() -> list[str]:
-    custom = os.environ.get("AGENT_BAR_GH", "").strip()
-    if custom:
-        return [custom]
-    for cand in ("gh", r"C:\Program Files\GitHub CLI\gh.exe"):
-        if shutil.which(cand) or os.path.isfile(cand):
-            return [cand]
-    return ["gh"]
+    return gh_exe.resolve()                                                  # FR-05: uma resolucao so (Saude = PRs)
 
 
 def truncate(text: str, limit: int) -> str:

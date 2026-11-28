@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
+from agent_bar import gh_exe
 from agent_bar.models import (
     PR_STATE_ORDER,
     AgentStatus,
@@ -77,7 +78,7 @@ def list_processes(timeout: float = 15.0) -> list[Proc] | None:
 
 
 def run_gh(args: list[str], timeout: float = 60.0) -> tuple[int, str]:
-    exe = shutil.which("gh") or "gh"
+    exe = gh_exe.resolve()[0]                                                 # FR-05: a mesma resolucao do GhClient
     env = {k: v for k, v in os.environ.items() if k not in ("GH_TOKEN", "GITHUB_TOKEN")}
     try:
         r = subprocess.run([exe, *args], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout, env=env, creationflags=NO_WINDOW)
