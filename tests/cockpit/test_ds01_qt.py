@@ -21,7 +21,7 @@ from agent_bar.cockpit.ui.theme import qt as Q  # noqa: E402
 
 _APP = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
 ROOT = Path(__file__).resolve().parents[2] / "agent_bar"
-BASELINE = 432                                                                 # cores soltas em 2026-11-27 (main 0bda3a7)
+BASELINE = 430                                                                 # cores soltas em 2026-11-28 (main 76c8bdb + migração do Anexar)
 
 
 @pytest.fixture
