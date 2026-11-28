@@ -32,7 +32,7 @@ from agent_bar.cockpit.ui.chat_sessions import ChatSessions
 from agent_bar.cockpit.ui.dev_tab import DevTab
 from agent_bar.cockpit.ui.github_tabs import ActionsTab, PrsTab
 from agent_bar.cockpit.ui.library_tab import LibraryTab
-from agent_bar.cockpit.ui.notifications_area import NeedsYouPanel, NotificationsArea
+from agent_bar.cockpit.ui.notifications_area import NeedsYouPanel, NotificationsArea, github_reading
 from agent_bar.cockpit.ui.notifications_tab import NotificationsTab
 from agent_bar.cockpit.ui.permissions_tab import PermissionsTab
 from agent_bar.cockpit.ui.review_tab import ReviewTab
@@ -132,7 +132,8 @@ class CockpitWindow(QMainWindow):
         self.notifications = NotificationsTab(self.center, inbox=self.sessions.inbox, answer_fn=self.sessions.answer_permission,
                                               is_open_fn=self.sessions.broker.is_open)
         # UX-08: Permissões e "Precisa de você" dentro de Notificações (uma área só para o que pede o Felipe)
-        self.needs = NeedsYouPanel(self.center)
+        self.needs = NeedsYouPanel(self.center, reading_fn=lambda: github_reading(core),   # FR-06: sem garantia falsa
+                                   retry_fn=lambda: getattr(getattr(core, "worker", None), "refresh", lambda **_k: None)(force=True))
         self.notifications_area = NotificationsArea(self.notifications, self.needs, self.permissions)
         self.sessions.permission_listeners += [lambda _id: self.permissions.refresh(), lambda _id: self.notifications.refresh(),
                                                lambda _id: self.notifications_area.update_counts()]
