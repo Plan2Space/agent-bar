@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 
@@ -20,6 +20,7 @@ class Settings:
     minimized: bool = False
     bar_enabled: bool = False          # D-UX-1: barra flutuante opcional e desligada; o atalho abre o Cockpit (janela principal)
     theme: str = "p2s-escuro"          # DS-01: chave do tema salvo (catálogo em cockpit/ui/theme)
+    theme_favorites: list[str] = field(default_factory=list)   # TE-01: favoritos do modal de Temas
 
 
 def settings_path() -> Path:

@@ -114,15 +114,36 @@ class ThemeManager:
         self.current = self.saved
         self._listeners: list[Callable[[Theme], None]] = []
         self._themed: list[tuple[weakref.ref, str]] = []
+        self._original = None                                                  # paleta/estilo/fonte do app antes do tema
+        self._bridge = None
 
     # aplicar
     def apply(self, theme: Theme) -> None:
         self.current = theme
         app = self.app or QApplication.instance()
         if app is not None:
-            app.setPalette(palette(theme))
-            app.setFont(QFont(theme.font_family, theme.font_size))
-            app.setStyleSheet(stylesheet(theme))
+            if self._bridge is None:                                           # DS-02: estilos antigos seguem o tema
+                from agent_bar.cockpit.ui.theme.legacy import LegacyBridge
+                self._bridge = LegacyBridge(lambda: self.current)
+                app.installEventFilter(self._bridge)
+            if self._original is None:                                         # o visual de antes do 1º tema
+                self._original = (app.palette(), app.font())
+            tops = [w for w in app.topLevelWidgets() if w.isVisible() and w.updatesEnabled()]
+            for w in tops:                                                     # sem flicker: pinta uma vez, no fim
+                w.setUpdatesEnabled(False)
+            with self._bridge.quiet():
+                if theme.key == C.DEFAULT:                                     # padrão = o visual atual, idêntico
+                    pal, font = self._original
+                    app.setPalette(pal)
+                    app.setFont(font)
+                else:
+                    app.setPalette(palette(theme))
+                    app.setFont(QFont(theme.font_family, theme.font_size))
+            # o QSS global vai em cada JANELA (a ponte compõe com o estilo dela), não no QApplication: assim só o que
+            # está na tela é repolido agora (~0,1 s), e o resto ao aparecer
+            self._bridge.restyle_all()
+            for w in tops:
+                w.setUpdatesEnabled(True)
         alive = []
         for ref, template in self._themed:
             w = ref()
@@ -132,6 +153,13 @@ class ThemeManager:
         self._themed = alive
         for fn in list(self._listeners):
             fn(theme)
+
+    def close(self) -> None:
+        """Tira o filtro da ponte do app (testes; o app real vive com ele até sair)."""
+        app = self.app or QApplication.instance()
+        if self._bridge is not None and app is not None:
+            app.removeEventFilter(self._bridge)
+        self._bridge = None
 
     def themed(self, widget: QWidget, template: str) -> QWidget:
         widget.setStyleSheet(render(template, self.current))
