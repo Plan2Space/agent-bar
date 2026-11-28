@@ -89,6 +89,17 @@ def test_a_deterministic_build_runs_the_engine_without_any_model(server, engine_
     check(out, contract("p2s.local_outcome.v1"))
 
 
+def test_a_deterministic_executor_exception_is_infra_and_the_job_still_has_an_outcome(server, engine_root, tmp_path):
+    rig = Rig(server, engine_root, tmp_path)
+
+    def boom(call, ctx):
+        raise RuntimeError("executor quebrou")
+    rig.box.tools[0].run = boom
+    out = rig.run(job())
+    assert out["status"] == "FAILED" and out["error"] == "INFRA:EXECUTOR_ERROR" and out["failure"] is None
+    check(out, contract("p2s.local_outcome.v1"))
+
+
 def test_a_deterministic_render_of_a_build(server, engine_root, tmp_path):
     rig = Rig(server, engine_root, tmp_path)
     b = rig.run(job(inputs={"fixture_ref": "plan_alt_5x3_e3a"}))
