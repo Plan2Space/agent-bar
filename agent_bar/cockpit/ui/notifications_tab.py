@@ -116,6 +116,7 @@ class NotificationsTab(QWidget):
         self.read_btn.clicked.connect(self._read)
         self.all_read_btn.clicked.connect(lambda: (self.center.mark_all_read(), self.refresh()))
         self.tree.itemDoubleClicked.connect(lambda _it, _c: self._open())
+        self.tree.itemClicked.connect(self._clicked)                         # F3: um clique num PR já abre o PR
         self.tree.currentItemChanged.connect(lambda _c, _p: self._update_actions())
         self.allow_btn.clicked.connect(lambda: self._answer("allow_once"))
         self.deny_btn.clicked.connect(lambda: self._answer("deny"))
@@ -201,6 +202,15 @@ class NotificationsTab(QWidget):
         if nid:
             self.center.mark_read(nid)
             self.refresh()
+
+    def _clicked(self, item, _col) -> None:
+        """Um clique ABRE só quando a origem é um PR (URL do GitHub). Permissão e o resto: um clique só seleciona
+        (Permitir/Negar continuam ali); o duplo clique e "Abrir origem" seguem valendo para tudo."""
+        nid = item.data(0, Qt.ItemDataRole.UserRole) if item is not None else None
+        n = self.center.get(nid) if nid else None
+        if n is not None and str(n.link or "").startswith(("http://", "https://")):
+            self.tree.setCurrentItem(item)
+            self._open()
 
     def _open(self) -> None:
         nid = self._current_id()
