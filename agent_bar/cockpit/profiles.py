@@ -12,11 +12,9 @@ demonstracao sem LLM so aparecem no modo avancado (AGENT_BAR_COCKPIT_ADVANCED_AG
 """
 from __future__ import annotations
 
-import json
 import os
 import shutil
 import sys
-import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -50,17 +48,24 @@ class AgentProfile:
         return False, f"'{exe}' não encontrado no PATH"
 
 
-def _installed_ollama_models() -> list[str]:
-    """Modelos instalados no Ollama (GET /api/tags, timeout curto). Servidor desligado = lista vazia."""
+def _installed_ollama_models(opener=None) -> list[str]:
+    """Modelos de CONVERSA instalados no Ollama: a mesma leitura do adaptador que abre a sessão (GET /api/tags + POST
+    /api/show; só entra quem anuncia `completion`). Revisão do #229: o `/api/tags` cru listava o modelo de embedding
+    (`nomic-embed-text`), que dá ModelRejected ao abrir sessão. Servidor desligado ou ilegível = lista vazia."""
+    from agent_bar.platform.adapter import AdapterError
     from agent_bar.platform.discovery import discover
+    from agent_bar.platform.ollama import OllamaAdapter
+    adapter = None
     try:
         endpoint = next(p["endpoint"] for p in discover(which=lambda _n: None) if p["provider_id"] == "ollama")
-        with urllib.request.urlopen(f"{endpoint.rstrip('/')}/api/tags", timeout=OLLAMA_TAGS_TIMEOUT_S) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-    except (OSError, ValueError, StopIteration):
+        adapter = OllamaAdapter(endpoint, timeout=OLLAMA_TAGS_TIMEOUT_S, **({"opener": opener} if opener else {}))
+        adapter.connect()
+        return sorted(str(m["model_id"]) for m in adapter.list_models())
+    except (AdapterError, OSError, ValueError, StopIteration):
         return []
-    names = [str(m.get("name") or m.get("model") or "") for m in data.get("models") or [] if isinstance(m, dict)]
-    return sorted({n for n in names if n})
+    finally:
+        if adapter is not None:
+            adapter.disconnect()
 
 
 def advanced_agents() -> bool:

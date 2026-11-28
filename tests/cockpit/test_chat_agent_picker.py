@@ -20,6 +20,7 @@ from agent_bar.cockpit import profiles as prof  # noqa: E402
 
 TECHNICAL = ("executor", "conversa", "ferramenta", "amostra", "demonstra", "sem llm", "acp", "(local)")
 MODELS = ["llama3.1:8b", "qwen2.5-coder:7b"]
+REAL_LISTING = prof._installed_ollama_models                   # o conftest troca por [] em todo teste; aqui o opener é falso
 
 
 @pytest.fixture
@@ -73,6 +74,49 @@ def test_the_chat_picker_shows_the_simple_names_and_nothing_else(machine, tmp_pa
     finally:
         v.shutdown()
         v.deleteLater()
+
+
+def _fake_ollama(installed: dict[str, list[str]]):
+    """`installed`: nome -> capabilities do /api/show. Responde /api/version, /api/tags e /api/show; nada sai da máquina."""
+    import io
+    import json
+
+    class Resp(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            self.close()
+
+    def opener(req, timeout=None):
+        url = req if isinstance(req, str) else req.full_url
+        if url.endswith("/api/version"):
+            body = {"version": "0.12.0"}
+        elif url.endswith("/api/tags"):
+            body = {"models": [{"name": n, "digest": f"sha256:{i:064d}"} for i, n in enumerate(installed)]}
+        elif url.endswith("/api/show"):
+            body = {"capabilities": installed[json.loads(req.data)["model"]], "model_info": {}}
+        else:
+            raise OSError(f"rota inesperada: {url}")
+        return Resp(json.dumps(body).encode("utf-8"))
+    return opener
+
+
+def test_only_chat_models_are_listed_by_the_show_capability_not_by_name(monkeypatch):
+    """Revisão do #229: o embedding (nomic-embed-text) aparecia e dava ModelRejected ao abrir a sessão. Quem decide é o
+    `capabilities` do /api/show (a mesma leitura do adaptador que abre a sessão), não o nome."""
+    opener = _fake_ollama({"nomic-embed-text:latest": ["embedding"],
+                           "deepseek-r1-tools:14b": ["completion", "tools", "thinking"],
+                           "llama3.1:8b": ["completion", "tools"],
+                           "chat-sem-nome-tipico": ["completion"]})
+    assert REAL_LISTING(opener=opener) == ["chat-sem-nome-tipico", "deepseek-r1-tools:14b",
+                                                            "llama3.1:8b"]
+
+
+def test_an_unreachable_ollama_lists_nothing():
+    def opener(_req, timeout=None):
+        raise OSError("connection refused")
+    assert REAL_LISTING(opener=opener) == []
 
 
 class _Adapter:
