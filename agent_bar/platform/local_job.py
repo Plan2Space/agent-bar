@@ -14,7 +14,9 @@ Contrato combinado com a Frente E (2026-11-27), fronteira por arquivo/CLI (o age
   job novo com outro sha, nunca automatico;
 - falha do motor/maquina/provedor = `FAILED` com error `INFRA:<code>` (nao conta contra o modelo);
 - toda falha atribuivel ao executor gera um registro `p2s.local_failure.v1` (o roteador e as skills consomem);
-- nenhum provedor cloud no caminho: `cloud.tokens = 0` e `cloud.providers_called = []`, por construcao.
+- nenhum provedor cloud no caminho: `cloud.tokens = 0` e `cloud.providers_called = []`, por construcao (modelo
+  `…cloud` do Ollama e endpoint fora do loopback sao recusados);
+- `<dir>/<job_id>/outcome.json` e sempre o desfecho da execucao mais recente (ver `record_outcome`).
 """
 from __future__ import annotations
 
@@ -26,9 +28,11 @@ import re
 import sys
 import threading
 import time
+import traceback
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from agent_bar.platform.compat_bench import INFERENCE, MODEL_CODES, RecordingHost, run_turn
 from agent_bar.platform.local_tools import ToolCall, ToolContext, call_digest
@@ -44,6 +48,7 @@ FAILURE_CLASSES = ("PROTOCOL", "SCHEMA", "CONTEXT", "TOOL", "CAPABILITY")
 _JOB_ID = re.compile(r"^[A-Za-z0-9._-]{1,80}$")
 _SHA40 = re.compile(r"^[0-9a-f]{40}$")
 _RUN_ID = re.compile(r"^lx-[0-9A-Za-z_-]+$")
+_CLOUD_MODEL = re.compile(r"(?:^|[:-])cloud$")                             # gpt-oss:120b-cloud, qwen3-coder:cloud
 PROTOCOL_CODES = frozenset({"UNKNOWN_TOOL", "MALFORMED", "DUPLICATE", "TURN_LIMIT"})
 
 
@@ -68,6 +73,8 @@ def validate_job(job: Any) -> list[str]:
             errs.append("executor.model_id obrigatorio para kind=local")
         if ex.get("adapter", "ollama") != "ollama":
             errs.append("executor.adapter: so 'ollama' (provedor local)")
+        if isinstance(ex.get("model_id"), str) and _CLOUD_MODEL.search(ex["model_id"]):
+            errs.append("executor.model_id: modelo cloud do Ollama roda fora da maquina (so modelo local)")
     inp = job.get("inputs")
     if not isinstance(inp, dict):
         errs.append("inputs deve ser um objeto")
@@ -108,6 +115,15 @@ def engine_pin_refusal(engine_root: Path, production: str | None, sha40: str,
     if h.get("dirty") is not False:
         return "o checkout de producao tem mudancas locais (ou nao foi possivel conferir)"
     return None
+
+
+def endpoint_refusal(endpoint: str) -> str | None:
+    """Motivo para recusar NOT_LOCAL, ou None se o Ollama e o desta maquina (loopback). OLLAMA_HOST remoto executaria
+    o modelo fora daqui sem nenhum registro de nuvem."""
+    host = urlsplit(endpoint if "://" in endpoint else f"http://{endpoint}").hostname or ""
+    if host == "localhost" or host == "::1" or host.startswith("127."):
+        return None
+    return f"o endpoint do Ollama ({endpoint}) nao e loopback: o modelo rodaria fora desta maquina"
 
 
 def executor_id(job: dict, digest: str | None = None) -> str:
@@ -261,7 +277,8 @@ def _tokens(turn: dict | None) -> int | None:
 def run_job(job: dict, *, build_host: Callable[[], Any], local_adapter: Callable[[], Any], engine_root: Path,
             production: str | None, head: Callable[[Path], dict | None], timeout_s: float = 3600.0,
             clock: Callable[[], float] = time.monotonic,
-            wall: Callable[[], str] = lambda: time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())) -> dict:
+            wall: Callable[[], str] = lambda: time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            endpoint: str | None = None) -> dict:
     started = wall()
     errs = validate_job(job)
     base = {"schema": OUTCOME_SCHEMA, "job_id": job.get("job_id") if isinstance(job, dict) else None,
@@ -276,6 +293,10 @@ def run_job(job: dict, *, build_host: Callable[[], Any], local_adapter: Callable
                         "dirty": eng.get("dirty"), "pinned": job["engine_ref"]["sha40"]}, attempt=job.get("attempt", 1))
     if why:
         return {**base, "status": "REFUSED", "error": f"ENGINE_NOT_PINNED: {why}", "executor_id": executor_id(job),
+                "tokens_measured": None, "tokens_estimated": None, "failure": None, "finished_at": wall()}
+    remote = endpoint_refusal(endpoint) if endpoint and job["executor"]["kind"] == "local" else None
+    if remote:
+        return {**base, "status": "REFUSED", "error": f"NOT_LOCAL: {remote}", "executor_id": executor_id(job),
                 "tokens_measured": None, "tokens_estimated": None, "failure": None, "finished_at": wall()}
     perms: list[dict] = base["permissions"]
     turn = None
@@ -322,6 +343,45 @@ def run_job(job: dict, *, build_host: Callable[[], Any], local_adapter: Callable
     return out
 
 
+def record_outcome(out: Path, dir_name: str, job: Any, execute: Callable[[], dict],
+                   wall: Callable[[], str] = lambda: time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                   ) -> tuple[dict, Path]:
+    """Executa e grava o desfecho no caminho do contrato, `<out>/<dir_name>/outcome.json`, que o roteador le.
+
+    Esse arquivo e SEMPRE o da execucao mais recente do job_id (retomar/repetir o mesmo job_id e caminho previsto):
+    antes de executar, o anterior sai do caminho para o historico `outcome.<n>.json` (o roteador nunca le um desfecho
+    velho enquanto a nova execucao roda); o novo entra por escrita atomica. Se a execucao quebra, entra um FAILED com
+    `INFRA:RUNNER_ERROR`: uma falha nunca deixa um sucesso antigo no lugar. Falha atribuivel ao executor vai tambem
+    para `<out>/failures.jsonl`. Usado pela CLI e pela fila de producao."""
+    target = Path(out) / dir_name
+    target.mkdir(parents=True, exist_ok=True)
+    path = target / "outcome.json"
+    if path.exists():
+        n = 1
+        while (target / f"outcome.{n}.json").exists():
+            n += 1
+        os.replace(path, target / f"outcome.{n}.json")
+    started = wall()
+    try:
+        outcome = execute()
+    except Exception as exc:                                                 # noqa: BLE001 - vira desfecho, nao some
+        traceback.print_exc(file=sys.stderr)
+        j = job if isinstance(job, dict) else {}
+        outcome = {"schema": OUTCOME_SCHEMA, "job_id": j.get("job_id"), "task_type": j.get("task_type"),
+                   "status": "FAILED", "error": f"INFRA:RUNNER_ERROR: {type(exc).__name__}", "executor_id": None,
+                   "tokens_measured": None, "tokens_estimated": None, "cloud": {"tokens": 0, "providers_called": []},
+                   "assistance": [], "permissions": [], "failure": None, "started_at": started, "finished_at": wall()}
+        if isinstance(j.get("attempt"), int):
+            outcome["attempt"] = j["attempt"]
+    tmp = target / "outcome.json.tmp"
+    tmp.write_text(json.dumps(outcome, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
+    os.replace(tmp, path)
+    if outcome.get("failure"):
+        with open(Path(out) / "failures.jsonl", "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(outcome["failure"], ensure_ascii=False, default=str) + "\n")
+    return outcome, path
+
+
 def main(argv: list[str] | None = None) -> int:
     from agent_bar.platform.sketchup_sample import executor_adapter, git_head, sample_tool_from_env
     ap = argparse.ArgumentParser(description="executa um job p2s.local_job.v1 e grava o outcome")
@@ -342,21 +402,16 @@ def main(argv: list[str] | None = None) -> int:
     def build_host():
         from agent_bar.platform.render_sample import RenderSampleTool, ToolBox
         return ToolBox([tool, RenderSampleTool(tool)])
-    outcome = run_job(job, build_host=build_host, local_adapter=lambda: executor_adapter(args.endpoint),
+    job_sha = hashlib.sha256(raw).hexdigest()
+    jid = job["job_id"] if isinstance(job, dict) and isinstance(job.get("job_id"), str) and _JOB_ID.match(job["job_id"]) \
+        else f"invalid-{job_sha[:12]}"
+
+    def execute() -> dict:
+        res = run_job(job, build_host=build_host, local_adapter=lambda: executor_adapter(args.endpoint),
                       engine_root=tool.engine_root, production=os.environ.get("P2S_PRODUCTION_ENGINE"),
-                      head=git_head, timeout_s=args.timeout)
-    outcome["job_sha256"] = hashlib.sha256(raw).hexdigest()
-    jid = outcome.get("job_id") if isinstance(outcome.get("job_id"), str) and _JOB_ID.match(outcome["job_id"]) \
-        else f"invalid-{outcome['job_sha256'][:12]}"
-    target = Path(args.out).resolve() / jid
-    target.mkdir(parents=True, exist_ok=True)
-    path = target / "outcome.json"
-    if path.exists():                                                         # nunca sobrescreve: tentativa nova = arquivo novo
-        path = target / f"outcome.{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}.json"
-    path.write_text(json.dumps(outcome, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
-    if outcome.get("failure"):
-        with open(Path(args.out).resolve() / "failures.jsonl", "a", encoding="utf-8") as fh:
-            fh.write(json.dumps(outcome["failure"], ensure_ascii=False, default=str) + "\n")
+                      head=git_head, timeout_s=args.timeout, endpoint=args.endpoint)
+        return {**res, "job_sha256": job_sha}
+    outcome, path = record_outcome(Path(args.out).resolve(), jid, job, execute)
     print(json.dumps({"job_id": jid, "status": outcome["status"], "outcome": str(path)}, ensure_ascii=False))
     return 0 if outcome["status"] == "SUCCEEDED" else 1
 
