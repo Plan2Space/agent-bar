@@ -29,6 +29,7 @@ from agent_bar.cockpit.data_state import AO_VIVO, CACHE, DataState, failed, live
 from agent_bar.cockpit.github import GhClient, GhError, checks_summary, review_prompt
 from agent_bar.cockpit.profiles import DEFAULT_APPS
 from agent_bar.cockpit.ui.approval_panel import ApprovalPanel
+from agent_bar.cockpit.ui.gh_connect import SETUP_KINDS, GhConnect
 from agent_bar.targets import load_targets
 
 COMBO_CSS = "QComboBox,QLineEdit{background:#26262c;color:#e6e6e6;border:1px solid #3a3a44;border-radius:5px;padding:2px 6px}"
@@ -60,6 +61,32 @@ class _GhTab(QWidget):
         self.status = QLabel("")
         self.status.setStyleSheet("color:#8f8f98;font-size:11px")
         self.status.setWordWrap(True)
+        self.connect_box = GhConnect(self.WHAT)                                # FR-04: no lugar da tabela vazia
+        self.connect_box.retry.connect(self.refresh)
+        self.body: QWidget | None = None                                       # o que o componente substitui
+
+    WHAT = "os PRs"
+
+    def refresh(self) -> None:                                                 # pragma: no cover - sobrescrito
+        raise NotImplementedError
+
+    def _setup_needed(self, kind: str | None) -> None:
+        """FR-04: login/instalação faltando = o componente no lugar do conteúdo; leitura ok = o conteúdo volta."""
+        need = kind in SETUP_KINDS
+        if need:
+            self.connect_box.show_kind(str(kind))
+        else:
+            self.connect_box.setVisible(False)
+        for w in (self.body, *self.setup_hidden()):
+            if w is not None:
+                w.setVisible(not need)
+        spacer = getattr(self, "setup_spacer", None)                           # o espaço da tabela fica embaixo, vazio
+        if spacer is not None and self.layout() is not None:
+            self.layout().setStretch(spacer, 1 if need else 0)
+
+    def setup_hidden(self) -> tuple[QWidget, ...]:
+        """Outros widgets que somem junto com o conteúdo (cabeçalho de frescor etc.)."""
+        return ()
 
     def submit(self, tag: str, fn: Callable[[], object]) -> Future:
         self.req += 1
@@ -76,11 +103,17 @@ class _GhTab(QWidget):
         if err is not None:
             kind = err.kind if isinstance(err, GhError) else "failed"
             msg = err.message if isinstance(err, GhError) else str(err)
-            self.status.setText(f"<span style='color:#ff9a9b'>[{kind}] {html.escape(msg)}</span>")
-            self.status.setTextFormat(Qt.TextFormat.RichText)
+            if kind in SETUP_KINDS:                                            # FR-04: ação, não "[auth] rode no terminal"
+                self.status.setText("")
+                self._setup_needed(kind)
+            else:
+                self.status.setText(f"<span style='color:#ff9a9b'>[{kind}] {html.escape(msg)}</span>")
+                self.status.setTextFormat(Qt.TextFormat.RichText)
             self.on_error(tag, kind, msg)
             return
         self.status.setTextFormat(Qt.TextFormat.PlainText)
+        if tag == "list":
+            self._setup_needed(None)
         self.on_result(tag, result)
 
     def on_error(self, tag: str, kind: str, msg: str) -> None:
@@ -187,13 +220,20 @@ class PrsTab(_GhTab):
         bl.addWidget(self.detail, 1)
         split.addWidget(bottom)
         split.setSizes([260, 380])
+        lay.addWidget(self.connect_box)
         lay.addWidget(split, 1)
+        self.body = split
+        self.setup_spacer = lay.count()
+        lay.addStretch(0)
         lay.addWidget(self.status)
         self.refresh_btn.clicked.connect(self.refresh)
         self.repo_box.activated.connect(lambda _i: self.refresh())
         self.tree.currentItemChanged.connect(lambda cur, _prev: self._select(cur))
         self.open_btn.clicked.connect(lambda: ctl.open_url((self.current or {}).get("url")))
         self.review_btn.clicked.connect(self.request_review)
+
+    def setup_hidden(self) -> tuple[QWidget, ...]:
+        return (self.fresh,)
 
     def repo(self) -> str:
         """O repo do PR selecionado; sem seleção, o do recorte (vazio em "todos")."""
@@ -399,6 +439,8 @@ class PrsTab(_GhTab):
 
 
 class ActionsTab(_GhTab):
+    WHAT = "as execuções do Actions"
+
     def __init__(self, gh: GhClient | None = None, executor: ThreadPoolExecutor | None = None,
                  repos: list[str] | None = None) -> None:
         super().__init__(gh, executor)
@@ -451,7 +493,11 @@ class ActionsTab(_GhTab):
         bl.addWidget(self.log, 1)
         split.addWidget(bottom)
         split.setSizes([260, 380])
+        lay.addWidget(self.connect_box)
         lay.addWidget(split, 1)
+        self.body = split
+        self.setup_spacer = lay.count()
+        lay.addStretch(0)
         lay.addWidget(self.status)
         self.timer = QTimer(self)
         self.timer.setInterval(60_000)
