@@ -113,16 +113,17 @@ class EvidenceSnapshot:
     lab_runs: int | None = None             # runs do lab/index.json; None = ainda não está no branch padrão
     note: str = ""
     error: str = ""
+    published_run_ids: tuple[str, ...] = ()  # ids dos runs do index.json (a timeline tira a data do prefixo)
 
 
-def _count_index_runs(data: object) -> int:
-    total = 0
+def _index_run_ids(data: object) -> tuple[str, ...]:
+    ids: list[str] = []
     for plant in (data or {}).get("plants", {}).values() if isinstance(data, dict) else []:
         for suite in plant.values() if isinstance(plant, dict) else []:
             for step in suite.values() if isinstance(suite, dict) else []:
                 if isinstance(step, dict):
-                    total += len(step.get("runs") or [])
-    return total
+                    ids += [str(r) for r in step.get("runs") or []]
+    return tuple(ids)
 
 
 def collect_evidence(repo: Path = WORKSPACE / "evidence", now: float = 0.0, ref: str = DEFAULT_REF,
@@ -132,7 +133,7 @@ def collect_evidence(repo: Path = WORKSPACE / "evidence", now: float = 0.0, ref:
     if not sha or raw is None:
         return EvidenceSnapshot(UNKNOWN, now, ref, error=f"não consegui ler {ref}:index.json em {repo}")
     try:
-        published = _count_index_runs(json.loads(raw))
+        run_ids = _index_run_ids(json.loads(raw))
     except json.JSONDecodeError as exc:
         return EvidenceSnapshot(UNKNOWN, now, ref, sha.strip()[:40], error=f"index.json inválido: {exc}")
     lab_raw = git(repo, "show", f"{ref}:lab/index.json")
@@ -144,4 +145,4 @@ def collect_evidence(repo: Path = WORKSPACE / "evidence", now: float = 0.0, ref:
             note = ""
         except (json.JSONDecodeError, AttributeError) as exc:
             note = f"lab/index.json inválido: {exc}"
-    return EvidenceSnapshot("ok", now, ref, sha.strip()[:40], published, lab, note)
+    return EvidenceSnapshot("ok", now, ref, sha.strip()[:40], len(run_ids), lab, note, published_run_ids=run_ids)

@@ -19,6 +19,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
+from agent_bar.cockpit import project_timeline as tl
 from agent_bar.cockpit.github import DEFAULT_REPOS, GhClient, GhError
 from agent_bar.cockpit.project_sources import EvidenceSnapshot, SpecCatalog
 
@@ -217,6 +218,8 @@ class Overview:
     health: tuple[tuple[str, str], ...] = ()
     specs: SpecCatalog | None = None
     evidence: EvidenceSnapshot | None = None
+    timeline: list[tl.TimelineEvent] = field(default_factory=list)
+    timeline_failed: dict[str, str] = field(default_factory=dict)   # repo -> motivo: não lido ≠ sem eventos
 
 
 def _github_health(gh: GithubOverview) -> str:
@@ -240,7 +243,7 @@ def _local_health(snap: SpecCatalog | EvidenceSnapshot | None) -> str:
 
 def collect_overview(client: GhClient, org: str, now: float, project_number: int = 1,
                      specs: Callable[[], SpecCatalog] | None = None,
-                     evidence: Callable[[], EvidenceSnapshot] | None = None) -> Overview:
+                     evidence: Callable[[], EvidenceSnapshot] | None = None, timeline: bool = False) -> Overview:
     gh = collect_github(client, org, now)
     proj = collect_project(client, org, project_number, now)
     spec_cat = specs() if specs else None
@@ -250,4 +253,10 @@ def collect_overview(client: GhClient, org: str, now: float, project_number: int
               ("engineering-specs", _local_health(spec_cat)),
               ("evidence", _local_health(ev)),
               ("runtime", UNKNOWN))
-    return Overview(gh, proj, now, None, health, spec_cat, ev)
+    events: list[tl.TimelineEvent] = []
+    tfailed: dict[str, str] = {}
+    if timeline:
+        got = tl.collect_github_events(client, [r.repo for r in gh.repos])
+        ev_events = tl.evidence_events(ev.published_run_ids) if ev is not None and ev.state == "ok" else []
+        events, tfailed = tl.merge(got.events, ev_events), dict(got.failed)
+    return Overview(gh, proj, now, None, health, spec_cat, ev, events, tfailed)
