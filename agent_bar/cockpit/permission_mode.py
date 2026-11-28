@@ -18,6 +18,9 @@ from agent_bar.cockpit.store import atomic_write_json, data_dir
 BYPASS, ASK = "bypass", "ask"
 ENV = "AGENT_BAR_PERMISSION_MODE"
 LABEL = {BYPASS: "permissões: bypass (sempre)", ASK: "permissões: pedir a cada ferramenta"}
+SENTENCE = {BYPASS: "O Studio aprova as ações dos agentes sozinho e registra tudo em Notificações. "
+                    "Mudar em Configurações → Geral.",
+            ASK: "Cada ação do agente pede sua permissão."}                   # FR-03: a única frase do Chat
 
 
 def mode_path() -> Path:
@@ -46,4 +49,9 @@ def label(mode: str | None = None) -> str:
     return LABEL[mode or current()]
 
 
-__all__ = ["ASK", "BYPASS", "ENV", "LABEL", "current", "label", "mode_path", "set_mode"]
+def sentence(mode: str | None = None) -> str:
+    """FR-03: a frase, em português simples, que o Chat mostra sobre permissões (uma vez só)."""
+    return SENTENCE[mode or current()]
+
+
+__all__ = ["ASK", "BYPASS", "ENV", "LABEL", "SENTENCE", "current", "label", "mode_path", "sentence", "set_mode"]

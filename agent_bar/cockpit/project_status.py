@@ -15,10 +15,12 @@ Estados de entrega (§7.3), derivados do card do Project (coluna ``status`` + ca
 from __future__ import annotations
 
 from collections import Counter
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
 from agent_bar.cockpit.github import DEFAULT_REPOS, GhClient, GhError
+from agent_bar.cockpit.project_sources import EvidenceSnapshot, SpecCatalog
 
 UNKNOWN = "desconhecido"
 MONITORED = DEFAULT_REPOS
@@ -30,6 +32,8 @@ DELIVERY_STATES = (PLANEJADO, EM_IMPLEMENTACAO, IMPLEMENTADO, EM_REVISAO, INTEGR
                    BLOQUEADO, CONCLUIDO)
 
 T_PLANNED, T_IN_PROGRESS, T_DONE, T_BLOCKED = "planejadas", "em andamento", "concluídas", "bloqueadas"
+TASK_BUCKETS = (T_PLANNED, T_IN_PROGRESS, T_DONE, T_BLOCKED)
+FRONT_UNKNOWN = "desconhecida"            # card sem o campo "Frente" do Project #1 (fonte única, criada pela H)
 
 _FAILED = frozenset({"FAILURE", "ERROR", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE"})
 _PROVEN = frozenset({"INTEGRATION_PASS", "SKETCHUP_PASS"})
@@ -150,6 +154,14 @@ class SpecProgress:
 
 
 @dataclass(frozen=True)
+class FrontProgress:
+    front: str
+    total: int
+    counts: dict[str, int]                  # planejadas / em andamento / concluídas / bloqueadas (+ desconhecido)
+    specs: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class ProjectSnapshot:
     state: str
     read_at: float
@@ -158,6 +170,7 @@ class ProjectSnapshot:
     specs: list[SpecProgress] = field(default_factory=list)
     unlinked: int | None = None
     error: str = ""
+    fronts: list[FrontProgress] = field(default_factory=list)
 
 
 def collect_project(client: GhClient, org: str, number: int, now: float, limit: int = 1000) -> ProjectSnapshot:
@@ -167,9 +180,7 @@ def collect_project(client: GhClient, org: str, number: int, now: float, limit: 
     except GhError as exc:
         return ProjectSnapshot(UNKNOWN, now, error=f"{exc.kind}: {exc.message}")
     items = [i for i in data.get("items") or [] if isinstance(i, dict)]
-    counts = Counter(_STATUS_BUCKET.get(str(_field(i, "status") or "").strip().lower(), UNKNOWN) for i in items)
-    for k in (T_PLANNED, T_IN_PROGRESS, T_DONE, T_BLOCKED):
-        counts.setdefault(k, 0)
+    counts = _bucket_counts(items)
     by_spec: dict[str, Counter] = {}
     unlinked = 0
     for i in items:
@@ -179,7 +190,19 @@ def collect_project(client: GhClient, org: str, number: int, now: float, limit: 
             continue
         by_spec.setdefault(spec, Counter())[item_state(i)] += 1
     specs = [SpecProgress(s, sum(c.values()), dict(c)) for s, c in sorted(by_spec.items())]
-    return ProjectSnapshot("ok", now, len(items), dict(counts), specs, unlinked)
+    by_front: dict[str, list[dict]] = {}
+    for i in items:
+        by_front.setdefault(str(_field(i, "frente") or "").strip() or FRONT_UNKNOWN, []).append(i)
+    fronts = [FrontProgress(f, len(its), _bucket_counts(its),
+                            tuple(sorted({str(_field(i, "spec vinculada")).strip() for i in its
+                                          if _field(i, "spec vinculada")})))
+              for f, its in sorted(by_front.items(), key=lambda kv: (kv[0] == FRONT_UNKNOWN, kv[0]))]
+    return ProjectSnapshot("ok", now, len(items), counts, specs, unlinked, fronts=fronts)
+
+
+def _bucket_counts(items: list[dict]) -> dict[str, int]:
+    counts = Counter(_STATUS_BUCKET.get(str(_field(i, "status") or "").strip().lower(), UNKNOWN) for i in items)
+    return {**{k: 0 for k in TASK_BUCKETS}, **counts}
 
 
 # ----------------------------------------------------------------------------------------------------- Visão geral
@@ -190,8 +213,10 @@ class Overview:
     github: GithubOverview
     project: ProjectSnapshot
     read_at: float
-    active_agents: int | None = None        # fonte: Runtime/EventStore (próximo PR). Sem ela: desconhecido.
+    active_agents: int | None = None        # fonte: Runtime/EventStore (agent-runtime#73). Sem ela: desconhecido.
     health: tuple[tuple[str, str], ...] = ()
+    specs: SpecCatalog | None = None
+    evidence: EvidenceSnapshot | None = None
 
 
 def _github_health(gh: GithubOverview) -> str:
@@ -205,10 +230,24 @@ def _github_health(gh: GithubOverview) -> str:
     return f"parcial ({len(bad)} sem resposta: {', '.join(b.split('/')[-1] for b in bad)}{tail})"
 
 
-def collect_overview(client: GhClient, org: str, now: float, project_number: int = 1) -> Overview:
+def _local_health(snap: SpecCatalog | EvidenceSnapshot | None) -> str:
+    if snap is None:
+        return UNKNOWN
+    if snap.state != "ok":
+        return f"indisponível ({snap.error})"
+    return f"ok ({snap.ref} @ {snap.sha[:7]})"
+
+
+def collect_overview(client: GhClient, org: str, now: float, project_number: int = 1,
+                     specs: Callable[[], SpecCatalog] | None = None,
+                     evidence: Callable[[], EvidenceSnapshot] | None = None) -> Overview:
     gh = collect_github(client, org, now)
     proj = collect_project(client, org, project_number, now)
+    spec_cat = specs() if specs else None
+    ev = evidence() if evidence else None
     health = (("github", _github_health(gh)),
               ("project", "ok" if proj.state == "ok" else f"indisponível ({proj.error})"),
+              ("engineering-specs", _local_health(spec_cat)),
+              ("evidence", _local_health(ev)),
               ("runtime", UNKNOWN))
-    return Overview(gh, proj, now, None, health)
+    return Overview(gh, proj, now, None, health, spec_cat, ev)

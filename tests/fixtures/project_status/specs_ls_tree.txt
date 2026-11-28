@@ -1,0 +1,11 @@
+.github/workflows/ci.yml
+README.md
+AGENTS.md
+templates/SPEC_TEMPLATE.md
+scripts/check-index.sh
+produto-a/README.md
+produto-a/FP-900_exemplo_com_status_negrito.md
+produto-a/EXEMPLO-PAINEL-001.md
+plataforma/SPEC-EXEMPLO-002_modelo_de_sessoes.md
+plataforma/S99-01_registros_sem_linha_de_status.md
+plataforma/fila_de_microfases.md
