@@ -1,4 +1,4 @@
-"""UX-07 (P2S-STUDIO-UX-CONSOLIDATION-F0 §9, decisão D-UX-2 aprovada pelo Felipe: "Approve everything").
+"""UX-07, revisto pela F1 (Felipe, 2026-11-28: "vamos começar no básico: o chat, o design e as notificações").
 
 A navegação principal tem exatamente Chat, Design, PRs e Notificações, nessa ordem. Fluxos, Dev, Permissões, Biblioteca e
 Actions vão para Configurações → Avançado. Nenhuma função some (VS-I1, teste por objeto), e cada diálogo do §2.4 cujo
@@ -21,8 +21,8 @@ from PySide6.QtWidgets import QApplication, QMessageBox  # noqa: E402
 
 _APP = QApplication.instance() or QApplication([])
 STUB = Path(__file__).with_name("fake_acp_agent.py")
-MAIN = ["Chat", "Design", "PRs", "Notificações"]
-ADVANCED = ["Fluxos", "Dev", "Biblioteca", "Actions"]         # UX-08: Permissões foi para Notificações
+MAIN = ["Chat", "Design", "Notificações"]                   # F1 (Felipe, 2026-11-28)
+ADVANCED = ["PRs", "Fluxos", "Dev", "Biblioteca", "Actions"]         # UX-08: Permissões foi para Notificações
 
 
 class FakeCore:
@@ -69,16 +69,16 @@ def pump(n=5):
         _APP.processEvents()
 
 
-def test_the_main_navigation_is_exactly_chat_design_prs_notifications(win):
+def test_the_main_navigation_is_exactly_chat_design_notifications(win):
     w, _ = win
     assert [w.tabs.tabText(i) for i in range(w.tabs.count())] == MAIN
-    assert [w.tabs.widget(i) for i in range(4)] == [w.sessions, w.review, w.prs, w.notifications_area]  # UX-08
+    assert [w.tabs.widget(i) for i in range(3)] == [w.sessions, w.review, w.notifications_area]
 
 
-def test_advanced_holds_flows_dev_library_and_actions(win):
+def test_advanced_holds_prs_flows_dev_library_and_actions(win):
     w, _ = win
     assert [w.advanced.tabText(i) for i in range(w.advanced.count())] == ADVANCED
-    assert [w.advanced.widget(i) for i in range(4)] == [w.workflows, w.dev, w.library, w.actions]
+    assert [w.advanced.widget(i) for i in range(5)] == [w.prs, w.workflows, w.dev, w.library, w.actions]
     names = [w.settings.sections.item(i).text() for i in range(w.settings.sections.count())]
     assert "Avançado" in names and "Geral" in names
 
@@ -96,17 +96,17 @@ def test_every_old_object_is_still_reachable_and_visible(win, name):
 
 def test_the_gear_opens_settings_and_back_returns_to_the_area_you_were_in(win):
     w, _ = win
-    w.show_page(w.prs)
+    w.show_page(w.review)
     w.gear.click()
     pump()
     assert w.current_page() is w.settings and w.settings.isVisible() and not w.tabs.isVisible()
     w.settings_back.click()
     pump()
-    assert w.current_page() is w.prs and w.tabs.isVisible()
+    assert w.current_page() is w.review and w.tabs.isVisible()
     w.show_page(w.workflows)
     w.notifications.bell.click()                                                 # o sino leva às Notificações
     pump()
-    assert w.current_page() is w.notifications
+    assert w.current_page() is w.needs                                           # F3
 
 
 @pytest.mark.parametrize("link, target", [("chat", "sessions"), ("workflows", "workflows"),

@@ -62,10 +62,10 @@ def win(tmp_path, monkeypatch):
 
 def test_notifications_holds_all_needs_you_and_permissions(win):
     area = win.notifications_area
-    assert win.tabs.tabText(3) == "Notificações" and win.tabs.widget(3) is area
+    assert win.tabs.tabText(2) == "Notificações" and win.tabs.widget(2) is area          # F1: 3 áreas
     names = [area.sections.tabText(i).split(" (")[0] for i in range(area.sections.count())]
-    assert names == ["Todas", "Precisa de você", "Permissões"]
-    assert [area.sections.widget(i) for i in range(3)] == [win.notifications, win.needs, win.permissions]
+    assert names == ["Precisa de você", "Permissões", "Ver tudo"]                     # F3: abre no que precisa dele
+    assert [area.sections.widget(i) for i in range(3)] == [win.needs, win.permissions, win.notifications]
     assert win.advanced.indexOf(win.permissions) < 0                              # saiu de Avançado
 
 
@@ -83,7 +83,7 @@ def test_the_bell_and_a_permission_link_land_inside_notifications(win):
     win.show_page(win.prs)
     win.notifications.bell.click()
     pump()
-    assert win.current_page() is win.notifications
+    assert win.current_page() is win.needs                                     # F3
     win.open_link("permissions:req-1")
     pump()
     assert win.current_page() is win.permissions and win.tabs.currentWidget() is win.notifications_area
@@ -103,7 +103,7 @@ def test_needs_you_lists_the_prs_waiting_for_felipe_and_opens_the_pr(win, monkey
     win.notifications_area.update_counts()                                       # o timer da área faz isso a cada 2 s
     rows = [needs.tree.topLevelItem(i).text(1) for i in range(needs.tree.topLevelItemCount())]
     assert rows == ["PR precisa de você: Plan2Space/agent-bar#7"]                 # só o que é do Felipe
-    assert "Precisa de você (1)" == win.notifications_area.sections.tabText(1)
+    assert "Precisa de você (1)" == win.notifications_area.sections.tabText(0)
     needs.tree.setCurrentItem(needs.tree.topLevelItem(0))
     needs.open_btn.click()
     assert opened == ["https://github.com/Plan2Space/agent-bar/pull/7"]
@@ -126,7 +126,7 @@ def test_an_open_permission_shows_in_notifications_with_allow_and_deny_and_the_d
     nt.refresh()
     nt.tree.setCurrentItem(nt.tree.topLevelItem(0))
     assert nt.allow_btn.isVisibleTo(nt) and nt.deny_btn.isVisibleTo(nt)
-    assert "Permissões (1 pendente)" == win.notifications_area.sections.tabText(2)
+    assert "Permissões (1 pendente)" == win.notifications_area.sections.tabText(1)
     rid = next(iter(win.chat._perm_cards))
     assert win.sessions.answer_permission(rid, "allow_once") is True
     assert wait(lambda: not win.chat.busy)
@@ -137,7 +137,7 @@ def test_an_open_permission_shows_in_notifications_with_allow_and_deny_and_the_d
     nt.refresh()
     win.notifications_area.update_counts()
     assert not nt.allow_btn.isVisibleTo(nt)
-    assert win.notifications_area.sections.tabText(2) == "Permissões"
+    assert win.notifications_area.sections.tabText(1) == "Permissões"
 
 
 def test_the_open_needs_you_list_follows_the_collection_not_only_its_counter(win):
@@ -155,8 +155,8 @@ def test_the_open_needs_you_list_follows_the_collection_not_only_its_counter(win
     assert rows() == ["PR precisa de você: Plan2Space/agent-bar#7"]
     publish(8)                                                                      # a coleta trouxe mais um
     win.notifications_area.update_counts()                                          # o timer da área
-    assert len(rows()) == 2 and win.notifications_area.sections.tabText(1) == "Precisa de você (2)"
+    assert len(rows()) == 2 and win.notifications_area.sections.tabText(0) == "Precisa de você (2)"
     win.center.resolve(first.id if hasattr(first, "id") else first, "RESOLVED")     # e resolveu o primeiro
     win.notifications_area.update_counts()
     assert rows() == ["PR precisa de você: Plan2Space/agent-bar#8"]
-    assert win.notifications_area.sections.tabText(1) == "Precisa de você (1)"
+    assert win.notifications_area.sections.tabText(0) == "Precisa de você (1)"

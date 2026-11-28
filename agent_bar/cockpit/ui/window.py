@@ -8,6 +8,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QMainWindow,
+    QMenu,
     QPushButton,
     QScrollArea,
     QSizePolicy,
@@ -42,9 +43,13 @@ from agent_bar.platform.image_ledger import ImageLedger
 from agent_bar.platform.sessions import SessionManager
 from agent_bar.targets import load_targets
 
-TAB_CSS = ("QTabWidget::pane{border:0;background:#16161a}QTabBar::tab{background:#202026;color:#bdbdc4;padding:6px 14px;"
-           "border-top-left-radius:6px;border-top-right-radius:6px;margin-right:2px}"
-           "QTabBar::tab:selected{background:#2c2c34;color:#ffffff}")
+# F1: as áreas no estilo dos tokens de tema (o da tela de Temas/Visão geral): aba ativa marcada pelo acento e pelo peso
+# do texto, nunca só pela cor
+TAB_TOKENS = ("QTabWidget::pane{border:0;background:@bg}"
+              "QTabBar::tab{background:@bg;color:@text_muted;padding:8px 18px;margin-right:2px;border:0;"
+              "border-bottom:2px solid @border}"
+              "QTabBar::tab:hover{background:@hover;color:@text}"
+              "QTabBar::tab:selected{color:@text;font-weight:600;border-bottom:3px solid @accent}")
 
 
 class PageScroll(QScrollArea):
@@ -99,7 +104,6 @@ class CockpitWindow(QMainWindow):
         self.restore_window()
         self.runtime = AsyncRuntime("cockpit")
         self.tabs = ScrollTabs()                                                # UX-04: páginas rolam, abas fixas
-        self.tabs.setStyleSheet(TAB_CSS)
         self.library: LibraryTab | None = None
         inbox = chat_kwargs.pop("inbox", None)
         self.sessions = ChatSessions(runtime=self.runtime, inbox=inbox,              # F5: abas de sessao no Chat
@@ -137,15 +141,18 @@ class CockpitWindow(QMainWindow):
         self.notifications_area = NotificationsArea(self.notifications, self.needs, self.permissions)
         self.sessions.permission_listeners += [lambda _id: self.permissions.refresh(), lambda _id: self.notifications.refresh(),
                                                lambda _id: self.notifications_area.update_counts()]
-        # UX-07 (D-UX-2): exatamente 4 áreas principais, nessa ordem
-        for page, title in ((self.sessions, "Chat"), (self.review, "Design"), (self.prs, "PRs"),
-                            (self.notifications_area, "Notificações")):
+        # F1 (Felipe, 2026-11-28: "vamos começar no básico: o chat, o design e as notificações"): 3 áreas principais.
+        # PRs saiu da navegação principal (substitui o D-UX-2 de 4 áreas) e foi para o menu Avançado, sem apagar nada.
+        from agent_bar.cockpit.ui.theme.qt import style as theme_style
+        for page, title in ((self.sessions, "Chat"), (self.review, "Design"), (self.notifications_area, "Notificações")):
             self.tabs.addTab(page, title)
-        # Configurações → Avançado: o que saiu da navegação principal continua a um clique (VS-I1)
+        theme_style(self.tabs, TAB_TOKENS)                                    # o estilo da tela de Temas/Visão geral
+        # Avançado (menu no canto e Configurações → Avançado): o que saiu da navegação principal continua a um clique
         self.advanced = ScrollTabs()
-        self.advanced.setStyleSheet(TAB_CSS)
-        for page, title in ((self.workflows, "Fluxos"), (self.dev, "Dev"), (self.library, "Biblioteca"),
-                            (self.actions, "Actions")):
+        theme_style(self.advanced, TAB_TOKENS)
+        self.advanced_pages = [(self.prs, "PRs"), (self.workflows, "Fluxos"), (self.dev, "Dev"),
+                               (self.library, "Biblioteca"), (self.actions, "Actions")]
+        for page, title in self.advanced_pages:
             self.advanced.addTab(page, title)
         corner = QWidget()                                                     # sino + engrenagem no canto das abas
         cl = QHBoxLayout(corner)
@@ -159,7 +166,6 @@ class CockpitWindow(QMainWindow):
                                 "QToolButton:hover{color:#ffffff;background:#2a2a30;border-radius:4px}")
         # Felipe (2026-11-28): a Central de acompanhamento (Frente D) estava no main sem nenhum botão que a abrisse.
         # "Visão geral" abre numa janela própria, não-modal: nada de 5ª área (§6 do pedido de 2026-11-27).
-        from agent_bar.cockpit.ui.theme.qt import style as theme_style
         self.overview_btn = QToolButton()
         self.overview_btn.setText("Visão geral")
         self.overview_btn.setAccessibleName("Visão geral do projeto")
@@ -180,11 +186,13 @@ class CockpitWindow(QMainWindow):
         if self.theme_manager.saved.key != theme_catalog.DEFAULT:            # o tema salvo, ao abrir (padrão: nada muda)
             self.theme_manager.apply(self.theme_manager.saved)
         cl.addWidget(self.themes_btn)
+        self.advanced_btn = self._advanced_menu_button(theme_style)          # F1: todo o resto, a um clique
+        cl.addWidget(self.advanced_btn)
         cl.addWidget(self.notifications.bell)
         cl.addWidget(self.gear)
         self.tabs.setCornerWidget(corner, Qt.Corner.TopRightCorner)
         self.notifications.bell.show()
-        self.notifications.bell.clicked.connect(lambda: self.show_page(self.notifications))
+        self.notifications.bell.clicked.connect(lambda: self.show_page(self.needs))   # F3: o que precisa do Felipe
         self.gear.clicked.connect(lambda: self.show_page(self.settings))
         self.notifications.open_link.connect(self.open_link)
         self.sessions.notify_fn = self._notify
@@ -285,6 +293,25 @@ class CockpitWindow(QMainWindow):
         else:
             raise ValueError(f"objeto sem destino na navegação: {obj!r}")
         self._page_shown(self.current_page())
+
+    def _advanced_menu_button(self, theme_style) -> QToolButton:
+        """F1: "Avançado" no canto abre um menu com tudo o que saiu das 3 áreas (PRs, Fluxos, Dev, Biblioteca, Actions)
+        e as Configurações. Cada item abre a página onde ela já mora; nada foi apagado."""
+        btn = QToolButton()
+        btn.setText("Avançado")
+        btn.setAccessibleName("Avançado")
+        btn.setToolTip("PRs, Fluxos, Dev, Biblioteca, Actions e Configurações")
+        btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        theme_style(btn, "QToolButton{color:@text;font-size:12px;border:1px solid @border;border-radius:4px;"
+                         "padding:2px 8px}QToolButton:hover{background:@hover}"
+                         "QToolButton::menu-indicator{image:none;width:0}")
+        menu = QMenu(btn)
+        for page, title in self.advanced_pages:
+            menu.addAction(title, lambda p=page: self.show_page(p))
+        menu.addSeparator()
+        menu.addAction("Configurações", lambda: self.show_page(self.settings))
+        btn.setMenu(menu)
+        return btn
 
     def open_first_run(self):
         """FR-01: Configurações → Primeiro uso, relendo a máquina. "Começar" volta ao Chat."""

@@ -77,6 +77,8 @@ class NeedsYouPanel(QWidget):
         self.open_btn.clicked.connect(self._open)
         self.tree.currentItemChanged.connect(lambda cur, _p: self.open_btn.setEnabled(bool(self._url(cur))))
         self.tree.itemDoubleClicked.connect(lambda _it, _c: self._open())
+        # F3 (Felipe: "quando eu clico não me leva pro PR"): um clique numa linha já abre o PR dela no navegador
+        self.tree.itemClicked.connect(lambda it, _c: (self.tree.setCurrentItem(it), self._open()))
 
     def items(self) -> list:
         return self.center.list(categories=["HUMAN_APPROVAL"], states=list(NEEDS_STATES))
@@ -127,9 +129,10 @@ class NeedsYouPanel(QWidget):
 
 
 class NotificationsArea(QWidget):
-    """A quarta área: seções Todas, Precisa de você e Permissões, com a contagem do que pede ação no título."""
+    """Notificações. F3 (Felipe, 2026-11-28): abre no que precisa dele ("Precisa de você"), depois Permissões; todo o
+    resto fica em "Ver tudo". A contagem do que pede ação vai no título."""
 
-    TITLES = ("Todas", "Precisa de você", "Permissões")
+    TITLES = ("Precisa de você", "Permissões", "Ver tudo")
 
     def __init__(self, notifications, needs: NeedsYouPanel, permissions, refresh_ms: int = 2000) -> None:
         super().__init__()
@@ -138,7 +141,7 @@ class NotificationsArea(QWidget):
         lay.setContentsMargins(0, 0, 0, 0)
         self.sections = QTabWidget()
         self.sections.setDocumentMode(True)
-        for page, title in zip((notifications, needs, permissions), self.TITLES):
+        for page, title in zip((needs, permissions, notifications), self.TITLES):
             self.sections.addTab(page, title)
         lay.addWidget(self.sections)
         self.sections.currentChanged.connect(lambda _i: self._section_shown())
@@ -165,9 +168,9 @@ class NotificationsArea(QWidget):
             self.needs.refresh()
         needs = len(self.needs.items())
         pending = len(self.permissions.inbox.pending())
-        self.sections.setTabText(1, f"Precisa de você ({needs})" if needs else "Precisa de você")
-        self.sections.setTabText(2, f"Permissões ({pending} pendente{'s' if pending > 1 else ''})" if pending
-                                 else "Permissões")
+        self.sections.setTabText(self.sections.indexOf(self.needs), f"Precisa de você ({needs})" if needs else "Precisa de você")
+        self.sections.setTabText(self.sections.indexOf(self.permissions),
+                                 f"Permissões ({pending} pendente{'s' if pending > 1 else ''})" if pending else "Permissões")
 
     def shutdown(self) -> None:
         self.timer.stop()

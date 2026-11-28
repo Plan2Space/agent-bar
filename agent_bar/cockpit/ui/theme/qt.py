@@ -17,6 +17,7 @@ from collections.abc import Callable
 
 from PySide6.QtGui import QColor, QFont, QPalette
 from PySide6.QtWidgets import QApplication, QWidget
+from shiboken6 import isValid
 
 from agent_bar.cockpit.ui.theme import catalog as C
 from agent_bar.cockpit.ui.theme.tokens import COLOR_ROLES, Theme, mix
@@ -147,12 +148,17 @@ class ThemeManager:
         alive = []
         for ref, template in self._themed:
             w = ref()
-            if w is not None:
+            if w is not None and isValid(w):                                   # C++ apagado (diálogo fechado): esquece
                 w.setStyleSheet(render(template, theme))
                 alive.append((ref, template))
         self._themed = alive
         for fn in list(self._listeners):
-            fn(theme)
+            try:
+                fn(theme)
+            except RuntimeError as exc:                                        # o widget do ouvinte já foi destruído
+                if "already deleted" not in str(exc):
+                    raise
+                self._listeners.remove(fn)
 
     def close(self) -> None:
         """Tira o filtro da ponte do app (testes; o app real vive com ele até sair)."""
