@@ -137,7 +137,7 @@ class ChatSessions(QWidget):
             mark = "○"
         else:
             mark = "·"
-        ws = Path(view.workspace()).name if view.workspace() else "?"
+        ws = Path(view.workspace()).name if view.workspace() else "sem pasta"     # FR-02: nunca "· ?"
         return f"{mark} {p.label} · {ws}"
 
     def _tick(self) -> None:
