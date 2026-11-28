@@ -10,10 +10,13 @@ Regras:
 - pausar a fila = o worker nao comeca o proximo job (o que esta rodando termina); retomar = volta a pegar;
 - cancelar job na fila = `cancelled` na hora. Job RODANDO nao e morto (matar o Python deixaria o SketchUp orfao): fica
   `cancel_requested` e o desfecho real do motor e registrado;
-- worker que morreu com job `running` -> o job vira `interrupted`; retomar roda o MESMO job+tentativa, e o executor
-  devolve o resultado real do motor por replay (ou RESULT_UNKNOWN), sem construir de novo;
+- worker que morreu com job `running` -> o job vira `interrupted` (o worker faz isso ao comecar); retomar e explicito
+  (`retry`) e roda o MESMO job+tentativa. No `deterministic` o turn_id e fixo (`<job_id>#<attempt>`), entao o executor
+  devolve o resultado real do motor por replay (ou RESULT_UNKNOWN), sem construir de novo. No `local` o modelo faz um
+  turno novo: o executor pode construir de novo, num run novo e ainda um SketchUp por vez;
 - trocar a versao do motor e explicito: `reprocess` cria jobs NOVOS com o sha novo declarado, ligados ao original;
-- o desfecho de cada job e o `outcome.json` do local_job (nunca sobrescrito).
+- o desfecho de cada job e o `outcome.json` do local_job, gravado pelo mesmo `record_outcome`: sempre o da execucao
+  mais recente do job_id (o anterior vai para `outcome.<n>.json`).
 
     python -m agent_bar.platform.production_queue --queue <dir> enqueue <job.json> [...]
     python -m agent_bar.platform.production_queue --queue <dir> list | pause | resume | cancel <job_id>
@@ -201,7 +204,7 @@ class Queue:
         ids = [r["job_id"] for r in self.db.execute("SELECT job_id FROM jobs WHERE state='running'")]
         for jid in ids:
             self.db.execute("UPDATE jobs SET state='interrupted', note=? WHERE job_id=?",
-                            ("o worker parou com o job rodando; retomar repete o mesmo job+tentativa (replay)", jid))
+                            ("o worker parou com o job rodando; retomar repete o mesmo job+tentativa", jid))
         return ids
 
     def retry_interrupted(self, job_id: str) -> dict:
@@ -306,28 +309,29 @@ def camera_jobs(run_id: str, cameras: list[str], sha40: str, *, prefix: str, exe
     return out
 
 
+def recording_runner(out: Path, execute: Callable[[dict], dict]) -> Callable[[dict], dict]:
+    """Envolve um executor de job com a MESMA gravacao da CLI do local_job (`record_outcome`): o
+    `<out>/<job_id>/outcome.json` que o roteador le e sempre o da execucao mais recente, inclusive ao retomar."""
+    from agent_bar.platform.local_job import record_outcome
+
+    def run(job: dict) -> dict:
+        outcome, path = record_outcome(Path(out), job["job_id"], job, lambda: execute(job))
+        return {**outcome, "outcome_path": str(path)}
+    return run
+
+
 def default_runner(out: Path, endpoint: str) -> Callable[[dict], dict]:
-    """Roda um job pelo local_job no mesmo processo e grava o outcome (como a CLI do local_job)."""
+    """Roda um job pelo local_job no mesmo processo (motor e Ollama reais) e grava como a CLI do local_job."""
     from agent_bar.platform.local_job import run_job
     from agent_bar.platform.render_sample import RenderSampleTool, ToolBox
     from agent_bar.platform.sketchup_sample import executor_adapter, git_head, sample_tool_from_env
 
-    def run(job: dict) -> dict:
+    def execute(job: dict) -> dict:
         tool = sample_tool_from_env()
-        outcome = run_job(job, build_host=lambda: ToolBox([tool, RenderSampleTool(tool)]),
-                          local_adapter=lambda: executor_adapter(endpoint), engine_root=tool.engine_root,
-                          production=os.environ.get("P2S_PRODUCTION_ENGINE"), head=git_head)
-        target = out / job["job_id"]
-        target.mkdir(parents=True, exist_ok=True)
-        path = target / "outcome.json"
-        if path.exists():
-            path = target / f"outcome.{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}.json"
-        path.write_text(json.dumps(outcome, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
-        if outcome.get("failure"):
-            with open(out / "failures.jsonl", "a", encoding="utf-8") as fh:
-                fh.write(json.dumps(outcome["failure"], ensure_ascii=False, default=str) + "\n")
-        return {**outcome, "outcome_path": str(path)}
-    return run
+        return run_job(job, build_host=lambda: ToolBox([tool, RenderSampleTool(tool)]),
+                       local_adapter=lambda: executor_adapter(endpoint), engine_root=tool.engine_root,
+                       production=os.environ.get("P2S_PRODUCTION_ENGINE"), head=git_head, endpoint=endpoint)
+    return recording_runner(out, execute)
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -185,3 +185,44 @@ def test_end_to_end_with_the_deterministic_local_job(q, server, engine_root, tmp
     q.work(lambda j: rig.run(j), lambda: READY, pq.Policy(), max_idle_polls=1, sleep=lambda s: None)
     assert [j["state"] for j in q.list()] == ["succeeded", "succeeded"]
     assert len(rig.engine.calls) == 2 and rig.chats() == []                 # 1 build + 1 render, nenhum modelo
+
+
+# ------------------------------------------------------------------------------- revisao #224
+def test_the_worker_recovers_a_job_left_running_before_it_takes_the_queue(q):
+    q.enqueue(job())
+    q.db.execute("UPDATE jobs SET state='running' WHERE job_id='j-1'")      # worker anterior morreu aqui
+    run = Runner()
+    q.work(run, lambda: READY, pq.Policy(), max_idle_polls=1, sleep=lambda s: None)
+    assert q.get("j-1")["state"] == "interrupted" and run.ran == []         # nao roda sozinho: retomar e explicito
+
+
+def _outcome(j, status):
+    return {"schema": "p2s.local_outcome.v1", "job_id": j["job_id"], "task_type": j["task_type"], "status": status,
+            "error": None if status == "SUCCEEDED" else "INFRA:SKETCHUP_BUSY", "executor_id": "deterministic",
+            "tokens_measured": 0, "tokens_estimated": None, "cloud": {"tokens": 0, "providers_called": []},
+            "assistance": [], "permissions": [], "failure": None, "started_at": "t0", "finished_at": "t1"}
+
+
+def test_a_resumed_job_that_fails_is_what_the_router_reads(q, tmp_path):
+    results = iter(["SUCCEEDED", "FAILED"])
+    run = pq.recording_runner(tmp_path / "out", lambda j: _outcome(j, next(results)))
+    q.enqueue(job())
+    q.work_once(run, lambda: READY, pq.Policy())
+    q.db.execute("UPDATE jobs SET state='interrupted' WHERE job_id='j-1'")  # retomar: o MESMO job_id roda de novo
+    q.retry_interrupted("j-1")
+    r = q.work_once(run, lambda: READY, pq.Policy())
+    d = tmp_path / "out" / "j-1"
+    assert r["status"] == "FAILED" and q.get("j-1")["state"] == "failed"
+    assert json.loads((d / "outcome.json").read_text(encoding="utf-8"))["status"] == "FAILED"
+    assert json.loads((d / "outcome.1.json").read_text(encoding="utf-8"))["status"] == "SUCCEEDED"
+    assert q.get("j-1")["outcome_path"] == str(d / "outcome.json")
+
+
+def test_a_crashing_executor_still_replaces_the_contract_outcome(q, tmp_path):
+    def boom(j):
+        raise OSError("ollama caiu")
+    run = pq.recording_runner(tmp_path / "out", boom)
+    q.enqueue(job())
+    r = q.work_once(run, lambda: READY, pq.Policy())
+    cur = json.loads((tmp_path / "out" / "j-1" / "outcome.json").read_text(encoding="utf-8"))
+    assert r["status"] == "FAILED" and cur["error"] == "INFRA:RUNNER_ERROR: OSError"
