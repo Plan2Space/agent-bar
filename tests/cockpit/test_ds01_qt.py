@@ -79,9 +79,15 @@ def test_themed_widgets_follow_the_theme_and_previews_restore(mgr):
 
 def test_applying_a_theme_reaches_the_application(mgr):
     mgr.app = _APP
-    mgr.apply(C.get("github-light"))
-    assert _APP.palette().color(QPalette.ColorRole.Window).name() == "#ffffff"
-    assert "#0969da" in _APP.styleSheet()
+    win = QtWidgets.QWidget()
+    win.show()
+    try:
+        mgr.apply(C.get("github-light"))
+        assert _APP.palette().color(QPalette.ColorRole.Window).name() == "#ffffff"
+        assert "#0969da" in win.styleSheet()                                    # o QSS global vai em cada janela
+        assert _APP.styleSheet() == ""                                         # nunca no QApplication (custo)
+    finally:
+        win.deleteLater()
 
 
 def test_a_saved_theme_that_no_longer_exists_falls_back_to_the_default():
