@@ -185,9 +185,14 @@ class ReviewTab(QWidget):
         lay.addWidget(self.sources_label)
         # S01C-F1-04: a tela principal é a Galeria de design; o resto fica em Detalhes técnicos
         self.pages = QTabWidget()
+        # F2 (Felipe, 2026-11-28): o Design abre nas últimas plantas e renders; a galeria de revisão vem depois
+        from agent_bar.cockpit.ui.latest_gallery import LatestGallery
+        self.latest = LatestGallery()
+        self.pages.addTab(self.latest, "Últimas")
         self.design = DesignView()
         self.pages.addTab(self.design, "Galeria de design")
         tech = QWidget()
+        self.tech_page = tech
         lay_tech = QVBoxLayout(tech)
         lay_tech.setContentsMargins(0, 4, 0, 0)
         self.pages.addTab(tech, "Detalhes técnicos")
@@ -521,7 +526,7 @@ class ReviewTab(QWidget):
 
     def show_technical(self, item_id: str) -> None:
         """Do item da galeria de design para os Detalhes técnicos dele (relatórios, manifest, hashes)."""
-        self.pages.setCurrentIndex(1)
+        self.pages.setCurrentWidget(self.tech_page)
         self.details.setCurrentWidget(self.gallery_view)
         t = self.gallery_tree
         row = next((t.topLevelItem(i) for i in range(t.topLevelItemCount())
