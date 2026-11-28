@@ -128,6 +128,9 @@ geometria": construção, validação, `.skp` e render são do motor.
   contra o modelo), `BLOCKED` (falta ferramenta no motor; motivo e dono), `NOT_RUN` e `NOT_SUPPORTED` (o modelo não
   anuncia tools).
 - Sem Claude como fallback. `assistance` registra qualquer ajuda externa e, hoje, é sempre vazio.
+- Os casos BLOCKED citam a lacuna exata (`gaps`) da matriz do motor (`contracts/tool_compat_matrix.json`,
+  sketchup-mcp-next#73), com o título lido da matriz do motor fixado. `conditions.matrix` registra se ela existe
+  e o sha256 dela.
 - Resultado por eixo (`operation`, `planning`, `layout`), sem nota única. Cada modelo gera
   `bench-<stamp>-<modelo>/benchmark_run.json` (`p2s.mcp_compat.run.v1`) e nunca sobrescreve um run anterior.
 
@@ -136,8 +139,8 @@ geometria": construção, validação, `.skp` e render são do motor.
 | C0 Descoberta | operação | listar as ferramentas publicadas sem chamar nenhuma e sem inventar outra (se chamar, a permissão é negada: nada abre) |
 | C1 Chamada simples | operação | `build_room_sample(room_001)`, com nome e argumento dados no pedido |
 | C2 Construção existente | operação | "sala de 5 x 3 metros com cama" → o modelo escolhe `plan_alt_5x3_e3a` pela descrição |
-| C3 Parametrização | operação | BLOCKED: o motor não publica construção com parâmetros novos (Frente A) |
+| C3 Parametrização | operação | BLOCKED, G1 (write_fixture fora do motor; Frente A) |
 | C4 Sequência, C5 Recuperação, C6 Render | planejamento/operação | NOT_RUN (próximos) |
-| C7 Refinamento | planejamento | BLOCKED: falta ferramenta de alteração (Frente A) |
-| C8 Fluxo até evidência | planejamento | BLOCKED: não há ferramenta publicada de evidência (Frentes A e C) |
-| C9 Suíte 01 | layout | BLOCKED: falta construir a Suíte 01 a partir da spec (Frente A) |
+| C7 Refinamento | planejamento | BLOCKED, G4 e G10 (sem refinamento e sem troca de material; Frente A, sketchup-mcp-next#75) |
+| C8 Fluxo até evidência | planejamento | BLOCKED, G5 e G3 (publicação e inspeção avulsa fora do motor; Frentes A e C) |
+| C9 Suíte 01 | layout | BLOCKED, G2 (a Suíte 01 rc7b/rc8 existe no motor, mas não na allowlist publicada; `list_fixtures`, sketchup-mcp-next#76) |

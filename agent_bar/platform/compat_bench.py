@@ -89,6 +89,7 @@ class Case:
     blocked: str | None = None                                               # motivo de BLOCKED (falta no motor)
     owner: str | None = None                                                 # quem desbloqueia
     allow_tools: bool = True                                                 # False: permissao negada (nada abre)
+    gaps: tuple[str, ...] = ()                                               # lacunas da matriz do motor (G1..G10)
 
 
 # ------------------------------------------------------------------------------------------------ criterios
@@ -146,6 +147,7 @@ def check_c2(trace: Trace, ctx: dict) -> tuple[str, list[str]]:
 
 
 ENGINE_GAP = "o motor ainda nao publica a ferramenta necessaria (matriz §9, Frente A)"
+MATRIX = "contracts/tool_compat_matrix.json"                                 # no checkout do motor (sketchup-mcp-next#73)
 CASES: tuple[Case, ...] = (
     Case("C0", "Descoberta", "operation",
          ("Sem chamar nenhuma ferramenta, liste os nomes exatos das ferramentas que voce pode chamar agora, um por "
@@ -155,17 +157,42 @@ CASES: tuple[Case, ...] = (
     Case("C2", "Construcao existente", "operation",
          ("Construa no SketchUp a sala de 5 x 3 metros com cama.",), check_c2),
     Case("C3", "Parametrizacao", "operation", blocked=f"{ENGINE_GAP}: construcao com parametros novos "
-         "(dimensoes/aberturas) validados pelo motor", owner="Frente A"),
+         "(dimensoes/aberturas) validados pelo motor", owner="Frente A", gaps=("G1",)),
     Case("C4", "Operacoes sequenciais", "planning"),
     Case("C5", "Recuperacao de erro", "operation"),
     Case("C6", "Renderizacao", "operation"),
     Case("C7", "Refinamento", "planning", blocked=f"{ENGINE_GAP}: alterar um build existente (editar em copia "
-         "nova)", owner="Frente A"),
+         "nova) ou trocar material no render", owner="Frente A", gaps=("G4", "G10")),
     Case("C8", "Fluxo completo ate evidencia", "planning", blocked="nao ha ferramenta publicada para publicar "
-         "evidencia (Evidence e da Frente C)", owner="Frente A + Frente C"),
-    Case("C9", "Suite 01 a partir de spec autoritativa", "layout", blocked=f"{ENGINE_GAP}: construir a Suite 01 a "
-         "partir da spec", owner="Frente A"),
+         "evidencia (Evidence e da Frente C) nem inspecao avulsa", owner="Frente A + Frente C", gaps=("G5", "G3")),
+    Case("C9", "Suite 01 a partir de spec autoritativa", "layout", blocked="a Suite 01 (rc7b build + rc8 render) "
+         "nao esta na allowlist que o executor publica; o motor vai publicar a lista (list_fixtures)",
+         owner="Frente A", gaps=("G2",)),
 )
+
+
+def load_matrix(engine_root: Path | None) -> tuple[dict | None, dict]:
+    """Matriz de compatibilidade do motor fixado (fonte das lacunas citadas nos BLOCKED). Ausente = registrado."""
+    path = Path(engine_root) / MATRIX if engine_root else None
+    if path is None or not path.is_file():
+        return None, {"path": MATRIX, "present": False, "sha256": None}
+    raw = path.read_bytes()
+    try:
+        doc = json.loads(raw.decode("utf-8"))
+    except ValueError:
+        return None, {"path": MATRIX, "present": True, "sha256": hashlib.sha256(raw).hexdigest(), "error": "ilegivel"}
+    return doc, {"path": MATRIX, "present": True, "sha256": hashlib.sha256(raw).hexdigest(),
+                 "engine": (doc.get("engine") or {}).get("ref")}
+
+
+def gap_reasons(case: Case, matrix: dict | None) -> list[str]:
+    """Motivo do BLOCKED citando a lacuna exata da matriz; sem a matriz no motor fixado, diz isso."""
+    gaps = {g.get("id"): g for g in (matrix or {}).get("gaps") or [] if isinstance(g, dict)}
+    out = [case.blocked] if case.blocked else []
+    for gid in case.gaps:
+        g = gaps.get(gid)
+        out.append(f"{gid}: {g.get('title')}" if g else f"{gid}: (matriz do motor fixado sem esta lacuna ou ausente)")
+    return out
 
 
 # ------------------------------------------------------------------------------------------------ execucao
@@ -211,7 +238,8 @@ def run_case(adapter: Any, host: RecordingHost, model: str, case: Case, ctx: dic
     base = {"id": case.id, "title": case.title, "axis": case.axis, "prompts": list(case.prompts),
             "assistance": []}
     if case.blocked:
-        return {**base, "status": "BLOCKED", "reasons": [case.blocked], "owner": case.owner}
+        return {**base, "status": "BLOCKED", "reasons": gap_reasons(case, ctx.get("_matrix")), "owner": case.owner,
+                "gaps": list(case.gaps)}
     if case.check is None:
         return {**base, "status": "NOT_RUN", "reasons": ["runner ainda nao implementa este caso"]}
     if ctx["model_tools"] != "SUPPORTED":
@@ -304,13 +332,15 @@ def run_model(adapter: Any, host: RecordingHost, model: str, case_ids: list[str]
         respond(choice)
     adapter.on_permission = on_permission
     ctx = conditions(adapter, host, model)
+    build = (getattr(host.inner, "tools", None) or [host.inner])[0]
+    matrix, ctx["matrix"] = load_matrix(getattr(build, "engine_root", None))
     run = {"schema": SCHEMA, "started_at": wall(), "versions": versions(adapter, host, model), "conditions": ctx,
            "assistance": [], "machine_before": machine(), "cases": []}
     for case in CASES:
         if case.id not in case_ids:
             continue
         current["case"] = case
-        rec = run_case(adapter, host, model, case, ctx, timeout_s=timeout_s, clock=clock)
+        rec = run_case(adapter, host, model, case, {**ctx, "_matrix": matrix}, timeout_s=timeout_s, clock=clock)
         run["cases"].append(rec)
     run["permissions"] = perms
     run["machine_after"] = machine()
