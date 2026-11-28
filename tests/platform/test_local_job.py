@@ -258,3 +258,100 @@ def test_a_refused_job_never_counts_as_a_run(tmp_path):
     (tmp_path / "outcome.json").write_text(json.dumps(out), encoding="utf-8")
     doc, failures = cp.aggregate([tmp_path / "outcome.json"])
     assert doc["items"] == [] and failures == []                            # nao rodou: nao mede o executor
+
+
+# ------------------------------------------------------------------------------- caminho do contrato (revisao #223)
+class _Tool:
+    engine_root = Path("motor")
+
+
+def _cli(monkeypatch, tmp_path, results):
+    """Roda a CLI `local_job run` com o motor/modelo trocados por desfechos prontos (um por execucao)."""
+    from agent_bar.platform import sketchup_sample
+    seq = iter(results)
+
+    def fake_run_job(j, **_):
+        r = next(seq)
+        if isinstance(r, Exception):
+            raise r
+        return {"schema": "p2s.local_outcome.v1", "job_id": j["job_id"], "task_type": j["task_type"],
+                "started_at": "t0", "finished_at": "t1", "cloud": {"tokens": 0, "providers_called": []},
+                "assistance": [], "permissions": [], "executor_id": "deterministic", "tokens_measured": 0,
+                "tokens_estimated": None, "attempt": j["attempt"], **r}
+
+    monkeypatch.setattr(lj, "run_job", fake_run_job)
+    monkeypatch.setattr(sketchup_sample, "sample_tool_from_env", lambda: _Tool())
+    jf = tmp_path / "job.json"
+    jf.write_text(json.dumps(job()), encoding="utf-8")
+    out = tmp_path / "out"
+    rcs = [lj.main(["run", str(jf), "--out", str(out)]) for _ in results]
+    return rcs, out / "j-1"
+
+
+OK = {"status": "SUCCEEDED", "error": None, "failure": None}
+BAD = {"status": "FAILED", "error": "INFRA:SKETCHUP_BUSY", "failure": None}
+
+
+def test_a_failed_rerun_of_the_same_job_id_is_what_the_router_reads(monkeypatch, tmp_path):
+    rcs, d = _cli(monkeypatch, tmp_path, [OK, BAD])
+    assert rcs == [0, 1]
+    cur = json.loads((d / "outcome.json").read_text(encoding="utf-8"))
+    assert cur["status"] == "FAILED"                                         # o roteador le a execucao mais recente
+    check(cur, contract("p2s.local_outcome.v1"))
+    hist = json.loads((d / "outcome.1.json").read_text(encoding="utf-8"))
+    assert hist["status"] == "SUCCEEDED"                                     # a anterior vai para o historico
+    assert sorted(p.name for p in d.iterdir()) == ["outcome.1.json", "outcome.json"]
+
+
+def test_a_new_success_is_not_hidden_behind_an_old_failure(monkeypatch, tmp_path):
+    _, d = _cli(monkeypatch, tmp_path, [BAD, BAD, OK])
+    assert json.loads((d / "outcome.json").read_text(encoding="utf-8"))["status"] == "SUCCEEDED"
+    assert [json.loads((d / f"outcome.{n}.json").read_text(encoding="utf-8"))["status"] for n in (1, 2)] == \
+        ["FAILED", "FAILED"]
+
+
+def test_a_crashed_rerun_never_leaves_the_old_success_in_place(monkeypatch, tmp_path):
+    rcs, d = _cli(monkeypatch, tmp_path, [OK, RuntimeError("ollama caiu")])
+    cur = json.loads((d / "outcome.json").read_text(encoding="utf-8"))
+    assert rcs == [0, 1] and cur["status"] == "FAILED" and cur["error"] == "INFRA:RUNNER_ERROR: RuntimeError"
+    assert cur["job_id"] == "j-1" and cur["attempt"] == 1 and cur["cloud"] == {"tokens": 0, "providers_called": []}
+    check(cur, contract("p2s.local_outcome.v1"))
+
+
+def test_the_previous_outcome_leaves_the_contract_path_before_the_run_starts(tmp_path):
+    d = tmp_path / "j-1"
+    d.mkdir()
+    (d / "outcome.json").write_text(json.dumps({"status": "SUCCEEDED"}), encoding="utf-8")
+    seen = {}
+
+    def execute():
+        seen["during"] = (d / "outcome.json").exists()                       # o roteador nao ve o velho durante o run
+        return {**OK, "schema": "p2s.local_outcome.v1"}
+    lj.record_outcome(tmp_path, "j-1", job(), execute)
+    assert seen == {"during": False}
+    assert not list(d.glob("*.tmp"))                                          # escrita atomica, sem sobra
+
+
+def test_an_adapter_other_than_ollama_is_refused():
+    assert any("adapter" in e for e in lj.validate_job(job(executor={**local(), "adapter": "openai"})))
+
+
+@pytest.mark.parametrize("model", ["gpt-oss:120b-cloud", "deepseek-v3.1:671b-cloud", "qwen3-coder:cloud"])
+def test_an_ollama_cloud_model_is_refused(model):
+    assert any("cloud" in e for e in lj.validate_job(job(executor=local(model))))
+
+
+@pytest.mark.parametrize("endpoint,ok", [("http://127.0.0.1:11434", True), ("http://localhost:11434", True),
+                                         ("http://[::1]:11434", True), ("https://ollama.com", False),
+                                         ("http://192.168.0.9:11434", False)])
+def test_only_a_loopback_ollama_endpoint_is_local(endpoint, ok):
+    assert (lj.endpoint_refusal(endpoint) is None) is ok
+
+
+def test_a_remote_endpoint_refuses_the_local_job_before_any_model_call(server, engine_root, tmp_path):
+    rig = Rig(server, engine_root, tmp_path)
+    out = lj.run_job(job(executor=local()), build_host=lambda: rig.box, local_adapter=rig.adapter,
+                     engine_root=engine_root, production=str(engine_root), head=rig.head, timeout_s=30,
+                     endpoint="https://ollama.com")
+    assert out["status"] == "REFUSED" and out["error"].startswith("NOT_LOCAL") and rig.chats() == []
+    check(out, contract("p2s.local_outcome.v1"))

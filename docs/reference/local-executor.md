@@ -150,9 +150,17 @@ geometria": construção, validação, `.skp` e render são do motor.
 Contrato combinado com a Frente E (agent-runtime#72/#73). A fronteira é um arquivo, e o agent-runtime não importa o
 agent-bar:
 
-`python -m agent_bar.platform.local_job run <job.json> --out <dir>` grava `<dir>/<job_id>/outcome.json` e nunca
-sobrescreve. Uma tentativa nova vira um arquivo novo. Quando há falha atribuível ao executor, ela vai para
-`<dir>/failures.jsonl`.
+`python -m agent_bar.platform.local_job run <job.json> --out <dir>` grava `<dir>/<job_id>/outcome.json`, o arquivo
+que o roteador lê. Ele é sempre o desfecho da execução **mais recente** daquele `job_id`, porque rodar de novo o
+mesmo `job_id` é caminho previsto (retomar na fila, `<tarefa>-a<tentativa>` no runtime):
+
+- antes de executar, o desfecho anterior sai do caminho e vai para o histórico `outcome.<n>.json`, então o roteador
+  não lê um desfecho velho enquanto a execução nova roda;
+- o novo entra por escrita atômica (arquivo temporário + rename);
+- se a execução quebra, entra um `FAILED` com `INFRA:RUNNER_ERROR`: uma falha nunca deixa um sucesso antigo no lugar;
+- falha atribuível ao executor vai também para `<dir>/failures.jsonl`.
+
+A CLI e a fila de produção gravam pelo mesmo helper (`local_job.record_outcome`).
 
 - Job `p2s.local_job.v1` e desfecho `p2s.local_outcome.v1`. Os JSON Schemas estão em `docs/contracts/`.
 - `executor.kind = deterministic`: o motor roda direto, sem LLM e com zero token. Na proveniência, `tool_requester`
@@ -169,7 +177,9 @@ sobrescreve. Uma tentativa nova vira um arquivo novo. Quando há falha atribuív
   - `FAILED` ou `TIMEOUT` com `INFRA:<código>` (motor, máquina ou provedor; não conta contra o executor);
   - `REFUSED`.
 - Sem provedor cloud no caminho: `cloud = {tokens: 0, providers_called: []}`. `tokens_measured` vem dos contadores do
-  Ollama (0 no determinístico). `tokens_estimated` fica `null`.
+  Ollama (0 no determinístico). `tokens_estimated` fica `null`. Para isso valer, o job local é recusado quando o
+  modelo é um modelo cloud do Ollama (`…:cloud`, `…-cloud`; job inválido) ou quando o endpoint do Ollama não é
+  loopback (`REFUSED` com `NOT_LOCAL`): nos dois casos o modelo rodaria fora da máquina sem registro de nuvem.
 - Prova por (executor, task_type): `python -m agent_bar.platform.capability_proofs <pastas> --out
   <pasta>/capability_proofs.json` agrega `benchmark_run.json` e `outcome*.json` em `p2s.local_capability.v1`:
   - `success_rate = passes/(passes+fails)`, com INFRA fora do denominador; `null` quando não há prova;
