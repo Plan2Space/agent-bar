@@ -150,3 +150,19 @@ def test_overview_reports_health_per_source_and_read_time():
     assert health["github"].startswith("parcial")
     assert health["project"] == "ok"
     assert ov.active_agents is None          # sem fonte do Runtime neste PR: desconhecido, nunca 0 inventado
+
+
+def test_discovery_failure_is_unknown_not_no_new_repos():
+    """Review #156 (MUST): `gh repo list` em 502 não pode virar "nenhum repo novo" com saúde ok."""
+    class ListDown(Recorded):
+        def __call__(self, argv, timeout):
+            if tuple(argv[1:3]) == ("repo", "list"):
+                return 1, "", "HTTP 502: Bad Gateway"
+            return super().__call__(argv, timeout)
+    gh_client = GhClient(exe=[__file__], runner=ListDown())
+    gh = ps.collect_github(gh_client, "Plan2Space", now=NOW)
+    assert gh.discovery == ps.UNKNOWN and "502" in gh.discovery_error
+    assert gh.new_repos is None
+    assert {r.repo for r in gh.repos} == {f"Plan2Space/{n}" for n in ps.MONITORED}   # os 8 seguem monitorados
+    ov = ps.collect_overview(gh_client, "Plan2Space", now=NOW)
+    assert dict(ov.health)["github"] != "ok" and "descoberta" in dict(ov.health)["github"]
