@@ -72,3 +72,14 @@ def test_requested_and_accepted_are_recorded_separately():
         assert default["model_requested"] is None and default["model_accepted"] == "fake-small"
     finally:
         a.disconnect()
+
+
+def test_the_contract_leaves_no_temporary_folder_behind(tmp_path, monkeypatch):
+    """Achado A5 do auditor (2026-11-28): check_images criava uma pasta p2s-contract-img-* por rodada e nunca a apagava
+    (7 por suite inteira, acumulando no TMP)."""
+    import tempfile
+    scratch = tmp_path / "tmp"
+    scratch.mkdir()
+    monkeypatch.setattr(tempfile, "tempdir", str(scratch))
+    assert run_contract(lambda env: FakeAdapter(env=env), FAST, only=("images",)) == {}
+    assert list(scratch.iterdir()) == []

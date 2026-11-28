@@ -235,7 +235,11 @@ def check_images(a: ProviderAdapter, ctx: ContractContext) -> None:
     silencio. Com suporte: arquivo invalido -> ImageRejected antes de qualquer envio."""
     import tempfile
     from pathlib import Path
-    tmp = Path(tempfile.mkdtemp(prefix="p2s-contract-img-"))
+    with tempfile.TemporaryDirectory(prefix="p2s-contract-img-") as d:          # A5: a pasta some ao fim da checagem
+        _check_images_in(a, ctx, Path(d))
+
+
+def _check_images_in(a: ProviderAdapter, ctx: ContractContext, tmp) -> None:
     png = tmp / "pixel.png"
     png.write_bytes(_PNG)
     models = a.list_models()
