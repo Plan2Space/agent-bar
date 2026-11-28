@@ -151,6 +151,21 @@ def test_an_engine_failure_is_infra_not_a_model_failure(server, engine_root, tmp
     assert c1["status"] == "INFRA_ERROR" and "SKETCHUP_BUSY" in c1["reasons"][0]
 
 
+def test_an_executor_exception_is_infra_never_a_model_failure(server, engine_root, tmp_path):
+    """Revisao do #159 (MUST): o executor levantou excecao numa chamada CERTA do modelo; o adapter transforma em
+    EXECUTOR_ERROR, mas a chamada precisa ficar registrada e o caso e INFRA_ERROR, nunca FAIL do modelo."""
+    good_script(server)
+    a, host = bench(server, engine_root, tmp_path)
+
+    def boom(call, ctx):
+        raise RuntimeError("executor quebrou")
+    host.inner.tools[0].run = boom                                            # build_room_sample levanta
+    c1 = case(cb.run_model(a, host, "tool-a", ["C1"]), "C1")
+    assert c1["status"] == "INFRA_ERROR" and "EXECUTOR_ERROR" in c1["reasons"][0]
+    assert c1["tool_calls"][0]["arguments"] == {"fixture_ref": "room_001"}
+    assert c1["tool_calls"][0]["result"]["error"]["code"] == "EXECUTOR_ERROR"
+
+
 def test_a_model_without_tools_is_not_supported_and_never_chats(server, engine_root, tmp_path):
     a, host = bench(server, engine_root, tmp_path)
     run = cb.run_model(a, host, "plain-c", ["C0", "C1"])

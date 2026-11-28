@@ -219,7 +219,10 @@ def run_deterministic(job: dict, host: Any, perms: list[dict]) -> tuple[list[dic
                       model_id="deterministic", model_digest=None, provider_version=None, workspace=None,
                       on_permission=_auto_allow(perms, "local_job (deterministico, autorizado pelo job)"),
                       cancel=threading.Event(), emit=lambda k, d: None, provider="runtime", adapter="local_job")
-    rec.run(call, ctx)
+    try:
+        rec.run(call, ctx)
+    except Exception:                                                         # noqa: BLE001 - ja registrada como EXECUTOR_ERROR
+        pass                                                                  # (RecordingHost): vira INFRA no desfecho
     return rec.calls, [], None, None
 
 
