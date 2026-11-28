@@ -1,0 +1,16 @@
+{
+ "schema_version": "1.0.0",
+ "rule": "runs are immutable (fixture sintético no formato do evidence/index.json)",
+ "plants": {
+  "planta_exemplo": {
+   "suite_a": {
+    "E1": {"current_run": "run-1-b", "runs": ["run-1-a", "run-1-b"]},
+    "E2": {"current_run": "run-2-b", "runs": ["run-2-a", "run-2-b"]},
+    "E3": {"current_run": "run-3-b", "runs": ["run-3-a", "run-3-b"]}
+   },
+   "suite_b": {
+    "E1": {"current_run": "run-b1", "runs": ["run-b1"]}
+   }
+  }
+ }
+}
