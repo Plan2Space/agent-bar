@@ -230,12 +230,13 @@ def notices(view):
 
 def test_an_agent_that_opens_in_auto_is_switched_to_manual_and_the_user_is_told(app, tmp_path, monkeypatch):
     monkeypatch.setenv("AGENT_BAR_FAKE_START_MODE", "auto")
+    monkeypatch.setenv("AGENT_BAR_PERMISSION_MODE", "ask")                   # FR-03: em bypass o aviso não aparece
     view, factory = make_view(app, tmp_path)
     try:
         turn(app, view, "echo 2")
         assert factory.made[0].modes["currentModeId"] == "default"
         assert view.mode_box.currentData() == "default" and view.chat.mode == "default"
-        assert any('"auto"' in n and "trocou" in n for n in notices(view))
+        assert any('"auto"' in n and "voltou ao modo" in n for n in notices(view))
     finally:
         dispose(view)
 
