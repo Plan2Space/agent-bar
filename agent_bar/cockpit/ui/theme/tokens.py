@@ -15,6 +15,7 @@ from dataclasses import asdict, dataclass, fields, replace
 
 SCHEMA = "p2s-theme/1"
 HEX = re.compile(r"^#[0-9a-fA-F]{6}$")
+FONT = re.compile(r"^[A-Za-z0-9 ._-]{1,60}$")                                # nome de fonte: nada que vire sintaxe de QSS
 COLOR_ROLES = ("bg", "surface", "surface_alt", "border", "text", "text_muted", "accent", "accent_text", "selection",
                "focus", "success", "warning", "danger", "info")
 DENSITIES = ("compacta", "normal", "confortável")
@@ -47,6 +48,23 @@ class Theme:
     radius: int = 5                    # px
     high_contrast: bool = False
     source: str = ""                   # de onde veio a paleta (licença registrada em SOURCES.md)
+
+    def __post_init__(self) -> None:
+        """Defesa na origem (revisão do #157, MUST): todo Theme, venha do catálogo, do editor ou de JSON importado, só
+        carrega VALORES. Nada que chega ao QSS pode trazer sintaxe: a fonte segue uma allowlist estrita (sem aspas,
+        `;`, chaves, `\\`, `@` nem `url(`), as cores são #rrggbb e os números ficam na faixa."""
+        if not isinstance(self.font_family, str) or not FONT.match(self.font_family):
+            raise ThemeError("font_family inválida: só letras, números, espaço, ponto, hífen e sublinhado (até 60)")
+        for role in COLOR_ROLES:
+            value = getattr(self, role)
+            if not isinstance(value, str) or not HEX.match(value):
+                raise ThemeError(f"cor inválida em {role!r}: use #rrggbb")
+        if not isinstance(self.font_size, int) or isinstance(self.font_size, bool) or not 7 <= self.font_size <= 20:
+            raise ThemeError("font_size: inteiro entre 7 e 20")
+        if self.density not in DENSITIES:
+            raise ThemeError(f"density: uma de {', '.join(DENSITIES)}")
+        if not isinstance(self.radius, int) or isinstance(self.radius, bool) or not 0 <= self.radius <= 16:
+            raise ThemeError("radius: inteiro entre 0 e 16")
 
     def color(self, role: str) -> str:
         if role not in COLOR_ROLES:
@@ -82,7 +100,9 @@ def from_dict(data: object) -> Theme:
         value = body.get(role)
         if not isinstance(value, str) or not HEX.match(value):
             raise ThemeError(f"cor inválida em {role!r}: use #rrggbb")
-    for name in ("key", "name", "category", "font_family", "source"):
+    if not isinstance(body.get("font_family", "Segoe UI"), str) or not FONT.match(body.get("font_family", "Segoe UI")):
+        raise ThemeError("font_family inválida: só letras, números, espaço, ponto, hífen e sublinhado (até 60)")
+    for name in ("key", "name", "category", "source"):
         if name in body and (not isinstance(body[name], str) or len(body[name]) > 120):
             raise ThemeError(f"texto inválido em {name!r}")
     if not re.match(r"^[a-z0-9][a-z0-9-]{1,60}$", str(body.get("key", ""))):
