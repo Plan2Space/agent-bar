@@ -61,7 +61,15 @@ class RecordingHost:
         return self.inner.names()
 
     def run(self, call, ctx) -> dict:
-        res = self.inner.run(call, ctx)
+        try:
+            res = self.inner.run(call, ctx)
+        except Exception as exc:                                              # noqa: BLE001 - registra e devolve igual
+            # o adapter transforma a excecao em EXECUTOR_ERROR; a chamada fica registrada com o mesmo codigo, para
+            # o criterio do caso ver uma falha do EXECUTOR (INFRA), nunca "nenhuma chamada" do modelo
+            self.calls.append({"name": call.name, "arguments": dict(call.arguments), "raw": dict(call.raw),
+                               "result": {"status": "failed", "error": {"code": "EXECUTOR_ERROR",
+                                                                        "message": type(exc).__name__}}})
+            raise
         self.calls.append({"name": call.name, "arguments": dict(call.arguments), "raw": dict(call.raw), "result": res})
         return res
 
