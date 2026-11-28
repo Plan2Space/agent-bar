@@ -258,12 +258,12 @@ def history_rows(tab):
     return [[h.topLevelItem(i).text(c) for c in range(h.columnCount())] for i in range(h.topLevelItemCount())]
 
 
-def test_design_gallery_is_the_main_page_and_shows_three_big_cards(tmp_path):
+def test_design_opens_on_latest_and_the_gallery_shows_three_big_cards(tmp_path):
     from tests.cockpit.gallery_fixture import UNPUB_FAIL
     tab = _gallery_tab(tmp_path)
     try:
-        assert tab.pages.tabText(0) == "Galeria de design" and tab.pages.currentIndex() == 0
-        assert tab.pages.tabText(1) == "Detalhes técnicos"
+        assert tab.pages.tabText(0) == "Últimas" and tab.pages.currentIndex() == 0          # F2: abre nas últimas
+        assert tab.pages.tabText(1) == "Galeria de design" and tab.pages.tabText(2) == "Detalhes técnicos"
         c = tab.design.cards
         assert [c[k].title.text() for k in c] == ["REFERÊNCIA", "ÚLTIMO RENDER", "MELHOR RENDER"]
         ref = c["referência"]
@@ -359,7 +359,7 @@ def test_enlarge_and_technical_details_navigation(tmp_path):
         h = d.history
         h.setCurrentRow(next(i for i in range(h.count()) if h.item(i).data(Qt.ItemDataRole.UserRole) == R4))
         d.tech_btn.click()
-        assert tab.pages.currentIndex() == 1 and tab.details.currentWidget() is tab.gallery_view
+        assert tab.pages.currentWidget() is tab.tech_page and tab.details.currentWidget() is tab.gallery_view
         assert tab.gallery_tree.currentItem().text(3) == R4
         assert "MELHOR: não escolhido" in tab.gallery_detail.text()
     finally:

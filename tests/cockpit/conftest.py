@@ -94,3 +94,10 @@ def isolated_settings(tmp_path, monkeypatch):
     """Nenhum teste do cockpit lê o settings.json REAL (%APPDATA%\agent_bar). Achado de 2026-11-28: com o tema salvo do
     Felipe (github-dark) a suíte quebrava em dezenas de testes de janela que nada têm a ver com tema."""
     monkeypatch.setenv("AGENT_BAR_SETTINGS", str(tmp_path / "settings" / "settings.json"))
+
+
+@pytest.fixture(autouse=True)
+def no_real_design_folders(tmp_path, monkeypatch):
+    """F2: a página "Últimas" do Design lê as pastas do motor e da evidência. Nos testes, uma pasta vazia (o teste que
+    precisa de arquivos injeta os seus)."""
+    monkeypatch.setenv("AGENT_BAR_DESIGN_ROOTS", str(tmp_path / "design-roots-vazio"))
