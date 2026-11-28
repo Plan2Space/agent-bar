@@ -157,8 +157,12 @@ class ProjectOverview(QWidget):
         partial = " (parcial)" if gh.totals_partial else ""
         self.status.setText(f"Última atualização: {_hhmm(ov.read_at)} · "
                             + " · ".join(f"{k}: {v}" for k, v in ov.health))
-        self._tile("Repositórios monitorados", f"{len(gh.repos)}" + (f" ({len(gh.new_repos)} novo)" if gh.new_repos
-                                                                      else ""))
+        new = gh.new_repos or []
+        if gh.new_repos is None:
+            found = " (descoberta de novos: desconhecido)"
+        else:
+            found = f" ({len(new)} novo)" if new else ""
+        self._tile("Repositórios monitorados", f"{len(gh.repos)}{found}")
         self._tile("Agentes ativos", _n(ov.active_agents))
         c = proj.counts if proj.state == "ok" else {}
         self._tile("Tarefas em andamento", _n(c.get(ps.T_IN_PROGRESS)))
@@ -175,14 +179,11 @@ class ProjectOverview(QWidget):
         bad = [k for k, v in ov.health if v != "ok"]
         self._tile("Saúde", "ok" if not bad else "atenção: " + ", ".join(bad))
 
-        _fill(self.repos, [[r.repo + (" (novo)" if r.repo in gh.new_repos else ""),
-                            "ok" if r.state == "ok" else UNKNOWN,
+        _fill(self.repos, [[r.repo,
+                            ("ok" if r.state == "ok" else UNKNOWN) + (" · novo" if r.repo in new else ""),
                             _n(r.open_prs), _n(r.awaiting_review), _n(r.ci_failing), _n(r.merged_recent),
                             r.last_activity or UNKNOWN] for r in gh.repos])
-        for row, r in enumerate(gh.repos):              # o nome na 1ª coluna é o repo puro (busca/teste)
-            self.repos.item(row, 0).setText(r.repo)
-            if r.repo in gh.new_repos:
-                self.repos.item(row, 1).setText("ok · novo")
+        for row, r in enumerate(gh.repos):
             if r.error:
                 self.repos.item(row, 1).setToolTip(r.error)
         _fill(self.fronts, [[f.front, str(f.total), str(f.counts.get(ps.T_IN_PROGRESS, 0)),

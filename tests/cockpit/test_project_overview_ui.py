@@ -140,3 +140,25 @@ def test_open_dialog_for_the_header_entry_point():
     finally:
         dlg.findChild(po.ProjectOverview).shutdown()
         dlg.deleteLater()
+
+
+def test_new_repo_that_failed_is_unknown_not_ok(view):
+    """Review #158 (MUST): "ok · novo" não pode cobrir um repo novo cuja leitura falhou."""
+    view.set_overview(_ov(fail_repos=("Plan2Space/repo-novo",)))
+    row = next(r for r in range(view.repos.rowCount()) if view.repos.item(r, 0).text() == "Plan2Space/repo-novo")
+    assert view.repos.item(row, 1).text() == "desconhecido · novo"
+
+
+def test_discovery_failure_renders_as_unknown(view):
+    from agent_bar.cockpit.github import GhClient
+    from tests.cockpit.test_project_status import Recorded
+
+    class ListDown(Recorded):
+        def __call__(self, argv, timeout):
+            if tuple(argv[1:3]) == ("repo", "list"):
+                return 1, "", "HTTP 502: Bad Gateway"
+            return super().__call__(argv, timeout)
+    view.set_overview(ps.collect_overview(GhClient(exe=[__file__], runner=ListDown()), "Plan2Space", now=NOW))
+    txt = _text(view)
+    assert "Repositórios monitorados\n8 (descoberta de novos: desconhecido)" in txt
+    assert "atenção: github" in txt
