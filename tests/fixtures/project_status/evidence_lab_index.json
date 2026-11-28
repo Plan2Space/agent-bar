@@ -1,0 +1,15 @@
+{
+ "schema_version": "1.0.0",
+ "models": {
+  "provedor-a/modelo-x@v1": {
+   "provider": "provedor-a", "model_id": "modelo-x", "model_version": "v1", "model_digest": null,
+   "runs": ["lab/runs/provedor-a/modelo-x@v1/bench/r1", "lab/runs/provedor-a/modelo-x@v1/bench/r2",
+            "lab/runs/provedor-a/modelo-x@v1/bench/r3", "lab/runs/provedor-a/modelo-x@v1/bench/r4"]
+  },
+  "provedor-b/modelo-y@v2": {
+   "provider": "provedor-b", "model_id": "modelo-y", "model_version": "v2", "model_digest": null,
+   "runs": ["lab/runs/provedor-b/modelo-y@v2/bench/r1", "lab/runs/provedor-b/modelo-y@v2/bench/r2"]
+  }
+ },
+ "experiments": {}
+}

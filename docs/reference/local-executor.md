@@ -73,7 +73,7 @@ tipado sem executar nada; resposta em nome de outro modelo (`done.model` diferen
 
 ## Render pelo modelo local (LAB-16)
 
-Quando o motor tem a fixture `plan_alt_5x3_e3a` (sala 5x3 com cama, `sketchup-mcp-next#67`) e a render_spec de
+Quando o motor tem a fixture `plan_alt_5x3_e3a` (sala 5x3 com cama, no motor `sketchup-mcp-next`) e a render_spec de
 amostra, o perfil publica uma segunda ferramenta, `render_room_sample(run_id, cameras)`:
 
 - o modelo só nomeia um `run_id` de build `completed` deste executor com render_spec, e 1 ou 2 câmeras da spec;
@@ -102,7 +102,7 @@ amostra, o perfil publica uma segunda ferramenta, `render_room_sample(run_id, ca
 
 ## Guardas de borda do motor (`--via tool-cli`)
 
-O build chama `python -m p2s_engine.run … --via tool-cli` (sketchup-mcp-next#66/#72): o próprio motor recusa, antes de
+O build chama `python -m p2s_engine.run … --via tool-cli` (no motor `sketchup-mcp-next`): o próprio motor recusa, antes de
 qualquer I/O e antes de abrir o SketchUp, fixture fora de `tests/fixtures/`/`runs/`, saída fora de `runs/`, `run_id`
 fora do padrão e SketchUp/V-Ray já abertos. Nesse caso não há `run_manifest`; o motor deixa
 `{status: BLOCKED, error: {code, message}}` no stdout, que o executor grava em `<request_id>.engine.stdout.json` (o
@@ -110,3 +110,37 @@ stderr fica no `.engine.log`) e registra com o código exato (`PATH_NOT_ALLOWED`
 `BUSY_UNKNOWN`), não como `NO_MANIFEST`. Desde o #72 @4f1a799, SketchUp/V-Ray ocupado é conferido por último,
 depois da validação: aí há `run_manifest` com status `SKETCHUP_UNAVAILABLE` e `error.code` exato, e o executor registra
 esse código (o SketchUp não abriu; nenhum papel de construção é creditado). O mesmo vale para o render.
+
+## Benchmark de compatibilidade modelo × motor (C0–C9)
+
+`python -m agent_bar.platform.compat_bench --model llama3.1:8b --model deepseek-r1:14b --cases C0,C1,C2 --out <pasta>`
+mede se cada modelo local OPERA o mesmo motor pelas mesmas ferramentas do Studio. Não mede se o modelo "gera
+geometria": construção, validação, `.skp` e render são do motor.
+
+- Mesmo caminho do produto (`executor_adapter`: OllamaAdapter + ToolBox). Todos os modelos recebem as mesmas
+  ferramentas, as mesmas descrições, o mesmo system prompt, as mesmas opções de inferência (`temperature 0`, `seed 42`,
+  via `OllamaAdapter.inference_options`, vazio no Studio) e a mesma permissão (auto `allow_once` pelo runner, como o
+  modo bypass). Tudo isso fica em `conditions`, com sha256 das ferramentas e do system prompt.
+- Cada caso roda numa conversa nova, com texto de prompt fixo. O critério sai do que chegou ao executor e do resultado
+  do motor, nunca da frase do modelo.
+- Status: `PASS`, `FAIL` (erro do modelo: ferramenta, argumento ou fixture errada, nenhuma chamada, chamada a mais,
+  recusa da validação do Studio), `INFRA_ERROR` (chamada certa, mas o motor, a máquina ou o provedor falhou: não conta
+  contra o modelo), `BLOCKED` (falta ferramenta no motor; motivo e dono), `NOT_RUN` e `NOT_SUPPORTED` (o modelo não
+  anuncia tools).
+- Sem Claude como fallback. `assistance` registra qualquer ajuda externa e, hoje, é sempre vazio.
+- Os casos BLOCKED citam a lacuna exata (`gaps`) da matriz do motor (`contracts/tool_compat_matrix.json`,
+  no motor `sketchup-mcp-next`), com o título lido da matriz do motor fixado. `conditions.matrix` registra se ela existe
+  e o sha256 dela.
+- Resultado por eixo (`operation`, `planning`, `layout`), sem nota única. Cada modelo gera
+  `bench-<stamp>-<modelo>/benchmark_run.json` (`p2s.mcp_compat.run.v1`) e nunca sobrescreve um run anterior.
+
+| Caso | Eixo | Hoje |
+|---|---|---|
+| C0 Descoberta | operação | listar as ferramentas publicadas sem chamar nenhuma e sem inventar outra (se chamar, a permissão é negada: nada abre) |
+| C1 Chamada simples | operação | `build_room_sample(room_001)`, com nome e argumento dados no pedido |
+| C2 Construção existente | operação | "sala de 5 x 3 metros com cama" → o modelo escolhe `plan_alt_5x3_e3a` pela descrição |
+| C3 Parametrização | operação | BLOCKED, G1 (write_fixture fora do motor; Frente A) |
+| C4 Sequência, C5 Recuperação, C6 Render | planejamento/operação | NOT_RUN (próximos) |
+| C7 Refinamento | planejamento | BLOCKED, G4 e G10 (sem refinamento e sem troca de material; Frente A, `material_overrides` no motor) |
+| C8 Fluxo até evidência | planejamento | BLOCKED, G5 e G3 (publicação e inspeção avulsa fora do motor; Frentes A e C) |
+| C9 Suíte 01 | layout | BLOCKED, G2 (a Suíte 01 rc7b/rc8 existe no motor, mas não na allowlist publicada; falta `list_fixtures` no motor) |

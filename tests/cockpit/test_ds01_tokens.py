@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 
@@ -25,6 +26,11 @@ def test_the_first_batch_has_github_high_contrast_and_the_eight_originals():
     assert any(t.high_contrast and t.dark for t in C.THEMES) and any(t.high_contrast and not t.dark for t in C.THEMES)
     assert set(ORIGINALS) <= names
     assert len({t.key for t in C.THEMES}) == len(C.THEMES)                     # chaves únicas
+
+
+def test_the_catalog_reaches_forty_distinct_themes():
+    """Pedido do Felipe (§5.2): pelo menos 40 temas completos e distintos (a distinção é o teste de duplicatas)."""
+    assert len(C.THEMES) >= 40
 
 
 def test_the_default_is_todays_look():
@@ -47,9 +53,28 @@ def test_every_theme_is_readable(theme):
     assert T.contrast(theme.focus, theme.bg) >= 3.0, theme.key
 
 
+SOURCES = (Path(C.__file__).with_name("SOURCES.md")).read_text(encoding="utf-8")
+
+
 @pytest.mark.parametrize("theme", C.THEMES, ids=lambda t: t.key)
-def test_every_theme_has_its_source_recorded(theme):
-    assert theme.source in (C.PRIMER, C.P2S)
+def test_every_theme_has_its_source_and_license_recorded(theme):
+    assert theme.source
+    if theme.source not in (C.PRIMER, C.P2S):
+        repo = theme.source.split(" (")[0]                                       # "owner/repo (licença)"
+        assert repo in SOURCES, f"{theme.key}: fonte {repo} não registrada no SOURCES.md"
+        assert theme.name in SOURCES or theme.name.split()[0] in SOURCES
+
+
+def _rgb_distance(a: str, b: str) -> float:
+    return sum((int(a[i:i + 2], 16) - int(b[i:i + 2], 16)) ** 2 for i in (1, 3, 5)) ** 0.5
+
+
+def test_the_catalog_has_no_near_duplicates():
+    """Distintos de verdade: dois temas não podem ter fundo, superfície, texto E destaque quase iguais (RGB)."""
+    for i, a in enumerate(C.THEMES):
+        for b in C.THEMES[i + 1:]:
+            same = all(_rgb_distance(a.color(r), b.color(r)) < 24 for r in ("bg", "surface", "text", "accent"))
+            assert not same, f"{a.key} e {b.key} são quase idênticos"
 
 
 def test_states_never_rely_on_color_alone():

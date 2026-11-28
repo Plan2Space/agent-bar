@@ -193,8 +193,9 @@ def test_prs_tab_shows_auth_error(gh, monkeypatch):
     monkeypatch.setenv("FAKE_GH_MODE", "noauth")
     tab = PrsTab(gh, repos=[REPO])
     try:
-        tab.refresh()
-        assert wait(lambda: "[auth]" in tab.status.text())
+        tab.refresh()                                                          # FR-04: o componente, não "[auth] ..."
+        assert wait(lambda: tab.connect_box.kind == "auth" and not tab.connect_box.isHidden())
+        assert "[auth]" not in tab.status.text() and tab.body.isHidden()
     finally:
         dispose(tab)
 
