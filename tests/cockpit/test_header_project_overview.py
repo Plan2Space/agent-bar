@@ -76,3 +76,21 @@ def test_clicking_opens_the_project_overview_window_without_changing_the_page(wi
         assert window.collect_calls == ["leu"]                                 # a leitura já foi disparada
     finally:
         dlg.close()
+
+
+def test_the_button_still_works_after_the_overview_window_is_closed_and_destroyed(window):
+    """Revisão do #225 (MUST): o diálogo tem WA_DeleteOnClose; depois de fechado e destruído, o clique seguinte
+    chamava isVisible() num objeto C++ morto (RuntimeError) e nada abria."""
+    window.overview_btn.click()
+    first = window._overview
+    first.close()
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)       # o Qt destrói o diálogo fechado
+    _APP.processEvents()
+    assert window._overview is None                                           # a referência morre com o diálogo
+    window.overview_btn.click()                                               # antes: RuntimeError, nada abria
+    second = window._overview
+    try:
+        assert second is not None and second is not first and second.isVisible()
+    finally:
+        second.close()
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)

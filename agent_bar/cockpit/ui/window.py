@@ -278,14 +278,25 @@ class CockpitWindow(QMainWindow):
 
     def open_overview(self):
         """A Central de acompanhamento (Frente D) numa janela não-modal; a leitura já começa ao abrir."""
+        from shiboken6 import isValid
+
         from agent_bar.cockpit.ui.project_overview import open_project_overview
-        if self._overview is not None and self._overview.isVisible():
-            self._overview.raise_()
-            self._overview.activateWindow()
-            return self._overview
+        dlg = self._overview
+        if dlg is not None and isValid(dlg) and dlg.isVisible():
+            dlg.raise_()
+            dlg.activateWindow()
+            return dlg
         kw = {} if self.overview_collect is None else {"collect": self.overview_collect}
-        self._overview = open_project_overview(self, **kw)
-        return self._overview
+        dlg = open_project_overview(self, **kw)
+        # revisão do #225: o diálogo tem WA_DeleteOnClose; ao ser destruído, a referência morre junto (senão o próximo
+        # clique tocaria um objeto C++ já apagado e nada abriria)
+        dlg.destroyed.connect(lambda _obj=None, d=dlg: self._forget_overview(d))
+        self._overview = dlg
+        return dlg
+
+    def _forget_overview(self, dlg) -> None:
+        if self._overview is dlg:
+            self._overview = None
 
     def current_page(self):
         """O objeto que o Felipe está vendo: a área atual, Configurações, ou a subpágina de Avançado."""
