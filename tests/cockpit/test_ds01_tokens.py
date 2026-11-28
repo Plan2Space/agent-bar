@@ -1,0 +1,136 @@
+"""DS-01 (P2S-STUDIO-DESIGN-SYSTEM-001; pedido do Felipe de 2026-11-27, §5.2 e §5.4): tokens semânticos versionados.
+
+O catálogo só entra se for legível: texto e texto secundário ≥ 4,5:1 sobre o fundo e sobre a superfície (≥ 7:1 nos temas
+de alto contraste), estados (sucesso/aviso/erro/info) ≥ 4,5:1 sobre a superfície (são usados como texto), texto do botão
+principal ≥ 4,5:1, anel de foco ≥ 3:1 sobre o fundo. Estado nunca só por cor: cada um tem uma palavra.
+Tema importado é DADO: campo desconhecido, cor fora de #rrggbb e número fora da faixa são recusados.
+"""
+from __future__ import annotations
+
+import json
+from dataclasses import replace
+from pathlib import Path
+
+import pytest
+
+from agent_bar.cockpit.ui.theme import catalog as C
+from agent_bar.cockpit.ui.theme import tokens as T
+
+ORIGINALS = ("Studio Sage", "Industrial Black", "Walnut Boutique", "Bronze Luxury", "Concrete", "Architectural White",
+             "Warm Studio", "Graphite")
+
+
+def test_the_first_batch_has_github_high_contrast_and_the_eight_originals():
+    names = {t.name for t in C.THEMES}
+    assert {"GitHub Light", "GitHub Dark", "GitHub Dark Dimmed"} <= names
+    assert any(t.high_contrast and t.dark for t in C.THEMES) and any(t.high_contrast and not t.dark for t in C.THEMES)
+    assert set(ORIGINALS) <= names
+    assert len({t.key for t in C.THEMES}) == len(C.THEMES)                     # chaves únicas
+
+
+def test_the_catalog_reaches_forty_distinct_themes():
+    """Pedido do Felipe (§5.2): pelo menos 40 temas completos e distintos (a distinção é o teste de duplicatas)."""
+    assert len(C.THEMES) >= 40
+
+
+def test_the_default_is_todays_look():
+    d = C.get(C.DEFAULT)
+    assert (d.bg, d.text, d.border) == ("#16161a", "#e6e6e6", "#3a3a44")
+
+
+@pytest.mark.parametrize("theme", C.THEMES, ids=lambda t: t.key)
+def test_every_theme_is_readable(theme):
+    need = 7.0 if theme.high_contrast else 4.5
+    for fg in ("text", "text_muted"):
+        for bg in ("bg", "surface"):
+            got = T.contrast(theme.color(fg), theme.color(bg))
+            assert got >= need, f"{theme.key}: {fg} sobre {bg} = {got:.2f}"
+    for state in ("success", "warning", "danger", "info"):
+        got = T.contrast(theme.color(state), theme.surface)
+        assert got >= 4.5, f"{theme.key}: {state} sobre surface = {got:.2f}"
+    assert T.contrast(theme.accent_text, theme.accent) >= 4.5, theme.key
+    assert T.contrast(theme.text, theme.selection) >= 4.5, theme.key
+    assert T.contrast(theme.focus, theme.bg) >= 3.0, theme.key
+
+
+SOURCES = (Path(C.__file__).with_name("SOURCES.md")).read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("theme", C.THEMES, ids=lambda t: t.key)
+def test_every_theme_has_its_source_and_license_recorded(theme):
+    assert theme.source
+    if theme.source not in (C.PRIMER, C.P2S):
+        repo = theme.source.split(" (")[0]                                       # "owner/repo (licença)"
+        assert repo in SOURCES, f"{theme.key}: fonte {repo} não registrada no SOURCES.md"
+        assert theme.name in SOURCES or theme.name.split()[0] in SOURCES
+
+
+def _rgb_distance(a: str, b: str) -> float:
+    return sum((int(a[i:i + 2], 16) - int(b[i:i + 2], 16)) ** 2 for i in (1, 3, 5)) ** 0.5
+
+
+def test_the_catalog_has_no_near_duplicates():
+    """Distintos de verdade: dois temas não podem ter fundo, superfície, texto E destaque quase iguais (RGB)."""
+    for i, a in enumerate(C.THEMES):
+        for b in C.THEMES[i + 1:]:
+            same = all(_rgb_distance(a.color(r), b.color(r)) < 24 for r in ("bg", "surface", "text", "accent"))
+            assert not same, f"{a.key} e {b.key} são quase idênticos"
+
+
+def test_states_never_rely_on_color_alone():
+    assert set(T.STATUS_WORD) == {"success", "warning", "danger", "info"}
+    assert all(word.strip() for word in T.STATUS_WORD.values())
+
+
+def test_a_theme_round_trips_through_json():
+    t = C.get("graphite")
+    assert T.from_dict(json.loads(json.dumps(t.to_dict()))) == t
+
+
+@pytest.mark.parametrize("bad, why", [
+    ({"schema": "p2s-theme/9"}, "versão"),
+    ({"exec": "import os"}, "campo desconhecido"),
+    ({"text": "red"}, "cor inválida"),
+    ({"text": "#12345"}, "cor inválida"),
+    ({"font_size": 99}, "font_size"),
+    ({"density": "gigante"}, "density"),
+    ({"key": "../../x"}, "key"),
+    ({"radius": "5; drop"}, "radius"),
+    # revisão do #157 (MUST): font_family entrava cru no QSS global e um tema injetava regras
+    ({"font_family": 'Segoe UI"; } QPushButton { color:#16161a; background:#16161a; } QX { a:"'}, "font_family"),
+    ({"font_family": "Segoe UI; color:red"}, "font_family"),
+    ({"font_family": "Segoe{UI}"}, "font_family"),
+    ({"font_family": "Segoe\\UI"}, "font_family"),
+    ({"font_family": "@text"}, "font_family"),
+    ({"font_family": "url(file:///C:/x)"}, "font_family"),
+    ({"font_family": "x" * 61}, "font_family"),
+    ({"font_family": ""}, "font_family"),
+])
+def test_an_imported_theme_is_only_data(bad, why):
+    data = C.get("graphite").to_dict() | bad
+    with pytest.raises(T.ThemeError, match=why):
+        T.from_dict(data)
+
+
+@pytest.mark.parametrize("family", ['Segoe UI"; } QX { a:"', "a;b", "a{b", "a}b", "a\\b", "@bg", "a'b", "url(x)"])
+def test_no_theme_can_carry_qss_syntax_in_its_font_even_when_built_in_code(family):
+    """Defesa na origem: o Theme recusa a fonte perigosa em QUALQUER caminho (catálogo, editor, importação)."""
+    with pytest.raises(T.ThemeError, match="font_family"):
+        replace(C.get("graphite"), font_family=family)
+
+
+@pytest.mark.parametrize("theme", C.THEMES, ids=lambda t: t.key)
+def test_every_textual_value_that_reaches_the_qss_is_safe(theme):
+    from agent_bar.cockpit.ui.theme import qt as Q
+    for name, value in Q.values(theme).items():
+        assert not set(value) & set("\"';{}\\@"), f"{theme.key}: {name}={value!r}"
+
+
+def test_search_and_category_filter():
+    assert [t.key for t in C.find("dimmed")] == ["github-dark-dimmed"]
+    assert all(t.category == "GitHub" for t in C.find(category="GitHub")) and len(C.find(category="GitHub")) == 3
+
+
+def test_mix_and_spacing():
+    assert T.mix("#000000", "#ffffff", 0.5) == "#808080"
+    assert replace(C.get("graphite"), density="compacta").spacing() < C.get("graphite").spacing()
