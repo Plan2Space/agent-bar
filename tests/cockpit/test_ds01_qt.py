@@ -50,7 +50,7 @@ def test_every_theme_renders_a_complete_stylesheet_and_palette(theme):
 
 
 def test_an_unknown_token_is_an_error_not_an_old_color():
-    with pytest.raises(KeyError, match="txet"):
+    with pytest.raises(KeyError, match="token desconhecido no estilo: txet"):
         Q.render("color:@txet", C.get("graphite"))
 
 
