@@ -88,8 +88,10 @@ class RepoSnapshot:
 @dataclass(frozen=True)
 class GithubOverview:
     repos: list[RepoSnapshot]
-    new_repos: list[str]
+    new_repos: list[str] | None             # None = a descoberta falhou (desconhecido), não "nenhum repo novo"
     read_at: float
+    discovery: str = "ok"                   # "ok" ou UNKNOWN
+    discovery_error: str = ""
 
     def repo(self, name: str) -> RepoSnapshot:
         return next(r for r in self.repos if r.repo == name)
@@ -128,8 +130,14 @@ def _snapshot(client: GhClient, repo: str, merged_limit: int) -> RepoSnapshot:
 def collect_github(client: GhClient, org: str, now: float, merged_limit: int = 20) -> GithubOverview:
     """Os 8 repos monitorados sempre entram; os que a org listar a mais aparecem também e em ``new_repos``."""
     base = [f"{org}/{n}" for n in MONITORED]
-    listed = client.repos(org)
-    extra = sorted(r for r in listed if r not in base)
+    try:   # direto no `gh repo list`: GhClient.repos() cai na lista padrão em silêncio, o que esconderia a falha
+        data = client._json(("repo", "list"), None, {"--json": "name", "--limit": "100", "--no-archived": None},
+                            positional=[org])
+    except GhError as exc:
+        snaps = [_snapshot(client, r, merged_limit) for r in base]
+        return GithubOverview(snaps, None, now, UNKNOWN, f"{exc.kind}: {exc.message}")
+    listed = {f"{org}/{d['name']}" for d in data or [] if isinstance(d, dict) and d.get("name")}
+    extra = sorted(listed - set(base))
     return GithubOverview([_snapshot(client, r, merged_limit) for r in base + extra], extra, now)
 
 
@@ -209,11 +217,13 @@ class Overview:
 
 def _github_health(gh: GithubOverview) -> str:
     bad = [r.repo for r in gh.repos if r.state == UNKNOWN]
+    disc = f"descoberta de repos novos desconhecida ({gh.discovery_error})" if gh.discovery != "ok" else ""
     if not bad:
-        return "ok"
+        return f"parcial ({disc})" if disc else "ok"
     if len(bad) == len(gh.repos):
         return "indisponível"
-    return f"parcial ({len(bad)} sem resposta: {', '.join(b.split('/')[-1] for b in bad)})"
+    tail = f"; {disc}" if disc else ""
+    return f"parcial ({len(bad)} sem resposta: {', '.join(b.split('/')[-1] for b in bad)}{tail})"
 
 
 def collect_overview(client: GhClient, org: str, now: float, project_number: int = 1) -> Overview:

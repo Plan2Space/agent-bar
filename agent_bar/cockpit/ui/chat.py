@@ -40,7 +40,7 @@ from agent_bar.cockpit.acp import (
     find_config,
     mode_is_safe,
 )
-from agent_bar.cockpit.library import compose_prompt
+from agent_bar.cockpit.library import SEPARATOR, compose_prompt
 from agent_bar.cockpit.permission_broker import PermissionBroker
 from agent_bar.cockpit.permission_inbox import InboxClosed, PermissionInbox
 from agent_bar.cockpit.store import Chat, ChatStore, data_dir
@@ -175,6 +175,7 @@ class ChatView(QWidget):
                  profiles_fn: Callable[[], list[prof.AgentProfile]] = prof.profiles,
                  workspaces_fn: Callable[[], list[Path]] = prof.workspaces,
                  context_provider: Callable[[], str] | None = None,
+                 context_sent: Callable[[list[str]], None] | None = None,
                  provider_factory: Callable[..., object] | None = None,
                  inbox: PermissionInbox | None = None, broker: PermissionBroker | None = None,
                  session_gate: Callable[[prof.AgentProfile], str | None] | None = None,
@@ -185,6 +186,7 @@ class ChatView(QWidget):
         self.mcp_config_fn = mcp_config_fn or (lambda: acp_mcp.load(data_dir() / acp_mcp.CONFIG_NAME))
         self.mcp = acp_mcp.McpConfig()                                    # o que a sessão atual declarou (UX-12)
         self.context_provider = context_provider                          # F4: biblioteca (texto exato do preview)
+        self.context_sent = context_sent                                  # UX-13: quem anexou é avisado do envio
         self.store = store or ChatStore()
         self.rt = runtime or AsyncRuntime("cockpit-chat")
         self._own_rt = runtime is None
@@ -617,14 +619,23 @@ class ChatView(QWidget):
         self.input.clear()
         self.empty.setVisible(False)
         self._add(UserBubble(text))
-        context = self.context_provider() if self.context_provider else ""
+        raw = self.context_provider() if self.context_provider else ""
+        parts = [(n, t) for n, t in raw if t] if isinstance(raw, list) else ([("biblioteca", raw)] if raw else [])
+        context = SEPARATOR.join(t for _n, t in parts)                         # UX-13: Biblioteca e/ou Design
         if context:
-            self._add(Notice(f"biblioteca anexada ao prompt: {len(context)} caracteres (texto exato na aba Biblioteca)", "#4aa8ff"))
+            names = [n for n, _t in parts]
+            if names == ["biblioteca"]:
+                self._add(Notice(f"biblioteca anexada ao prompt: {len(context)} caracteres (texto exato na aba Biblioteca)", "#4aa8ff"))
+            else:
+                self._add(Notice(f"anexado ao prompt ({' + '.join(names)}): {len(context)} caracteres (texto exato no "
+                                 "preview de cada um)", "#4aa8ff"))
             self.chat.add("user", text, context_chars=len(context))
         else:
             self.chat.add("user", text)
         full = compose_prompt(context, text)
         self.store.save(self.chat)
+        if parts and self.context_sent is not None:                         # o envio efetivo consome a escolha
+            self.context_sent([n for n, _t in parts])
         self._refresh_history()
         self._set_busy(True)
         self._start_wait()                                                   # sinal desde o envio, antes do 1º token
