@@ -5,7 +5,7 @@ DE PERMITIR SO UMA VEZ NAO EXISTE DEIXA AS PERMISSOES DOS AGENTS BYPASS SEMPRE")
   session/request_permission e portanto não deixaria registro); quem aprova sozinho é o NOSSO broker;
 - pedido de permissão que ainda chegar é aprovado sem cartão nem diálogo, e REGISTRADO (Inbox: decidido por "bypass";
   Notificações: item informativo, não ACTION_REQUIRED);
-- o Chat e a Saúde dizem "permissões: bypass (sempre)";
+- o Chat diz PM.sentence (FR-03: uma frase só) e a Saúde "permissões: bypass (sempre)";
 - Configurações → Geral volta a pedir (desligado por padrão);
 - operação irreversível (código digitado) continua pedindo até o Felipe decidir sobre ela.
 Agente ACP de teste, sem rede."""
@@ -143,7 +143,7 @@ def test_bypass_keeps_the_agent_in_its_asking_mode_so_every_tool_call_is_request
     assert agent_texts(v) == ["outcome=selected:allow"]                           # houve request_permission + allow
     assert [(e.status, e.decided_by) for e in v.inbox.history()] == [("ALLOWED", "bypass")]
     assert modes == []                                                            # nenhum diálogo de modo arriscado
-    assert v.permission_label.text() == PM.label(PM.BYPASS)
+    assert v.permission_label.text() == PM.sentence(PM.BYPASS)                    # FR-03: a frase única do Chat
 
 
 def test_in_bypass_an_agent_that_opens_in_a_mode_that_never_asks_is_moved_to_the_asking_one(view, monkeypatch):
@@ -164,7 +164,7 @@ def test_ask_mode_brings_back_the_card(view, monkeypatch):
     v.send("perm")
     assert wait(lambda: bool(v.transcript.findChildren(W.PermissionCard)))
     assert v.inbox.history()[0].status == "PENDING"
-    assert v.permission_label.text() == PM.label(PM.ASK)
+    assert v.permission_label.text() == PM.sentence(PM.ASK)
     v.stop()
     wait(lambda: not v.busy)
 
