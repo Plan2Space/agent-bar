@@ -30,6 +30,7 @@ from PySide6.QtWidgets import (
 from agent_bar.cockpit import acp_mcp
 from agent_bar.cockpit import permission_mode as PM
 from agent_bar.cockpit import profiles as prof
+from agent_bar.cockpit import project_folders as PF
 from agent_bar.cockpit import roles as R
 from agent_bar.cockpit.acp import (
     AcpClient,
@@ -40,11 +41,12 @@ from agent_bar.cockpit.acp import (
     find_config,
     mode_is_safe,
 )
-from agent_bar.cockpit.library import compose_prompt
+from agent_bar.cockpit.library import SEPARATOR, compose_prompt
 from agent_bar.cockpit.permission_broker import PermissionBroker
 from agent_bar.cockpit.permission_inbox import InboxClosed, PermissionInbox
 from agent_bar.cockpit.store import Chat, ChatStore, data_dir
 from agent_bar.cockpit.ui.composer import Composer, load_enter_sends, save_enter_sends
+from agent_bar.cockpit.ui.theme.qt import style
 from agent_bar.cockpit.ui.widgets import (
     ExecutorOffer,
     Notice,
@@ -113,6 +115,10 @@ def _confirm_irreversible_dialog(req: PermissionRequest, parent: QWidget) -> boo
     return bool(gate.confirmed)
 
 
+def _choose_folder_dialog(parent: QWidget) -> str:
+    return QFileDialog.getExistingDirectory(parent, "Pasta do projeto")
+
+
 RISKY_SUFFIX = " (decide sem pedir permissão)"
 
 
@@ -175,16 +181,20 @@ class ChatView(QWidget):
                  profiles_fn: Callable[[], list[prof.AgentProfile]] = prof.profiles,
                  workspaces_fn: Callable[[], list[Path]] = prof.workspaces,
                  context_provider: Callable[[], str] | None = None,
+                 context_sent: Callable[[list[str]], None] | None = None,
                  provider_factory: Callable[..., object] | None = None,
                  inbox: PermissionInbox | None = None, broker: PermissionBroker | None = None,
                  session_gate: Callable[[prof.AgentProfile], str | None] | None = None,
                  permission_mode_fn: Callable[[], str] | None = None,
-                 mcp_config_fn: Callable[[], acp_mcp.McpConfig] | None = None) -> None:
+                 mcp_config_fn: Callable[[], acp_mcp.McpConfig] | None = None,
+                 choose_folder: Callable[[QWidget], str] | None = None) -> None:
         super().__init__()
+        self.choose_folder = choose_folder or _choose_folder_dialog           # FR-02: o seletor de pasta (falso no teste)
         self.permission_mode_fn = permission_mode_fn or PM.current           # Felipe: bypass sempre (reversível)
         self.mcp_config_fn = mcp_config_fn or (lambda: acp_mcp.load(data_dir() / acp_mcp.CONFIG_NAME))
         self.mcp = acp_mcp.McpConfig()                                    # o que a sessão atual declarou (UX-12)
         self.context_provider = context_provider                          # F4: biblioteca (texto exato do preview)
+        self.context_sent = context_sent                                  # UX-13: quem anexou é avisado do envio
         self.store = store or ChatStore()
         self.rt = runtime or AsyncRuntime("cockpit-chat")
         self._own_rt = runtime is None
@@ -267,8 +277,11 @@ class ChatView(QWidget):
                 self.agent_box.model().item(self.agent_box.count() - 1).setEnabled(False)
         first_ok = next((i for i, p in enumerate(self.profiles) if p.available()[0]), 0)
         self.agent_box.setCurrentIndex(first_ok)
+        self.prefs_path = data_dir() / "preferences.json"
         self.workspace_box = FitCombo(10, full_tip=True)
-        for s in spaces:
+        remembered = PF.load(self.prefs_path)                                # FR-02: a última escolha vem primeiro
+        seen = {os.path.normcase(str(p)) for p in remembered}
+        for s in [*remembered, *(s for s in spaces if os.path.normcase(str(s)) not in seen)]:
             self.workspace_box.addItem(s.name, str(s))
         self.workspace_box.addItem("Escolher pasta…", "")
         self.mode_box = FitCombo(6)
@@ -322,6 +335,18 @@ class ChatView(QWidget):
         bl.addWidget(self.reconnect_btn)
         self.banner.setVisible(False)
         lay.addWidget(self.banner)
+        self.folder_empty = QFrame()                                         # FR-02: sem pasta, orientar (não é erro)
+        style(self.folder_empty, "QFrame{background:@surface_alt;border:1px solid @accent;border-radius:6px}")
+        fl = QHBoxLayout(self.folder_empty)
+        fl.setContentsMargins(10, 8, 10, 8)
+        self.folder_empty_label = QLabel("Escolha a pasta do seu projeto para começar. O agente trabalha dentro dela.")
+        self.folder_empty_label.setWordWrap(True)
+        style(self.folder_empty_label, "color:@text;font-size:12px;border:0")   # DS-01: tokens, não cor solta
+        self.choose_folder_btn = QPushButton("Escolher pasta…")
+        self.choose_folder_btn.setStyleSheet(BTN_CSS)
+        fl.addWidget(self.folder_empty_label, 1)
+        fl.addWidget(self.choose_folder_btn)
+        lay.addWidget(self.folder_empty)
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
         self.scroll.setFrameShape(QFrame.Shape.NoFrame)
@@ -332,11 +357,10 @@ class ChatView(QWidget):
         self.tlay.addStretch(1)
         self.scroll.setWidget(self.transcript)
         lay.addWidget(self.scroll, 1)
-        self.empty = Notice("Converse com um agente de código no workspace escolhido. Enter envia, Shift+Enter quebra linha. "
-                            "Toda ferramenta que pedir permissão abre um diálogo; fechar o diálogo recusa.")
+        self.empty = Notice("Converse com um agente de código na pasta do projeto escolhida. Enter envia, "
+                            "Shift+Enter quebra linha.")                     # FR-03: permissão só no rodapé
         self._add(self.empty)
         bottom = QHBoxLayout()
-        self.prefs_path = data_dir() / "preferences.json"
         self.input = Composer(enter_sends=load_enter_sends(self.prefs_path))
         self.input.setFixedHeight(84)
         self.input.setStyleSheet("QPlainTextEdit{background:#1e1e23;color:#e6e6e6;border:1px solid #3a3a44;"
@@ -355,7 +379,8 @@ class ChatView(QWidget):
         lay.addLayout(bottom)
         self.status = QLabel("desconectado")
         self.status.setStyleSheet("color:#8f8f98;font-size:11px")
-        self.permission_label = QLabel(PM.label(self.permission_mode_fn()))  # o Felipe sabe em que modo está
+        self.permission_label = QLabel(PM.sentence(self.permission_mode_fn()))  # FR-03: a ÚNICA frase de permissão
+        self.permission_label.setWordWrap(True)
         self.permission_label.setStyleSheet("color:#8f8f98;font-size:11px")
         self.mcp_label = QLabel("")                                            # UX-12: o que a sessão declarou
         self.mcp_label.setStyleSheet("color:#8f8f98;font-size:11px")
@@ -371,6 +396,7 @@ class ChatView(QWidget):
         self.enter_box.toggled.connect(self._enter_pref_changed)
         self.new_btn.clicked.connect(self.new_chat)
         self.reconnect_btn.clicked.connect(self.reconnect)
+        self.choose_folder_btn.clicked.connect(self._pick_folder)
         self.agent_box.currentIndexChanged.connect(lambda _i: self._restart("agente trocado"))
         self.workspace_box.activated.connect(self._workspace_activated)
         self.mode_box.activated.connect(self._mode_activated)
@@ -379,6 +405,11 @@ class ChatView(QWidget):
         self.history_box.activated.connect(self._history_activated)
         self.chat.workspace = self.workspace()
         self.chat.agent = self.profile().key
+        self._show_folder_state()
+
+    def _show_folder_state(self) -> None:
+        """FR-02: sem pasta escolhida, o estado vazio com "Escolher pasta…"; com pasta, some."""
+        self.folder_empty.setVisible(not self.workspace())
 
     # ------------------------------------------------------------------------------------------------ helpers
     def profile(self) -> prof.AgentProfile:
@@ -473,8 +504,14 @@ class ChatView(QWidget):
         if self.client is not None:
             return
         ws = self.workspace()
-        if not ws:
-            self._show_error(None, "escolha um workspace")
+        if not ws:                                                           # FR-02: orientar, não acusar erro
+            if self.pending_prompt is not None:                              # o texto volta ao campo; nada se perde
+                self._set_busy(False)
+                self.pending_prompt = None
+                self._restore_draft()
+            self.banner.setVisible(False)
+            self._show_folder_state()
+            self.status.setText("escolha a pasta do projeto para começar")
             return
         refusal = self.session_gate(self.profile()) if self.session_gate is not None else None
         if refusal:                                                          # limite medido do provedor (F5)
@@ -552,13 +589,29 @@ class ChatView(QWidget):
 
     def _workspace_activated(self, idx: int) -> None:
         if not self.workspace_box.itemData(idx):
-            folder = QFileDialog.getExistingDirectory(self, "Workspace do agente")
-            if not folder:
-                return
-            self.workspace_box.insertItem(idx, Path(folder).name, str(Path(folder).resolve()))
-            self.workspace_box.setCurrentIndex(idx)
+            self._pick_folder()
+            return
         if self.workspace() != self.chat.workspace:
-            self._restart("workspace trocado")
+            self._restart("pasta do projeto trocada")
+
+    def _pick_folder(self) -> None:
+        """Abre o seletor; a pasta escolhida entra no combo, fica lembrada para a próxima abertura e conecta."""
+        folder = self.choose_folder(self)
+        if not folder or not Path(folder).is_dir():
+            idx = self.workspace_box.findData(self.chat.workspace) if self.chat.workspace else -1
+            self.workspace_box.setCurrentIndex(idx if idx >= 0 else self.workspace_box.count() - 1)
+            self._show_folder_state()
+            return
+        path = str(Path(folder).resolve())
+        idx = self.workspace_box.findData(path)
+        if idx < 0:
+            idx = 0
+            self.workspace_box.insertItem(idx, Path(path).name, path)
+        self.workspace_box.setCurrentIndex(idx)
+        PF.remember(self.prefs_path, Path(path))
+        self._show_folder_state()
+        if self.workspace() != self.chat.workspace:
+            self._restart("pasta do projeto trocada")
 
     def _mode_activated(self, _idx: int) -> None:
         mode = str(self.mode_box.currentData() or "")
@@ -575,7 +628,7 @@ class ChatView(QWidget):
     def _show_permission_mode(self) -> None:
         """Mostra o modo de permissão do Studio. Em bypass a sessão do agente continua no modo que pede (o broker
         responde allow e registra cada pedido); nada a trocar no agente."""
-        self.permission_label.setText(PM.label(self.permission_mode_fn()))
+        self.permission_label.setText(PM.sentence(self.permission_mode_fn()))
 
     def _select_mode(self, mode: str) -> None:
         idx = self.mode_box.findData(mode)
@@ -617,14 +670,23 @@ class ChatView(QWidget):
         self.input.clear()
         self.empty.setVisible(False)
         self._add(UserBubble(text))
-        context = self.context_provider() if self.context_provider else ""
+        raw = self.context_provider() if self.context_provider else ""
+        parts = [(n, t) for n, t in raw if t] if isinstance(raw, list) else ([("biblioteca", raw)] if raw else [])
+        context = SEPARATOR.join(t for _n, t in parts)                         # UX-13: Biblioteca e/ou Design
         if context:
-            self._add(Notice(f"biblioteca anexada ao prompt: {len(context)} caracteres (texto exato na aba Biblioteca)", "#4aa8ff"))
+            names = [n for n, _t in parts]
+            if names == ["biblioteca"]:
+                self._add(Notice(f"biblioteca anexada ao prompt: {len(context)} caracteres (texto exato na aba Biblioteca)", "#4aa8ff"))
+            else:
+                self._add(Notice(f"anexado ao prompt ({' + '.join(names)}): {len(context)} caracteres (texto exato no "
+                                 "preview de cada um)", "#4aa8ff"))
             self.chat.add("user", text, context_chars=len(context))
         else:
             self.chat.add("user", text)
         full = compose_prompt(context, text)
         self.store.save(self.chat)
+        if parts and self.context_sent is not None:                         # o envio efetivo consome a escolha
+            self.context_sent([n for n, _t in parts])
         self._refresh_history()
         self._set_busy(True)
         self._start_wait()                                                   # sinal desde o envio, antes do 1º token
@@ -759,9 +821,9 @@ class ChatView(QWidget):
             self.chat.session_id = str(info.get("session_id") or "")
             self._populate_modes(info.get("modes") or {})
             self._populate_config(info.get("config_options") or [])
-            if info.get("mode_forced_from"):
-                self._add(Notice(f"o agente abriu no modo \"{info['mode_forced_from']}\", que decide sem pedir permissão; "
-                                 "o Studio trocou para o modo que pede permissão", "#ffc233"))
+            if info.get("mode_forced_from") and self.permission_mode_fn() == PM.ASK:   # FR-03: em bypass não contradiz
+                self._add(Notice(f"o agente abriu no modo \"{info['mode_forced_from']}\"; o Studio voltou ao modo "
+                                 "padrão dele", "#ffc233"))
             if info.get("safe_mode") is False:
                 self.no_safe_mode = True
                 self.pending_prompt = None
@@ -940,7 +1002,7 @@ class ChatView(QWidget):
                              "#3ddc84" if choice else "#ff9a9b"))
             return
         mode = self.permission_mode_fn()
-        self.permission_label.setText(PM.label(mode))
+        self.permission_label.setText(PM.sentence(mode))
         if mode == PM.BYPASS:                                               # Felipe: bypass sempre, com registro
             choice = req.strongest_once() or next((str(o["optionId"]) for o in req.options
                                                    if str(o.get("kind", "")).startswith("allow")), None)

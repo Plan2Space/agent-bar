@@ -1,0 +1,193 @@
+{
+ "items": [
+  {
+   "id": "PVTI_sintetico_01",
+   "repository": "Plan2Space/exemplo",
+   "status": "In Progress",
+   "title": "Tarefa sintética 01",
+   "content": {
+    "number": 1001,
+    "repository": "Plan2Space/exemplo",
+    "title": "Tarefa sintética 01",
+    "type": "Issue",
+    "url": "https://github.com/Plan2Space/exemplo/issues/1001"
+   },
+   "estado da prova": "NOT_TESTED",
+   "sPEC vinculada": "SPEC-EXEMPLO-002",
+   "classificação": "Feature"
+  },
+  {
+   "id": "PVTI_sintetico_02",
+   "repository": "Plan2Space/exemplo",
+   "status": "In Progress",
+   "title": "Tarefa sintética 02",
+   "content": {
+    "number": 1002,
+    "repository": "Plan2Space/exemplo",
+    "title": "Tarefa sintética 02",
+    "type": "Issue",
+    "url": "https://github.com/Plan2Space/exemplo/issues/1002"
+   },
+   "estado da prova": "NOT_TESTED",
+   "sPEC vinculada": "SPEC-EXEMPLO-003",
+   "classificação": "Feature"
+  },
+  {
+   "id": "PVTI_sintetico_03",
+   "repository": "Plan2Space/exemplo",
+   "status": "Backlog",
+   "title": "Tarefa sintética 03",
+   "content": {
+    "number": 1003,
+    "repository": "Plan2Space/exemplo",
+    "title": "Tarefa sintética 03",
+    "type": "Issue",
+    "url": "https://github.com/Plan2Space/exemplo/issues/1003"
+   },
+   "estado da prova": "NOT_TESTED",
+   "sPEC vinculada": "SPEC-EXEMPLO-001",
+   "classificação": "Feature"
+  },
+  {
+   "id": "PVTI_sintetico_04",
+   "repository": "Plan2Space/exemplo",
+   "status": "Backlog",
+   "title": "Tarefa sintética 04",
+   "content": {
+    "number": 1004,
+    "repository": "Plan2Space/exemplo",
+    "title": "Tarefa sintética 04",
+    "type": "Issue",
+    "url": "https://github.com/Plan2Space/exemplo/issues/1004"
+   },
+   "estado da prova": "NOT_TESTED",
+   "sPEC vinculada": "SPEC-EXEMPLO-002",
+   "classificação": "Feature"
+  },
+  {
+   "id": "PVTI_sintetico_05",
+   "repository": "Plan2Space/exemplo",
+   "status": "GPT Review",
+   "title": "Tarefa sintética 05",
+   "content": {
+    "number": 1005,
+    "repository": "Plan2Space/exemplo",
+    "title": "Tarefa sintética 05",
+    "type": "Issue",
+    "url": "https://github.com/Plan2Space/exemplo/issues/1005"
+   },
+   "estado da prova": "NOT_TESTED",
+   "sPEC vinculada": "SPEC-EXEMPLO-003",
+   "classificação": "Feature"
+  },
+  {
+   "id": "PVTI_sintetico_06",
+   "repository": "Plan2Space/exemplo",
+   "status": "GPT Review",
+   "title": "Tarefa sintética 06",
+   "content": {
+    "number": 1006,
+    "repository": "Plan2Space/exemplo",
+    "title": "Tarefa sintética 06",
+    "type": "Issue",
+    "url": "https://github.com/Plan2Space/exemplo/issues/1006"
+   },
+   "estado da prova": "UNIT_PASS",
+   "sPEC vinculada": "SPEC-EXEMPLO-001",
+   "classificação": "Feature"
+  },
+  {
+   "id": "PVTI_sintetico_07",
+   "repository": "Plan2Space/exemplo",
+   "status": "Done",
+   "title": "Tarefa sintética 07",
+   "content": {
+    "number": 1007,
+    "repository": "Plan2Space/exemplo",
+    "title": "Tarefa sintética 07",
+    "type": "Issue",
+    "url": "https://github.com/Plan2Space/exemplo/issues/1007"
+   },
+   "estado da prova": "SKETCHUP_PASS",
+   "sPEC vinculada": "SPEC-EXEMPLO-002"
+  },
+  {
+   "id": "PVTI_sintetico_08",
+   "repository": "Plan2Space/exemplo",
+   "status": "Done",
+   "title": "Tarefa sintética 08",
+   "content": {
+    "number": 1008,
+    "repository": "Plan2Space/exemplo",
+    "title": "Tarefa sintética 08",
+    "type": "Issue",
+    "url": "https://github.com/Plan2Space/exemplo/issues/1008"
+   },
+   "estado da prova": "SKETCHUP_PASS",
+   "sPEC vinculada": "SPEC-EXEMPLO-003"
+  },
+  {
+   "id": "PVTI_sintetico_09",
+   "repository": "Plan2Space/exemplo",
+   "status": "Blocked",
+   "title": "Tarefa sintética 09",
+   "content": {
+    "number": 1009,
+    "repository": "Plan2Space/exemplo",
+    "title": "Tarefa sintética 09",
+    "type": "Issue",
+    "url": "https://github.com/Plan2Space/exemplo/issues/1009"
+   },
+   "estado da prova": "NOT_TESTED",
+   "sPEC vinculada": "SPEC-EXEMPLO-001",
+   "classificação": "Feature"
+  },
+  {
+   "id": "PVTI_sintetico_10",
+   "repository": "Plan2Space/exemplo",
+   "status": "Blocked",
+   "title": "Tarefa sintética 10",
+   "content": {
+    "number": 1010,
+    "repository": "Plan2Space/exemplo",
+    "title": "Tarefa sintética 10",
+    "type": "Issue",
+    "url": "https://github.com/Plan2Space/exemplo/issues/1010"
+   },
+   "estado da prova": "NOT_TESTED",
+   "sPEC vinculada": "SPEC-EXEMPLO-002",
+   "classificação": "Feature"
+  },
+  {
+   "id": "PVTI_sintetico_11",
+   "repository": "Plan2Space/exemplo",
+   "status": "Ready",
+   "title": "Tarefa sintética 11",
+   "content": {
+    "number": 1011,
+    "repository": "Plan2Space/exemplo",
+    "title": "Tarefa sintética 11",
+    "type": "Issue",
+    "url": "https://github.com/Plan2Space/exemplo/issues/1011"
+   },
+   "sPEC vinculada": "SPEC-EXEMPLO-003"
+  },
+  {
+   "id": "PVTI_sintetico_12",
+   "repository": "Plan2Space/exemplo",
+   "status": "Ready",
+   "title": "Tarefa sintética 12",
+   "content": {
+    "number": 1012,
+    "repository": "Plan2Space/exemplo",
+    "title": "Tarefa sintética 12",
+    "type": "Issue",
+    "url": "https://github.com/Plan2Space/exemplo/issues/1012"
+   },
+   "estado da prova": "NOT_TESTED",
+   "sPEC vinculada": "SPEC-EXEMPLO-001",
+   "classificação": "Feature"
+  }
+ ],
+ "totalCount": 12
+}

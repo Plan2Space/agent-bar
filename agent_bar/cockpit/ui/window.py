@@ -32,7 +32,7 @@ from agent_bar.cockpit.ui.chat_sessions import ChatSessions
 from agent_bar.cockpit.ui.dev_tab import DevTab
 from agent_bar.cockpit.ui.github_tabs import ActionsTab, PrsTab
 from agent_bar.cockpit.ui.library_tab import LibraryTab
-from agent_bar.cockpit.ui.notifications_area import NeedsYouPanel, NotificationsArea
+from agent_bar.cockpit.ui.notifications_area import NeedsYouPanel, NotificationsArea, github_reading
 from agent_bar.cockpit.ui.notifications_tab import NotificationsTab
 from agent_bar.cockpit.ui.permissions_tab import PermissionsTab
 from agent_bar.cockpit.ui.review_tab import ReviewTab
@@ -103,7 +103,7 @@ class CockpitWindow(QMainWindow):
         self.library: LibraryTab | None = None
         inbox = chat_kwargs.pop("inbox", None)
         self.sessions = ChatSessions(runtime=self.runtime, inbox=inbox,              # F5: abas de sessao no Chat
-                                     context_provider=lambda: self.library.context() if self.library else "",
+                                     context_provider=self._chat_context, context_sent=self._chat_context_sent,
                                      **chat_kwargs)
         self.library = LibraryTab(lambda: self.chat.workspace(), **({"discover_fn": discover_fn} if discover_fn else {}))
         wf_kwargs = {k: chat_kwargs[k] for k in ("profiles_fn", "ask_permission") if k in chat_kwargs}
@@ -132,7 +132,8 @@ class CockpitWindow(QMainWindow):
         self.notifications = NotificationsTab(self.center, inbox=self.sessions.inbox, answer_fn=self.sessions.answer_permission,
                                               is_open_fn=self.sessions.broker.is_open)
         # UX-08: Permissões e "Precisa de você" dentro de Notificações (uma área só para o que pede o Felipe)
-        self.needs = NeedsYouPanel(self.center)
+        self.needs = NeedsYouPanel(self.center, reading_fn=lambda: github_reading(core),   # FR-06: sem garantia falsa
+                                   retry_fn=lambda: getattr(getattr(core, "worker", None), "refresh", lambda **_k: None)(force=True))
         self.notifications_area = NotificationsArea(self.notifications, self.needs, self.permissions)
         self.sessions.permission_listeners += [lambda _id: self.permissions.refresh(), lambda _id: self.notifications.refresh(),
                                                lambda _id: self.notifications_area.update_counts()]
@@ -156,6 +157,19 @@ class CockpitWindow(QMainWindow):
         self.gear.setAccessibleName("Configurações")
         self.gear.setStyleSheet("QToolButton{color:#cfcfd4;font-size:16px;border:0;padding:2px 6px}"
                                 "QToolButton:hover{color:#ffffff;background:#2a2a30;border-radius:4px}")
+        # Felipe (2026-11-28): a Central de acompanhamento (Frente D) estava no main sem nenhum botão que a abrisse.
+        # "Visão geral" abre numa janela própria, não-modal: nada de 5ª área (§6 do pedido de 2026-11-27).
+        from agent_bar.cockpit.ui.theme.qt import style as theme_style
+        self.overview_btn = QToolButton()
+        self.overview_btn.setText("Visão geral")
+        self.overview_btn.setAccessibleName("Visão geral do projeto")
+        self.overview_btn.setToolTip("Acompanhamento do projeto: repositórios, PRs, frentes, SPECs e evidências")
+        theme_style(self.overview_btn, "QToolButton{color:@text;font-size:12px;border:1px solid @border;"
+                                       "border-radius:4px;padding:2px 8px}QToolButton:hover{background:@hover}")
+        self.overview_btn.clicked.connect(self.open_overview)
+        self.overview_collect = None                                         # None = a coleta padrão da Frente D
+        self._overview = None
+        cl.addWidget(self.overview_btn)
         cl.addWidget(self.notifications.bell)
         cl.addWidget(self.gear)
         self.tabs.setCornerWidget(corner, Qt.Corner.TopRightCorner)
@@ -262,6 +276,28 @@ class CockpitWindow(QMainWindow):
             raise ValueError(f"objeto sem destino na navegação: {obj!r}")
         self._page_shown(self.current_page())
 
+    def open_overview(self):
+        """A Central de acompanhamento (Frente D) numa janela não-modal; a leitura já começa ao abrir."""
+        from shiboken6 import isValid
+
+        from agent_bar.cockpit.ui.project_overview import open_project_overview
+        dlg = self._overview
+        if dlg is not None and isValid(dlg) and dlg.isVisible():
+            dlg.raise_()
+            dlg.activateWindow()
+            return dlg
+        kw = {} if self.overview_collect is None else {"collect": self.overview_collect}
+        dlg = open_project_overview(self, **kw)
+        # revisão do #225: o diálogo tem WA_DeleteOnClose; ao ser destruído, a referência morre junto (senão o próximo
+        # clique tocaria um objeto C++ já apagado e nada abriria)
+        dlg.destroyed.connect(lambda _obj=None, d=dlg: self._forget_overview(d))
+        self._overview = dlg
+        return dlg
+
+    def _forget_overview(self, dlg) -> None:
+        if self._overview is dlg:
+            self._overview = None
+
     def current_page(self):
         """O objeto que o Felipe está vendo: a área atual, Configurações, ou a subpágina de Avançado."""
         if self.stack.currentWidget() is self.tabs:
@@ -283,6 +319,21 @@ class CockpitWindow(QMainWindow):
         self.show_page(target)
         if target is self.permissions and ref:
             self.permissions.select(ref)
+
+    def design_context(self) -> str:
+        """UX-13: a seleção do Design, só se o Felipe marcou "Anexar" (o texto é o do preview)."""
+        review = getattr(self, "review", None)
+        return review.design.attach_text() if review is not None else ""
+
+    def _chat_context(self) -> list[tuple[str, str]]:
+        """O que o Chat anexa ao próximo prompt: a Biblioteca e/ou o Design, cada um pelo texto exato do seu preview."""
+        lib = self.library.context() if self.library else ""
+        return [(name, text) for name, text in (("biblioteca", lib), ("Design", self.design_context())) if text]
+
+    def _chat_context_sent(self, names: list[str]) -> None:
+        """A escolha de anexar o Design vale para UM envio (revisão do #124): depois dele, desmarca."""
+        if "Design" in names and getattr(self, "review", None) is not None:
+            self.review.design.attach_box.setChecked(False)
 
     @property
     def chat(self) -> ChatView:
