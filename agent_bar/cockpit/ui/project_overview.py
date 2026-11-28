@@ -8,6 +8,7 @@ Sem cor própria: herda o tema; os tokens do Design System (DS-01) entram quando
 """
 from __future__ import annotations
 
+import datetime as dt
 import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
@@ -15,8 +16,10 @@ from concurrent.futures import ThreadPoolExecutor
 from PySide6.QtCore import QObject, Qt, Signal
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QComboBox,
     QDialog,
     QGridLayout,
+    QHBoxLayout,
     QHeaderView,
     QLabel,
     QPushButton,
@@ -29,8 +32,16 @@ from PySide6.QtWidgets import (
 
 from agent_bar.cockpit import project_sources as src
 from agent_bar.cockpit import project_status as ps
+from agent_bar.cockpit import project_timeline as tl
 
 Collect = Callable[[], ps.Overview]
+ALL_REPOS, ALL_KINDS = "todos os repositórios", "todos os tipos"
+
+
+def _when(at: str | None) -> str:
+    if not at:
+        return "data desconhecida"
+    return at if len(at) == 10 else at.replace("T", " ").replace("Z", "")[:16]
 UNKNOWN = ps.UNKNOWN
 SPEC_COLUMNS = (ps.PLANEJADO, ps.EM_IMPLEMENTACAO, ps.IMPLEMENTADO, ps.EM_REVISAO, ps.INTEGRADO, ps.COMPROVADO,
                 ps.BLOQUEADO, ps.UNKNOWN)
@@ -48,7 +59,7 @@ def default_collect() -> ps.Overview:
     from agent_bar.cockpit.github import GhClient
     now = time.time()
     return ps.collect_overview(GhClient(), "Plan2Space", now=now, specs=lambda: src.collect_specs(now=now),
-                               evidence=lambda: src.collect_evidence(now=now))
+                               evidence=lambda: src.collect_evidence(now=now), timeline=True)
 
 
 class _Bridge(QObject):
@@ -125,6 +136,7 @@ class ProjectOverview(QWidget):
         for col, width in ((0, 330), (1, 380), (2, 260)):
             self.catalog.setColumnWidth(col, width)
         tabs.addTab(self.catalog, "Catálogo de SPECs")
+        tabs.addTab(self._timeline_page(), "Timeline")
 
         lay = QVBoxLayout(self)
         lay.addWidget(self.title)
@@ -159,6 +171,45 @@ class ProjectOverview(QWidget):
     # ------------------------------------------------------------------------------------------------ exibição
     def _tile(self, name: str, value: str) -> None:
         self._tiles[name].setText(f"{name}\n{value}")
+
+    # ------------------------------------------------------------------------------------------------ timeline
+    def _timeline_page(self) -> QWidget:
+        page = QWidget()
+        self.tl_repo, self.tl_period, self.tl_kind = QComboBox(), QComboBox(), QComboBox()
+        self.tl_repo.addItem(ALL_REPOS)
+        self.tl_period.addItems(list(tl.PERIODS))
+        self.tl_period.setCurrentText("7d")
+        self.tl_kind.addItems([ALL_KINDS, *tl.KINDS])
+        for box in (self.tl_repo, self.tl_period, self.tl_kind):
+            box.currentTextChanged.connect(self._render_timeline)
+        self.tl_status = QLabel("")
+        self.tl_status.setWordWrap(True)
+        self.timeline = _table(["Quando (UTC)", "Evento", "Repositório", "Referência", "Título"])
+        bar = QHBoxLayout()
+        for text, box in (("Repositório", self.tl_repo), ("Período", self.tl_period), ("Tipo", self.tl_kind)):
+            bar.addWidget(QLabel(text))
+            bar.addWidget(box)
+        bar.addStretch(1)
+        lay = QVBoxLayout(page)
+        lay.addLayout(bar)
+        lay.addWidget(self.tl_status)
+        lay.addWidget(self.timeline, 1)
+        return page
+
+    def _render_timeline(self, *_: object) -> None:
+        ov = self.overview
+        if ov is None:
+            return
+        now = dt.datetime.fromtimestamp(ov.read_at, dt.timezone.utc).isoformat()
+        repo = self.tl_repo.currentText()
+        kind = self.tl_kind.currentText()
+        events = tl.filter_events(ov.timeline, now=now, period=self.tl_period.currentText(),
+                                  repo="" if repo == ALL_REPOS else repo, kinds=() if kind == ALL_KINDS else (kind,))
+        _fill(self.timeline, [[_when(e.at), e.kind, e.repo, e.ref, e.title] for e in events])
+        missing = "; ".join(f"{r.split('/')[-1]} ({why})" for r, why in sorted(ov.timeline_failed.items()))
+        self.tl_status.setText(f"{len(events)} de {len(ov.timeline)} eventos · fontes: GitHub (PRs e CI) e "
+                               "evidence (index.json); agentes e construção chegam com o EventStore do agent-runtime"
+                               + (f" · não lido: {missing}" if missing else ""))
 
     def set_overview(self, ov: ps.Overview) -> None:
         self.overview = ov
@@ -211,6 +262,13 @@ class ProjectOverview(QWidget):
                               UNKNOWN if linked is None else str(sum(n for name, n in linked
                                                                      if src.spec_matches(d.path, name)))]
                              for d in cat])
+        current = self.tl_repo.currentText()
+        self.tl_repo.blockSignals(True)
+        self.tl_repo.clear()
+        self.tl_repo.addItems([ALL_REPOS, *sorted({e.repo for e in ov.timeline})])
+        self.tl_repo.setCurrentText(current if self.tl_repo.findText(current) >= 0 else ALL_REPOS)
+        self.tl_repo.blockSignals(False)
+        self._render_timeline()
 
 
 def open_project_overview(parent: QWidget | None = None, collect: Collect | None = default_collect,
