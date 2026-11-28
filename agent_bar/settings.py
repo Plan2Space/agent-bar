@@ -20,6 +20,7 @@ class Settings:
     minimized: bool = False
     bar_enabled: bool = False          # D-UX-1: barra flutuante opcional e desligada; o atalho abre o Cockpit (janela principal)
     first_run_done: bool = False       # FR-01: a lista "Vamos preparar o P2S Studio" já foi concluída uma vez
+    theme: str = "p2s-escuro"          # DS-01: chave do tema salvo (catálogo em cockpit/ui/theme)
 
 
 def settings_path() -> Path:
