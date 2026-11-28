@@ -108,6 +108,12 @@ class ProviderClient:
         return f
 
     # ------------------------------------------------------------------------------------------------ conversa
+    def published_tools(self) -> list[str] | None:
+        """Ferramentas que o executor do Studio publica neste adaptador (None = adaptador sem executor: Conversa)."""
+        host = getattr(self.adapter, "tool_host", None)
+        names = getattr(host, "names", None)
+        return sorted(names()) if callable(names) else None
+
     def cpu_share(self, model_id: str) -> float | None:
         """Quanto do modelo está na CPU agora (só adaptador que mede; os outros: None = não dá para saber)."""
         fn = getattr(self.adapter, "cpu_share", None)
