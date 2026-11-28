@@ -21,6 +21,7 @@ class HealthRow:
     name: str
     state: str
     lines: list[str] = field(default_factory=list)
+    action: str = ""                    # FR-04: "auth"/"not_found" = o card ganha o componente "Conectar GitHub"
 
 
 def _level_state(level) -> str:
@@ -111,7 +112,8 @@ def github_row(snap) -> HealthRow:
     state = _level_state(g.level)
     if q.error and state == OK:
         state = WARN
-    return HealthRow("GitHub", state, [g.line(), queue])
+    action = {"Sem acesso": "auth", "Nao instalado": "not_found"}.get(str(getattr(g, "label", "")), "")
+    return HealthRow("GitHub", state, [g.line(), queue], action=action)
 
 
 def eventstore_row(snap) -> HealthRow:
