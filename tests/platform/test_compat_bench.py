@@ -170,6 +170,33 @@ def test_cases_without_an_engine_tool_are_blocked_with_an_owner(server, engine_r
                 any("Parametr" in str(m.get("content")) for m in b["messages"])]
 
 
+def test_blocked_cases_cite_the_exact_gap_of_the_engine_matrix(server, engine_root, tmp_path):
+    import hashlib
+    matrix = {"schema_version": "1.0.0", "engine": {"ref": "e" * 40}, "gaps": [
+        {"id": "G1", "title": "write_fixture fora do motor"}, {"id": "G2", "title": "allowlist fora do motor"},
+        {"id": "G3", "title": "sem inspecao avulsa"}, {"id": "G4", "title": "sem refinamento"},
+        {"id": "G5", "title": "publicacao fora do motor"}, {"id": "G10", "title": "sem troca de material"}]}
+    path = engine_root / "contracts" / "tool_compat_matrix.json"
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps(matrix), encoding="utf-8")
+    a, host = bench(server, engine_root, tmp_path)
+    run = cb.run_model(a, host, "tool-a", ["C3", "C7", "C8", "C9"])
+    by = {c["id"]: c for c in run["cases"]}
+    assert by["C3"]["gaps"] == ["G1"] and "G1: write_fixture fora do motor" in by["C3"]["reasons"]
+    assert by["C7"]["gaps"] == ["G4", "G10"] and "G10: sem troca de material" in by["C7"]["reasons"]
+    assert by["C8"]["gaps"] == ["G5", "G3"] and by["C9"]["gaps"] == ["G2"]
+    assert run["conditions"]["matrix"] == {"path": "contracts/tool_compat_matrix.json", "present": True,
+                                           "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                                           "engine": "e" * 40}
+
+
+def test_without_the_matrix_in_the_pinned_engine_the_record_says_so(server, engine_root, tmp_path):
+    a, host = bench(server, engine_root, tmp_path)
+    run = cb.run_model(a, host, "tool-a", ["C3"])
+    assert run["conditions"]["matrix"]["present"] is False
+    assert any("G1" in r and "ausente" in r for r in run["cases"][0]["reasons"])
+
+
 def test_axes_are_reported_separately_without_a_single_score(server, engine_root, tmp_path):
     good_script(server)
     a, host = bench(server, engine_root, tmp_path)
