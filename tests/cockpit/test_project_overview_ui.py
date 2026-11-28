@@ -162,3 +162,48 @@ def test_discovery_failure_renders_as_unknown(view):
     txt = _text(view)
     assert "Repositórios monitorados\n8 (descoberta de novos: desconhecido)" in txt
     assert "atenção: github" in txt
+
+
+def _ov_sources(broken=False):
+    from agent_bar.cockpit import project_sources as src
+    from tests.cockpit.test_project_sources import EVID, SPECS, FakeGit
+    g = FakeGit(lab=False, broken=broken)
+    return ps.collect_overview(client(), "Plan2Space", now=NOW, specs=lambda: src.collect_specs(SPECS, now=NOW, git=g),
+                               evidence=lambda: src.collect_evidence(EVID, now=NOW, git=g))
+
+
+def test_evidence_tile_shows_published_runs_and_lab_unknown(view):
+    view.set_overview(_ov_sources())
+    assert "Evidências publicadas\n7 (lab/: desconhecido)" in _text(view)
+
+
+def test_spec_catalog_tab_shows_declared_status_verbatim(view):
+    ov = _ov_sources()
+    view.set_overview(ov)
+    assert view.catalog.rowCount() == len(ov.specs.specs)
+    col = [view.catalog.horizontalHeaderItem(c).text() for c in range(view.catalog.columnCount())]
+    assert "Declarado na SPEC" in col
+    row = next(r for r in range(view.catalog.rowCount())
+               if view.catalog.item(r, 0).text() == "plataforma/SPEC-EXEMPLO-002_modelo_de_sessoes.md")
+    assert view.catalog.item(row, col.index("Declarado na SPEC")).text().startswith("vigente desde")
+
+
+def test_sources_unavailable_are_unknown_in_the_view(view):
+    view.set_overview(_ov_sources(broken=True))
+    txt = _text(view)
+    assert "Evidências publicadas\ndesconhecido" in txt and view.catalog.rowCount() == 0
+
+
+def test_health_tile_counts_ok_with_ref_as_ok(view):
+    view.set_overview(_ov_sources())
+    tile = next(lab.text() for lab in view.findChildren(QtWidgets.QLabel) if lab.text().startswith("Saúde"))
+    assert "engineering-specs" not in tile and "evidence" not in tile and "runtime" in tile
+
+
+def test_text_columns_are_left_aligned_and_numbers_centered():
+    from PySide6.QtCore import Qt
+    t = po._table(["a", "b", "c"])
+    po._fill(t, [["nome", "um título bem mais longo que catorze", "12"]])
+    assert t.item(0, 1).textAlignment() & Qt.AlignmentFlag.AlignLeft.value
+    assert t.item(0, 2).textAlignment() & Qt.AlignmentFlag.AlignHCenter.value
+    t.deleteLater()

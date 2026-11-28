@@ -15,10 +15,12 @@ Estados de entrega (§7.3), derivados do card do Project (coluna ``status`` + ca
 from __future__ import annotations
 
 from collections import Counter
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
 from agent_bar.cockpit.github import DEFAULT_REPOS, GhClient, GhError
+from agent_bar.cockpit.project_sources import EvidenceSnapshot, SpecCatalog
 
 UNKNOWN = "desconhecido"
 MONITORED = DEFAULT_REPOS
@@ -211,8 +213,10 @@ class Overview:
     github: GithubOverview
     project: ProjectSnapshot
     read_at: float
-    active_agents: int | None = None        # fonte: Runtime/EventStore (próximo PR). Sem ela: desconhecido.
+    active_agents: int | None = None        # fonte: Runtime/EventStore (agent-runtime#73). Sem ela: desconhecido.
     health: tuple[tuple[str, str], ...] = ()
+    specs: SpecCatalog | None = None
+    evidence: EvidenceSnapshot | None = None
 
 
 def _github_health(gh: GithubOverview) -> str:
@@ -226,10 +230,24 @@ def _github_health(gh: GithubOverview) -> str:
     return f"parcial ({len(bad)} sem resposta: {', '.join(b.split('/')[-1] for b in bad)}{tail})"
 
 
-def collect_overview(client: GhClient, org: str, now: float, project_number: int = 1) -> Overview:
+def _local_health(snap: SpecCatalog | EvidenceSnapshot | None) -> str:
+    if snap is None:
+        return UNKNOWN
+    if snap.state != "ok":
+        return f"indisponível ({snap.error})"
+    return f"ok ({snap.ref} @ {snap.sha[:7]})"
+
+
+def collect_overview(client: GhClient, org: str, now: float, project_number: int = 1,
+                     specs: Callable[[], SpecCatalog] | None = None,
+                     evidence: Callable[[], EvidenceSnapshot] | None = None) -> Overview:
     gh = collect_github(client, org, now)
     proj = collect_project(client, org, project_number, now)
+    spec_cat = specs() if specs else None
+    ev = evidence() if evidence else None
     health = (("github", _github_health(gh)),
               ("project", "ok" if proj.state == "ok" else f"indisponível ({proj.error})"),
+              ("engineering-specs", _local_health(spec_cat)),
+              ("evidence", _local_health(ev)),
               ("runtime", UNKNOWN))
-    return Overview(gh, proj, now, None, health)
+    return Overview(gh, proj, now, None, health, spec_cat, ev)

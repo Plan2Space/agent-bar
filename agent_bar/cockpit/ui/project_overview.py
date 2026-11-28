@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from agent_bar.cockpit import project_sources as src
 from agent_bar.cockpit import project_status as ps
 
 Collect = Callable[[], ps.Overview]
@@ -45,7 +46,9 @@ def _hhmm(t: float) -> str:
 
 def default_collect() -> ps.Overview:
     from agent_bar.cockpit.github import GhClient
-    return ps.collect_overview(GhClient(), "Plan2Space", now=time.time())
+    now = time.time()
+    return ps.collect_overview(GhClient(), "Plan2Space", now=now, specs=lambda: src.collect_specs(now=now),
+                               evidence=lambda: src.collect_evidence(now=now))
 
 
 class _Bridge(QObject):
@@ -64,12 +67,14 @@ def _table(headers: list[str]) -> QTableWidget:
 
 
 def _fill(t: QTableWidget, rows: list[list[str]]) -> None:
+    """Número e estado curto ficam centralizados; texto longo (nome, título, status declarado) fica à esquerda."""
     t.setRowCount(len(rows))
     for r, row in enumerate(rows):
         for c, val in enumerate(row):
             item = QTableWidgetItem(val)
-            if c > 0:
-                item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            short = val.isdigit() or val == UNKNOWN or len(val) <= 14
+            align = Qt.AlignmentFlag.AlignCenter if c > 0 and short else Qt.AlignmentFlag.AlignLeft
+            item.setTextAlignment(align | Qt.AlignmentFlag.AlignVCenter)
             t.setItem(r, c, item)
 
 
@@ -115,6 +120,11 @@ class ProjectOverview(QWidget):
         tabs.addTab(self.repos, "Repositórios")
         tabs.addTab(self.fronts, "Frentes")
         tabs.addTab(self.specs, "SPECs")
+        self.catalog = _table(["Arquivo", "Título", "Declarado na SPEC", "Tarefas vinculadas no Project"])
+        self.catalog.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        for col, width in ((0, 330), (1, 380), (2, 260)):
+            self.catalog.setColumnWidth(col, width)
+        tabs.addTab(self.catalog, "Catálogo de SPECs")
 
         lay = QVBoxLayout(self)
         lay.addWidget(self.title)
@@ -175,8 +185,12 @@ class ProjectOverview(QWidget):
         in_impl = None if proj.state != "ok" else sum(
             1 for s in proj.specs if s.states.get(ps.EM_IMPLEMENTACAO) or s.states.get(ps.IMPLEMENTADO))
         self._tile("SPECs com tarefa em andamento", _n(in_impl))
-        self._tile("Evidências publicadas", UNKNOWN)            # coletor do evidence lab/: próximo PR
-        bad = [k for k, v in ov.health if v != "ok"]
+        ev = ov.evidence
+        if ev is None or ev.state != "ok":
+            self._tile("Evidências publicadas", UNKNOWN)
+        else:
+            self._tile("Evidências publicadas", f"{ev.published_runs} (lab/: {_n(ev.lab_runs)})")
+        bad = [k for k, v in ov.health if not v.startswith("ok")]
         self._tile("Saúde", "ok" if not bad else "atenção: " + ", ".join(bad))
 
         _fill(self.repos, [[r.repo,
@@ -191,6 +205,12 @@ class ProjectOverview(QWidget):
                              str(f.counts.get(ps.T_PLANNED, 0)), ", ".join(f.specs) or "—"] for f in proj.fronts])
         _fill(self.specs, [[s.spec, str(s.total), *(str(s.states.get(k, 0)) for k in SPEC_COLUMNS)]
                            for s in proj.specs])
+        cat = ov.specs.specs if ov.specs is not None and ov.specs.state == "ok" else []
+        linked = [(s.spec, s.total) for s in proj.specs] if proj.state == "ok" else None
+        _fill(self.catalog, [[d.path, d.title, d.declared_status,
+                              UNKNOWN if linked is None else str(sum(n for name, n in linked
+                                                                     if src.spec_matches(d.path, name)))]
+                             for d in cat])
 
 
 def open_project_overview(parent: QWidget | None = None, collect: Collect | None = default_collect,
