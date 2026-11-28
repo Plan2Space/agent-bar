@@ -82,15 +82,25 @@ class LegacyBridge(QObject):
         self.theme_fn = theme_fn
         self._busy = False
 
+    @staticmethod
+    def compose(w: QWidget, original: str, theme: Theme) -> str:
+        """O estilo final do widget: o antigo traduzido e, numa JANELA, o QSS global do tema na frente (aplicar o QSS
+        por janela custa ~0,1 s; no QApplication repoliria até widget de aba oculta, ~0,8 s)."""
+        own = translate(original, theme)
+        if w.isWindow() and theme.key != C.DEFAULT:
+            from agent_bar.cockpit.ui.theme.qt import stylesheet
+            return stylesheet(theme) + ("\n" + own if own else "")
+        return own
+
     def restyle(self, w: QWidget) -> None:
         original = w.property(PROP)
         if original is None:
             original = w.styleSheet()
-            if not original or not HEXC.search(original):
+            if not w.isWindow() and (not original or not HEXC.search(original)):
                 return
             w.setProperty(PROP, original)
         theme = self.theme_fn()
-        new = translate(str(original), theme)
+        new = self.compose(w, str(original), theme)
         w.setProperty(KEY, theme.key)
         if w.styleSheet() != new:
             self._busy = True
@@ -112,8 +122,10 @@ class LegacyBridge(QObject):
         return _Quiet()
 
     def restyle_all(self) -> None:
+        """Só o que está na tela agora: o resto (abas não visitadas, diálogos fechados) segue o tema ao aparecer."""
         for w in QApplication.allWidgets():
-            self.restyle(w)
+            if w.isVisible():
+                self.restyle(w)
 
     def eventFilter(self, obj, event) -> bool:                                 # noqa: N802 - API do Qt
         # StyleChange: estilo trocado num widget visível (ou o 1º estilo). Show: o Qt não avisa a troca num widget
@@ -123,7 +135,7 @@ class LegacyBridge(QObject):
             original = obj.property(PROP)
             if original is not None:
                 last = obj.property(KEY)                                     # o que a ponte deixou nele
-                expected = translate(str(original), C.get(str(last))) if last else str(original)
+                expected = self.compose(obj, str(original), C.get(str(last))) if last else str(original)
                 if current != expected:
                     obj.setProperty(PROP, current)                           # o código trocou o estilo: novo original
             self.restyle(obj)

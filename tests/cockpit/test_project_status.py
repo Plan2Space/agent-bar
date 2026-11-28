@@ -33,6 +33,8 @@ class Recorded:
             return 0, json.dumps(_load("project_items.json")), ""
         if sub == ("pr", "list"):
             state = argv[argv.index("--state") + 1]
+            if state == "all":                     # timeline (§7.5): fixture sintético
+                return 0, (json.dumps(_load("timeline_prs_all.json")) if repo == "Plan2Space/agent-bar" else "[]"), ""
             if repo == "Plan2Space/agent-bar":
                 return 0, json.dumps(_load(f"prs_{state}_agent-bar.json")), ""
             return 0, "[]", ""

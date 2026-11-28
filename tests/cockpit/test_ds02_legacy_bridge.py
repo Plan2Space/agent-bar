@@ -59,36 +59,46 @@ def mgr():
 
 
 def test_existing_new_and_restyled_widgets_follow_the_theme(mgr):
+    box = QtWidgets.QWidget()                                                  # os rótulos vivem numa janela
+    lay = QtWidgets.QVBoxLayout(box)
     before = QtWidgets.QLabel("antes")
     before.setStyleSheet("color:#8f8f98")
+    lay.addWidget(before)
+    box.show()
+    _APP.processEvents()
     try:
         mgr.apply(LIGHT)
         assert before.styleSheet() == "color:#59636e"                          # já existia
+        assert "#0969da" in box.styleSheet()                                   # a janela ganhou o QSS global
         after = QtWidgets.QLabel("depois")
+        lay.addWidget(after)
         after.setStyleSheet("color:#e6e6e6;background:#1d1d22")                # criado depois do tema
+        _APP.processEvents()                                                   # aparece (Show) antes de pintar
         assert after.styleSheet() == f"color:{LIGHT.text};background:{LIGHT.surface}"
-        before.show()
-        _APP.processEvents()
         before.setStyleSheet("color:#ff9a9b")                                  # o código trocou o estilo (visível)
         assert before.styleSheet() == f"color:{LIGHT.danger}"
-        hidden = QtWidgets.QLabel("aba não visitada")
+        tab = QtWidgets.QWidget()                                              # aba não visitada
+        hidden = QtWidgets.QLabel("oculto", tab)
         hidden.setStyleSheet("color:#8f8f98")
         hidden.setStyleSheet("color:#ffc233")                                  # trocado oculto: o Qt não avisa
-        hidden.show()
+        tab.setParent(box)
+        lay.addWidget(tab)
+        tab.show()
         _APP.processEvents()
         assert hidden.styleSheet() == f"color:{LIGHT.warning}"                 # ao aparecer, segue o tema
-        hidden.deleteLater()
         mgr.apply(C.get(C.DEFAULT))                                            # volta ao padrão: textos originais
         assert before.styleSheet() == "color:#ff9a9b"
         assert after.styleSheet() == "color:#e6e6e6;background:#1d1d22"
-        after.deleteLater()
+        assert box.styleSheet() == ""                                          # a janela volta sem o QSS global
     finally:
-        before.deleteLater()
+        box.deleteLater()
 
 
 def test_the_default_theme_restores_the_app_as_it_was(mgr):
-    original = _APP.styleSheet()
+    from PySide6.QtGui import QPalette
+    window = _APP.palette().color(QPalette.ColorRole.Window).name()
+    sheet = _APP.styleSheet()
     mgr.apply(LIGHT)
-    assert _APP.styleSheet() != original
+    assert _APP.palette().color(QPalette.ColorRole.Window).name() == LIGHT.bg
     mgr.apply(C.get(C.DEFAULT))
-    assert _APP.styleSheet() == original
+    assert _APP.palette().color(QPalette.ColorRole.Window).name() == window and _APP.styleSheet() == sheet

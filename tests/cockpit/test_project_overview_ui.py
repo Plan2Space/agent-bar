@@ -207,3 +207,65 @@ def test_text_columns_are_left_aligned_and_numbers_centered():
     assert t.item(0, 1).textAlignment() & Qt.AlignmentFlag.AlignLeft.value
     assert t.item(0, 2).textAlignment() & Qt.AlignmentFlag.AlignHCenter.value
     t.deleteLater()
+
+
+# ------------------------------------------------------------------------------------------------ timeline (§7.5)
+
+
+def _ov_timeline(**kw):
+    from agent_bar.cockpit import project_sources as src
+    from tests.cockpit.test_project_sources import EVID, FakeGit
+    return ps.collect_overview(client(**kw), "Plan2Space", now=NOW, timeline=True,
+                               evidence=lambda: src.collect_evidence(EVID, now=NOW, git=FakeGit()))
+
+
+def _rows(t):
+    return [[t.item(r, c).text() for c in range(t.columnCount())] for r in range(t.rowCount())]
+
+
+def test_timeline_tab_lists_every_event_with_all_period(view):
+    ov = _ov_timeline()
+    view.set_overview(ov)
+    view.tl_period.setCurrentText("tudo")
+    assert view.timeline.rowCount() == len(ov.timeline)
+    assert any(r[1] == "Evidência publicada" for r in _rows(view.timeline))
+
+
+def test_timeline_repo_filter(view):
+    view.set_overview(_ov_timeline())
+    view.tl_period.setCurrentText("tudo")
+    view.tl_repo.setCurrentText("Plan2Space/evidence")
+    assert {r[2] for r in _rows(view.timeline)} == {"Plan2Space/evidence"}
+
+
+def test_timeline_kind_filter(view):
+    view.set_overview(_ov_timeline())
+    view.tl_period.setCurrentText("tudo")
+    view.tl_kind.setCurrentText("CI falhou")
+    assert {r[1] for r in _rows(view.timeline)} == {"CI falhou"}
+
+
+def test_timeline_period_is_relative_to_the_read_time(view):
+    ov = _ov_timeline()
+    view.set_overview(ov)
+    view.tl_period.setCurrentText("24h")
+    import datetime as dt
+
+    from agent_bar.cockpit import project_timeline as tl
+    now = dt.datetime.fromtimestamp(ov.read_at, dt.timezone.utc).isoformat()
+    assert view.timeline.rowCount() == len(tl.filter_events(ov.timeline, now=now, period="24h"))
+
+
+def test_undated_event_says_date_unknown(view):
+    ov = _ov_timeline()
+    from agent_bar.cockpit import project_timeline as tl
+    ov = ps.Overview(ov.github, ov.project, ov.read_at, None, ov.health, None, None,
+                     tl.evidence_events(("run-sem-data",)), {})
+    view.set_overview(ov)
+    view.tl_period.setCurrentText("tudo")
+    assert _rows(view.timeline)[0][0] == "data desconhecida"
+
+
+def test_timeline_reports_repos_it_could_not_read(view):
+    view.set_overview(_ov_timeline(fail_repos=("Plan2Space/evidence",)))
+    assert "não lido" in view.tl_status.text() and "evidence" in view.tl_status.text()
