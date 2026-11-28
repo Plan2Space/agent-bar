@@ -155,7 +155,7 @@ def check_c2(trace: Trace, ctx: dict) -> tuple[str, list[str]]:
 
 
 ENGINE_GAP = "o motor ainda nao publica a ferramenta necessaria (matriz §9, Frente A)"
-MATRIX = "contracts/tool_compat_matrix.json"                                 # no checkout do motor (sketchup-mcp-next#73)
+MATRIX = "contracts/tool_compat_matrix.json"                                 # no checkout do motor (sketchup-mcp-next)
 CASES: tuple[Case, ...] = (
     Case("C0", "Descoberta", "operation",
          ("Sem chamar nenhuma ferramenta, liste os nomes exatos das ferramentas que voce pode chamar agora, um por "
