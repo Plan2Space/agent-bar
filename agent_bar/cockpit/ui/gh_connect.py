@@ -14,9 +14,10 @@ from PySide6.QtCore import Signal
 from PySide6.QtWidgets import QApplication, QFrame, QHBoxLayout, QLabel, QPushButton, QSizePolicy
 
 from agent_bar import controls as ctl
+from agent_bar.cockpit.ui.theme.qt import style
 
-BTN_CSS = ("QPushButton{background:#2a2a30;color:#e6e6e6;border:1px solid #3a3a44;border-radius:5px;padding:4px 10px}"
-           "QPushButton:hover{background:#34343c}")                         # o mesmo das abas do GitHub (sem import circular)
+BTN_CSS = ("QPushButton{background:@surface_alt;color:@text;border:1px solid @border;border-radius:5px;padding:4px 10px}"
+           "QPushButton:hover{background:@hover}")                          # tokens do Design System (segue o tema)
 INSTALL_URL = "https://cli.github.com/"
 LOGIN_CMD = "gh auth login"
 SETUP_KINDS = ("auth", "not_found")                                           # falhas que o usuário resolve sozinho
@@ -47,17 +48,17 @@ class GhConnect(QFrame):
         self.open_terminal = open_terminal
         self.open_url = open_url
         self.setObjectName("gh_connect")
-        self.setStyleSheet("QFrame#gh_connect{background:#1e2430;border:1px solid #34405a;border-radius:6px}")
+        style(self, "QFrame#gh_connect{background:@surface_alt;border:1px solid @accent;border-radius:6px}")
         self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)   # não estica no lugar da tabela
         lay = QHBoxLayout(self)
         lay.setContentsMargins(10, 8, 10, 8)
         self.label = QLabel("")
         self.label.setWordWrap(True)
-        self.label.setStyleSheet("color:#dfe6f3;font-size:12px;border:0")
+        style(self.label, "color:@text;font-size:12px;border:0")
         self.primary = QPushButton("Conectar")
         self.retry_btn = QPushButton("Verificar de novo")
         for b in (self.primary, self.retry_btn):
-            b.setStyleSheet(BTN_CSS)
+            style(b, BTN_CSS)
         lay.addWidget(self.label, 1)
         lay.addWidget(self.primary)
         lay.addWidget(self.retry_btn)

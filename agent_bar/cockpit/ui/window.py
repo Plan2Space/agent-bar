@@ -157,6 +157,19 @@ class CockpitWindow(QMainWindow):
         self.gear.setAccessibleName("Configurações")
         self.gear.setStyleSheet("QToolButton{color:#cfcfd4;font-size:16px;border:0;padding:2px 6px}"
                                 "QToolButton:hover{color:#ffffff;background:#2a2a30;border-radius:4px}")
+        # Felipe (2026-11-28): a Central de acompanhamento (Frente D) estava no main sem nenhum botão que a abrisse.
+        # "Visão geral" abre numa janela própria, não-modal: nada de 5ª área (§6 do pedido de 2026-11-27).
+        from agent_bar.cockpit.ui.theme.qt import style as theme_style
+        self.overview_btn = QToolButton()
+        self.overview_btn.setText("Visão geral")
+        self.overview_btn.setAccessibleName("Visão geral do projeto")
+        self.overview_btn.setToolTip("Acompanhamento do projeto: repositórios, PRs, frentes, SPECs e evidências")
+        theme_style(self.overview_btn, "QToolButton{color:@text;font-size:12px;border:1px solid @border;"
+                                       "border-radius:4px;padding:2px 8px}QToolButton:hover{background:@hover}")
+        self.overview_btn.clicked.connect(self.open_overview)
+        self.overview_collect = None                                         # None = a coleta padrão da Frente D
+        self._overview = None
+        cl.addWidget(self.overview_btn)
         cl.addWidget(self.notifications.bell)
         cl.addWidget(self.gear)
         self.tabs.setCornerWidget(corner, Qt.Corner.TopRightCorner)
@@ -262,6 +275,17 @@ class CockpitWindow(QMainWindow):
         else:
             raise ValueError(f"objeto sem destino na navegação: {obj!r}")
         self._page_shown(self.current_page())
+
+    def open_overview(self):
+        """A Central de acompanhamento (Frente D) numa janela não-modal; a leitura já começa ao abrir."""
+        from agent_bar.cockpit.ui.project_overview import open_project_overview
+        if self._overview is not None and self._overview.isVisible():
+            self._overview.raise_()
+            self._overview.activateWindow()
+            return self._overview
+        kw = {} if self.overview_collect is None else {"collect": self.overview_collect}
+        self._overview = open_project_overview(self, **kw)
+        return self._overview
 
     def current_page(self):
         """O objeto que o Felipe está vendo: a área atual, Configurações, ou a subpágina de Avançado."""
