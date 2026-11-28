@@ -73,7 +73,7 @@ tipado sem executar nada; resposta em nome de outro modelo (`done.model` diferen
 
 ## Render pelo modelo local (LAB-16)
 
-Quando o motor tem a fixture `plan_alt_5x3_e3a` (sala 5x3 com cama, `sketchup-mcp-next#67`) e a render_spec de
+Quando o motor tem a fixture `plan_alt_5x3_e3a` (sala 5x3 com cama, no motor `sketchup-mcp-next`) e a render_spec de
 amostra, o perfil publica uma segunda ferramenta, `render_room_sample(run_id, cameras)`:
 
 - o modelo só nomeia um `run_id` de build `completed` deste executor com render_spec, e 1 ou 2 câmeras da spec;
@@ -102,7 +102,7 @@ amostra, o perfil publica uma segunda ferramenta, `render_room_sample(run_id, ca
 
 ## Guardas de borda do motor (`--via tool-cli`)
 
-O build chama `python -m p2s_engine.run … --via tool-cli` (sketchup-mcp-next#66/#72): o próprio motor recusa, antes de
+O build chama `python -m p2s_engine.run … --via tool-cli` (motor `sketchup-mcp-next`): o próprio motor recusa, antes de
 qualquer I/O e antes de abrir o SketchUp, fixture fora de `tests/fixtures/`/`runs/`, saída fora de `runs/`, `run_id`
 fora do padrão e SketchUp/V-Ray já abertos. Nesse caso não há `run_manifest`; o motor deixa
 `{status: BLOCKED, error: {code, message}}` no stdout, que o executor grava em `<request_id>.engine.stdout.json` (o
