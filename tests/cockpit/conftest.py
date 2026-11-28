@@ -79,3 +79,18 @@ def permission_mode_ask_unless_the_test_says_otherwise(monkeypatch):
     "ask" aqui. Os testes do bypass trocam o modo explicitamente (tests/cockpit/test_permission_bypass.py)."""
     from agent_bar.cockpit import permission_mode as PM
     monkeypatch.setenv(PM.ENV, PM.ASK)
+
+
+@pytest.fixture(autouse=True)
+def no_real_ollama_listing(monkeypatch):
+    """O seletor do Chat lista os modelos instalados do Ollama (GET /api/tags). Nos testes nada sai para a rede: lista
+    vazia, a menos que o teste injete a sua."""
+    from agent_bar.cockpit import profiles as prof
+    monkeypatch.setattr(prof, "_installed_ollama_models", lambda: [])
+
+
+@pytest.fixture(autouse=True)
+def isolated_settings(tmp_path, monkeypatch):
+    """Nenhum teste do cockpit lê o settings.json REAL (%APPDATA%\agent_bar). Achado de 2026-11-28: com o tema salvo do
+    Felipe (github-dark) a suíte quebrava em dezenas de testes de janela que nada têm a ver com tema."""
+    monkeypatch.setenv("AGENT_BAR_SETTINGS", str(tmp_path / "settings" / "settings.json"))

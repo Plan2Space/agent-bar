@@ -128,9 +128,12 @@ def _pump(app, cond, timeout=10.0):
 
 def test_the_agent_selector_lists_roles_with_capabilities(chat):
     v, _sent, _app = chat
+    from PySide6.QtCore import Qt
     labels = [v.agent_box.itemText(i) for i in range(v.agent_box.count())]
-    assert labels[0] == "Conversa · Ollama (local) — sem ferramentas"
-    assert labels[1].startswith("Executor Claude · Claude Code (ACP)")
+    assert labels == ["Ollama (local)", "Claude Code (ACP)"]                     # seletor: só o nome (pedido do Felipe)
+    tips = [v.agent_box.itemData(i, Qt.ItemDataRole.ToolTipRole) for i in range(v.agent_box.count())]
+    assert tips[0] == "Conversa · Ollama (local) — sem ferramentas"              # papel e capacidade: na dica
+    assert tips[1].startswith("Executor Claude · Claude Code (ACP)")
 
 
 def test_asking_sketchup_in_conversation_is_refused_and_never_sent_to_the_model(chat):
@@ -143,7 +146,7 @@ def test_asking_sketchup_in_conversation_is_refused_and_never_sent_to_the_model(
     assert not v.busy and v.input.toPlainText() == "abre o SketchUp e monta a suíte 01"   # o texto volta para a caixa
     offer = v.transcript.findChildren(W.ExecutorOffer)
     assert offer and "sem ferramentas" in offer[-1].text.text()
-    assert [b.text() for b in offer[-1].buttons] == ["Usar Executor Claude", "Enviar só como conversa"]
+    assert [b.text() for b in offer[-1].buttons] == ["Usar Claude Code (ACP)", "Enviar só como conversa"]  # nome do agente
 
 
 def test_the_offer_switches_to_the_executor_without_sending(chat):
@@ -214,7 +217,8 @@ def test_the_selector_shows_the_published_tools_after_connecting(tmp_path, monke
             f = cf.Future()
             f.set_result(None)
             return f
-    local = AgentProfile("ollama-executor", "Executor local (amostra)", ("python",), adapter="ollama-executor")
+    local = AgentProfile("ollama-executor", "Executor local (amostra)", ("python",), adapter="ollama-executor",
+                         advanced=True)                                          # só existe no modo avançado
     monkeypatch.setattr(AgentProfile, "available", lambda self: (True, ""))
     v = ChatView(ChatStore(tmp_path / "data"), provider_factory=Exec, profiles_fn=lambda: [local],
                  workspaces_fn=lambda: [tmp_path / "ws"])

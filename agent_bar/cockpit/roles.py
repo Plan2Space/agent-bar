@@ -30,8 +30,8 @@ def role_of(profile) -> str:
     adapter = getattr(profile, "adapter", "acp")
     if adapter == "ollama-executor":
         return EXECUTOR_LOCAL
-    if adapter == "ollama" or getattr(profile, "demo", False):
-        return CONVERSA
+    if adapter in ("ollama", "ollama-auto") or getattr(profile, "demo", False):
+        return CONVERSA                                                         # ollama-auto: o Chat confere ao conectar
     if adapter == "acp" and getattr(profile, "key", "") in EXECUTOR_KEYS:
         return EXECUTOR_CLAUDE
     return ACP_OTHER
@@ -42,6 +42,11 @@ def capabilities(profile, tools: Iterable[str] = (), mcp: str = "", published: I
     conferido (vazio = não conferido); `published` = ferramentas que o adaptador do executor local publicou (None =
     ainda não conectado: nada é prometido)."""
     role = role_of(profile)
+    if getattr(profile, "adapter", "") == "ollama-auto":
+        if published is not None:
+            names = sorted(set(published))
+            return f"ferramentas do Studio: {', '.join(names)}" if names else "só conversa (o modelo não usa ferramenta)"
+        return "ferramentas do Studio só se o modelo anunciar e o motor estiver pronto (conferido ao conectar)"
     if role == CONVERSA:
         return "sem ferramentas (demonstração, sem LLM)" if getattr(profile, "demo", False) else "sem ferramentas"
     if role == EXECUTOR_LOCAL:                                                  # o que o adaptador publicou, nunca fixo

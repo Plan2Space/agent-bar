@@ -95,9 +95,22 @@ def _default_provider_client(profile, workspace: str, **kw):
     from agent_bar.cockpit.provider_client import ProviderClient
     from agent_bar.platform.discovery import discover
     from agent_bar.platform.ollama import OllamaAdapter
-    if profile.adapter not in ("ollama", "ollama-executor"):
+    if profile.adapter not in ("ollama", "ollama-executor", "ollama-auto"):
         raise ValueError(f"adaptador desconhecido: {profile.adapter}")
     endpoint = next(p["endpoint"] for p in discover(which=lambda _n: None) if p["provider_id"] == "ollama")
+    if profile.adapter == "ollama-auto":                                     # "Ollama · <modelo>": a ferramenta é decidida
+        from agent_bar.platform.sketchup_sample import (  # por baixo, não pelo usuário
+            SampleConfigError,
+            executor_adapter,
+        )
+
+        def plain():
+            return OllamaAdapter(endpoint, timeout=30, preferred_model=profile.model)
+        try:
+            primary = executor_adapter(endpoint)                             # motor pronto: o modelo pode usar ferramenta
+        except SampleConfigError:
+            return ProviderClient(plain(), model_id=profile.model, **kw)     # motor fora: conversa
+        return ProviderClient(primary, model_id=profile.model, fallback=plain, **kw)
     if profile.adapter == "ollama-executor":                                 # P2S-LOCAL-EXECUTOR-SKETCHUP-POC
         from agent_bar.platform.sketchup_sample import executor_adapter
         return ProviderClient(executor_adapter(endpoint), **kw)
@@ -270,9 +283,11 @@ class ChatView(QWidget):
         lay.setSpacing(6)
         head = QHBoxLayout()
         self.agent_box = FitCombo(14, full_tip=True)
-        for p in self.profiles:
+        for p in self.profiles:                                              # nome simples; o detalhe técnico vai na dica
             ok, why = p.available()
-            self.agent_box.addItem(R.label(p) if ok else f"{R.role_of(p)} · {p.label} — indisponível: {why}", p.key)
+            text = R.label(p) if p.advanced else p.label
+            self.agent_box.addItem(text if ok else f"{p.label} — indisponível: {why}", p.key)
+            self.agent_box.setItemData(self.agent_box.count() - 1, R.label(p), Qt.ItemDataRole.ToolTipRole)
             if not ok:
                 self.agent_box.model().item(self.agent_box.count() - 1).setEnabled(False)
         first_ok = next((i for i, p in enumerate(self.profiles) if p.available()[0]), 0)
@@ -533,7 +548,8 @@ class ChatView(QWidget):
         if p.adapter != "acp":                                               # provedor da plataforma (F1/F2): mesmo Chat
             self.mcp = acp_mcp.McpConfig()
             # revisão do #123: dizer só o que é verdade para o PAPEL (o Executor local tem ferramenta, do Studio)
-            self.mcp_label.setText("MCP: não se aplica (ferramentas do Studio, não MCP)"
+            self.mcp_label.setText("MCP: não se aplica (Ollama)" if p.adapter == "ollama-auto" else
+                                   "MCP: não se aplica (ferramentas do Studio, não MCP)"
                                    if R.role_of(p) == R.EXECUTOR_LOCAL else "MCP: não se aplica (Conversa, sem ferramentas)")
             self.client = self.provider_factory(
                 p, ws, on_update=lambda u, g=gen: self.bridge.update.emit(g, u),
@@ -704,19 +720,32 @@ class ChatView(QWidget):
         published = fn() if callable(fn) else None
         if published is None:
             return
-        i = self.agent_box.findData(self.profile().key)
-        if i >= 0:
-            self.agent_box.setItemText(i, R.label(self.profile(), published=published))
+        p = self.profile()
+        i = self.agent_box.findData(p.key)
+        if i >= 0:                                                           # nome simples fica; o detalhe vai na dica
+            if p.advanced:
+                self.agent_box.setItemText(i, R.label(p, published=published))
+            self.agent_box.setItemData(i, R.label(p, published=published), Qt.ItemDataRole.ToolTipRole)
+
+    def _effective_role(self, p) -> str:
+        """"Ollama · <modelo>": a ferramenta é decidida por baixo. Conectado, vale o adaptador que abriu a sessão; antes
+        disso, o papel conservador (Conversa: nada é prometido)."""
+        if p.adapter == "ollama-auto" and self.client is not None and self.ready and p.key == self.profile().key:
+            host = getattr(getattr(self.client, "adapter", None), "tool_host", None)
+            return R.EXECUTOR_LOCAL if host is not None else R.CONVERSA
+        return R.role_of(p)
 
     def _refuse_execution_in_conversation(self, text: str) -> bool:
         """UX-11: pedido de execução (SketchUp, build, render) numa Conversa não vai ao modelo como se ele pudesse. A
         recusa diz o motivo e oferece os Executores disponíveis; "Enviar só como conversa" é escolha explícita."""
         p = self.profile()
-        if getattr(self, "_as_conversation", False) or R.role_of(p) != R.CONVERSA or not R.wants_execution(text):
+        if (getattr(self, "_as_conversation", False) or self._effective_role(p) != R.CONVERSA
+                or not R.wants_execution(text)):
             return False
         executors = [q for q in self.profiles if R.role_of(q) in (R.EXECUTOR_CLAUDE, R.EXECUTOR_LOCAL) and q.available()[0]]
         self.input.setPlainText(text)                                        # o texto volta para a caixa
-        choices = [(f"Usar {R.role_of(q)}", lambda k=q.key: self._use_agent(k)) for q in executors]
+        choices = [(f"Usar {q.label if not q.advanced else R.role_of(q)}", lambda k=q.key: self._use_agent(k))
+                   for q in executors]
         choices.append(("Enviar só como conversa", lambda t=text: self._send_as_conversation(t)))
         self._add(ExecutorOffer(R.refusal(p, executors), choices))
         return True
