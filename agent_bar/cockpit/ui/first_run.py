@@ -23,39 +23,40 @@ from PySide6.QtWidgets import (
 
 from agent_bar import controls as ctl
 from agent_bar.cockpit import first_run as FR
+from agent_bar.cockpit.ui.theme.qt import style
 
-BTN_CSS = ("QPushButton{background:#2a2a30;color:#e6e6e6;border:1px solid #3a3a44;border-radius:5px;padding:4px 10px}"
-           "QPushButton:hover{background:#34343c}QPushButton:disabled{color:#666}")
-GLYPH = {FR.OK: ("Pronto", "#3ddc84"), FR.MISSING: ("Falta", "#ff6b6d"),   # palavras: o ✓/✗ some em fonte
-         FR.OPTIONAL: ("Opcional", "#8f8f98")}                              # sem o símbolo (vira caixa)
+BTN_CSS = ("QPushButton{background:@surface_alt;color:@text;border:1px solid @border;border-radius:5px;padding:4px 10px}"
+           "QPushButton:hover{background:@hover}QPushButton:disabled{color:@disabled_text}")   # tokens do Design System
+GLYPH = {FR.OK: ("Pronto", "success"), FR.MISSING: ("Falta", "danger"),    # palavras: o ✓/✗ some em fonte
+         FR.OPTIONAL: ("Opcional", "text_muted")}                           # sem o símbolo (vira caixa); cor = papel
 
 
 class _Row(QFrame):
     def __init__(self) -> None:
         super().__init__()
         self.setObjectName("first_run_row")
-        self.setStyleSheet("QFrame#first_run_row{background:#1d1d22;border:1px solid #2e2e36;border-radius:6px}")
+        style(self, "QFrame#first_run_row{background:@surface;border:1px solid @border;border-radius:6px}")
         lay = QHBoxLayout(self)
         lay.setContentsMargins(10, 6, 10, 6)
         self.glyph = QLabel("")
         self.glyph.setFixedWidth(64)
         self.title = QLabel("")
-        self.title.setStyleSheet("color:#e6e6e6;font-weight:600;border:0")
+        style(self.title, "color:@text;font-weight:600;border:0")
         self.title.setFixedWidth(230)
         self.sentence = QLabel("")
         self.sentence.setWordWrap(True)
-        self.sentence.setStyleSheet("color:#cfcfd4;border:0")
+        style(self.sentence, "color:@text;border:0")
         self.button = QPushButton("")
-        self.button.setStyleSheet(BTN_CSS)
+        style(self.button, BTN_CSS)
         for w, s in ((self.glyph, 0), (self.title, 0), (self.sentence, 1), (self.button, 0)):
             lay.addWidget(w, s)
         self.check: FR.Check | None = None
 
     def show_check(self, c: FR.Check) -> None:
         self.check = c
-        text, color = GLYPH[c.state]
+        text, role = GLYPH[c.state]
         self.glyph.setText(text)
-        self.glyph.setStyleSheet(f"color:{color};font-weight:600;border:0")
+        style(self.glyph, f"color:@{role};font-weight:600;border:0")
         self.title.setText(c.title)
         self.sentence.setText(c.sentence)
         self.button.setText(c.button)
@@ -75,25 +76,25 @@ class FirstRunPage(QWidget):
         lay.setContentsMargins(4, 4, 12, 4)
         lay.setSpacing(8)
         title = QLabel("Vamos preparar o P2S Studio")
-        title.setStyleSheet("color:#ffffff;font-size:16px;font-weight:600")
+        style(title, "color:@text;font-size:16px;font-weight:600")
         lay.addWidget(title)
         intro = QLabel("Confira o que o Studio usa nesta máquina. O que diz \"Falta\" precisa de você; o opcional "
                        "pode ficar para depois.")
         intro.setWordWrap(True)
-        intro.setStyleSheet("color:#bdbdc4")
+        style(intro, "color:@text_muted")
         lay.addWidget(intro)
         self.rows: dict[str, _Row] = {}
         self.rows_box = QVBoxLayout()
         lay.addLayout(self.rows_box)
         self.note = QLabel("")
         self.note.setWordWrap(True)
-        self.note.setStyleSheet("color:#7ee2a8")
+        style(self.note, "color:@success")
         lay.addWidget(self.note)
         bottom = QHBoxLayout()
         self.recheck_btn = QPushButton("Verificar de novo")
         self.start_btn = QPushButton("Começar")
         for b in (self.recheck_btn, self.start_btn):
-            b.setStyleSheet(BTN_CSS)
+            style(b, BTN_CSS)
         bottom.addStretch(1)
         bottom.addWidget(self.recheck_btn)
         bottom.addWidget(self.start_btn)
