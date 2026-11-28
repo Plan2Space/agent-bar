@@ -356,8 +356,8 @@ class ChatView(QWidget):
         self.tlay.addStretch(1)
         self.scroll.setWidget(self.transcript)
         lay.addWidget(self.scroll, 1)
-        self.empty = Notice("Converse com um agente de código no workspace escolhido. Enter envia, Shift+Enter quebra linha. "
-                            "Toda ferramenta que pedir permissão abre um diálogo; fechar o diálogo recusa.")
+        self.empty = Notice("Converse com um agente de código na pasta do projeto escolhida. Enter envia, "
+                            "Shift+Enter quebra linha.")                     # FR-03: permissão só no rodapé
         self._add(self.empty)
         bottom = QHBoxLayout()
         self.input = Composer(enter_sends=load_enter_sends(self.prefs_path))
@@ -378,7 +378,8 @@ class ChatView(QWidget):
         lay.addLayout(bottom)
         self.status = QLabel("desconectado")
         self.status.setStyleSheet("color:#8f8f98;font-size:11px")
-        self.permission_label = QLabel(PM.label(self.permission_mode_fn()))  # o Felipe sabe em que modo está
+        self.permission_label = QLabel(PM.sentence(self.permission_mode_fn()))  # FR-03: a ÚNICA frase de permissão
+        self.permission_label.setWordWrap(True)
         self.permission_label.setStyleSheet("color:#8f8f98;font-size:11px")
         self.mcp_label = QLabel("")                                            # UX-12: o que a sessão declarou
         self.mcp_label.setStyleSheet("color:#8f8f98;font-size:11px")
@@ -626,7 +627,7 @@ class ChatView(QWidget):
     def _show_permission_mode(self) -> None:
         """Mostra o modo de permissão do Studio. Em bypass a sessão do agente continua no modo que pede (o broker
         responde allow e registra cada pedido); nada a trocar no agente."""
-        self.permission_label.setText(PM.label(self.permission_mode_fn()))
+        self.permission_label.setText(PM.sentence(self.permission_mode_fn()))
 
     def _select_mode(self, mode: str) -> None:
         idx = self.mode_box.findData(mode)
@@ -819,9 +820,9 @@ class ChatView(QWidget):
             self.chat.session_id = str(info.get("session_id") or "")
             self._populate_modes(info.get("modes") or {})
             self._populate_config(info.get("config_options") or [])
-            if info.get("mode_forced_from"):
-                self._add(Notice(f"o agente abriu no modo \"{info['mode_forced_from']}\", que decide sem pedir permissão; "
-                                 "o Studio trocou para o modo que pede permissão", "#ffc233"))
+            if info.get("mode_forced_from") and self.permission_mode_fn() == PM.ASK:   # FR-03: em bypass não contradiz
+                self._add(Notice(f"o agente abriu no modo \"{info['mode_forced_from']}\"; o Studio voltou ao modo "
+                                 "padrão dele", "#ffc233"))
             if info.get("safe_mode") is False:
                 self.no_safe_mode = True
                 self.pending_prompt = None
@@ -1000,7 +1001,7 @@ class ChatView(QWidget):
                              "#3ddc84" if choice else "#ff9a9b"))
             return
         mode = self.permission_mode_fn()
-        self.permission_label.setText(PM.label(mode))
+        self.permission_label.setText(PM.sentence(mode))
         if mode == PM.BYPASS:                                               # Felipe: bypass sempre, com registro
             choice = req.strongest_once() or next((str(o["optionId"]) for o in req.options
                                                    if str(o.get("kind", "")).startswith("allow")), None)
