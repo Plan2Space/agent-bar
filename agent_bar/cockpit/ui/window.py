@@ -157,6 +157,19 @@ class CockpitWindow(QMainWindow):
         self.gear.setAccessibleName("Configurações")
         self.gear.setStyleSheet("QToolButton{color:#cfcfd4;font-size:16px;border:0;padding:2px 6px}"
                                 "QToolButton:hover{color:#ffffff;background:#2a2a30;border-radius:4px}")
+        # Felipe (2026-11-28): a Central de acompanhamento (Frente D) estava no main sem nenhum botão que a abrisse.
+        # "Visão geral" abre numa janela própria, não-modal: nada de 5ª área (§6 do pedido de 2026-11-27).
+        from agent_bar.cockpit.ui.theme.qt import style as theme_style
+        self.overview_btn = QToolButton()
+        self.overview_btn.setText("Visão geral")
+        self.overview_btn.setAccessibleName("Visão geral do projeto")
+        self.overview_btn.setToolTip("Acompanhamento do projeto: repositórios, PRs, frentes, SPECs e evidências")
+        theme_style(self.overview_btn, "QToolButton{color:@text;font-size:12px;border:1px solid @border;"
+                                       "border-radius:4px;padding:2px 8px}QToolButton:hover{background:@hover}")
+        self.overview_btn.clicked.connect(self.open_overview)
+        self.overview_collect = None                                         # None = a coleta padrão da Frente D
+        self._overview = None
+        cl.addWidget(self.overview_btn)
         cl.addWidget(self.notifications.bell)
         cl.addWidget(self.gear)
         self.tabs.setCornerWidget(corner, Qt.Corner.TopRightCorner)
@@ -272,6 +285,28 @@ class CockpitWindow(QMainWindow):
             page.done.connect(lambda: self.show_page(self.sessions))
             page._wired = True
         return page
+
+    def open_overview(self):
+        """A Central de acompanhamento (Frente D) numa janela não-modal; a leitura já começa ao abrir."""
+        from shiboken6 import isValid
+
+        from agent_bar.cockpit.ui.project_overview import open_project_overview
+        dlg = self._overview
+        if dlg is not None and isValid(dlg) and dlg.isVisible():
+            dlg.raise_()
+            dlg.activateWindow()
+            return dlg
+        kw = {} if self.overview_collect is None else {"collect": self.overview_collect}
+        dlg = open_project_overview(self, **kw)
+        # revisão do #225: o diálogo tem WA_DeleteOnClose; ao ser destruído, a referência morre junto (senão o próximo
+        # clique tocaria um objeto C++ já apagado e nada abriria)
+        dlg.destroyed.connect(lambda _obj=None, d=dlg: self._forget_overview(d))
+        self._overview = dlg
+        return dlg
+
+    def _forget_overview(self, dlg) -> None:
+        if self._overview is dlg:
+            self._overview = None
 
     def current_page(self):
         """O objeto que o Felipe está vendo: a área atual, Configurações, ou a subpágina de Avançado."""
