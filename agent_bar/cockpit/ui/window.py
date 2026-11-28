@@ -170,6 +170,16 @@ class CockpitWindow(QMainWindow):
         self.overview_collect = None                                         # None = a coleta padrão da Frente D
         self._overview = None
         cl.addWidget(self.overview_btn)
+        from agent_bar.cockpit.ui.theme import (
+            catalog as theme_catalog,  # TE-01: Temas no canto superior direito
+        )
+        from agent_bar.cockpit.ui.theme import qt as theme_qt
+        from agent_bar.cockpit.ui.theme_picker import themes_button
+        self.theme_manager = theme_qt.manager()
+        self.themes_btn = themes_button(self.theme_manager, self.open_themes)
+        if self.theme_manager.saved.key != theme_catalog.DEFAULT:            # o tema salvo, ao abrir (padrão: nada muda)
+            self.theme_manager.apply(self.theme_manager.saved)
+        cl.addWidget(self.themes_btn)
         cl.addWidget(self.notifications.bell)
         cl.addWidget(self.gear)
         self.tabs.setCornerWidget(corner, Qt.Corner.TopRightCorner)
@@ -275,6 +285,14 @@ class CockpitWindow(QMainWindow):
         else:
             raise ValueError(f"objeto sem destino na navegação: {obj!r}")
         self._page_shown(self.current_page())
+
+    def open_themes(self):
+        """TE-01: o modal de temas (prévia por hover; Salvar grava; Esc/Cancelar restauram)."""
+        from agent_bar.cockpit.ui.theme_picker import ThemePicker
+        picker = ThemePicker(self.theme_manager, self)
+        picker.open()
+        self._theme_picker = picker
+        return picker
 
     def open_overview(self):
         """A Central de acompanhamento (Frente D) numa janela não-modal; a leitura já começa ao abrir."""

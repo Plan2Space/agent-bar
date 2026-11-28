@@ -23,10 +23,13 @@ ORG = "Plan2Space"
 PRIVATE_REPOS = ("claude-engineering-skills", "design-library", "engineering-specs", "evidence", "sketchup-mcp-next")
 PUBLIC_REPOS = ("agent-bar", "agent-runtime", "sketchup-mcp")
 _P = "|".join(re.escape(r) for r in PRIVATE_REPOS)
-# referência a CONTEÚDO de repo privado: URL de issue/PR/arquivo/commit, ou "Org/repo#123"
-_PRIVATE_CONTENT = re.compile(rf"github\.com/{ORG}/(?:{_P})/(?:issues|pull|blob|tree|commit|raw)/|{ORG}/(?:{_P})#\d+")
+# referência a CONTEÚDO de repo privado: URL de issue/PR/arquivo/commit, "Org/repo#123" ou "repo#123" sem a org.
+# Sem diferenciar maiúsculas: o GitHub não diferencia na org nem no repo.
+_PRIVATE_CONTENT = re.compile(rf"github\.com/{ORG}/(?:{_P})/(?:issues|pull|blob|tree|commit|raw)/"
+                              rf"|{ORG}/(?:{_P})#\d+|(?<![\w./-])(?:{_P})#\d+", re.IGNORECASE)
 # em docs só é aceito link imutável a arquivo: blob|tree/<sha40>/
-_DOC_ALLOWED = re.compile(rf"github\.com/{ORG}/(?:{_P})/(?:blob|tree)/[0-9a-f]{{40}}/")
+_DOC_ALLOWED = re.compile(rf"github\.com/{ORG}/(?:{_P})/(?:blob|tree)/[0-9a-f]{{40}}/", re.IGNORECASE)
+_PRIVATE_NAMES = {r.lower() for r in PRIVATE_REPOS} | {f"{ORG}/{r}".lower() for r in PRIVATE_REPOS}
 _SYNTHETIC = "sintétic"
 _REAL_REPOS = tuple(f"{ORG}/{r}" for r in PRIVATE_REPOS + PUBLIC_REPOS)
 
@@ -38,6 +41,10 @@ def fixture_violations(path: Path, text: str) -> list[str]:
             data = json.loads(text)
         except json.JSONDecodeError:
             return out
+        for obj in _objects(data):         # lista de issues fora do formato do Project: título + repo privado
+            repo = str(obj.get("repository") or obj.get("repo") or "").strip().lower()
+            if obj.get("title") and repo in _PRIVATE_NAMES:
+                out.append(f"{path}: item com título de repo privado {repo}: {str(obj['title'])[:60]!r}")
         items = data.get("items") if isinstance(data, dict) else None
         for i, item in enumerate(items or []):
             if not isinstance(item, dict) or not isinstance(item.get("content"), dict):
@@ -49,6 +56,16 @@ def fixture_violations(path: Path, text: str) -> list[str]:
             if repos & set(_REAL_REPOS):
                 out.append(f"{path}: card {i} aponta para repo real da org: {sorted(repos & set(_REAL_REPOS))}")
     return out
+
+
+def _objects(data: object):
+    if isinstance(data, dict):
+        yield data
+        for v in data.values():
+            yield from _objects(v)
+    elif isinstance(data, list):
+        for v in data:
+            yield from _objects(v)
 
 
 def doc_violations(path: Path, text: str) -> list[str]:
@@ -107,4 +124,37 @@ def test_guard_accepts_a_synthetic_card():
     (f"[x](https://github.com/{ORG}/agent-runtime/issues/50)", False),
 ])
 def test_doc_guard(text, bad):
+    assert bool(doc_violations(Path("docs/x.md"), text)) is bad
+
+
+# ------------------------------------------------- follow-up do #219 (SHOULDs do revisor): brechas de escopo
+
+
+@pytest.mark.parametrize("text", [
+    "corrigido em sketchup-mcp-next#76",                                   # repo#N sem a org
+    "ver plan2space/evidence#12",                                          # org em minúsculas
+    "https://github.com/plan2space/design-library/issues/3",               # URL com a org em minúsculas
+])
+def test_fixture_guard_rejects_private_refs_without_org_or_in_lowercase(text):
+    assert fixture_violations(Path("tests/fixtures/x.txt"), text)
+
+
+def test_fixture_guard_rejects_a_bare_issue_list_from_a_private_repo():
+    text = json.dumps([{"title": "Uma issue real", "repository": "plan2space/claude-engineering-skills"}])
+    assert fixture_violations(Path("tests/fixtures/x.json"), text)
+
+
+def test_fixture_guard_rejects_a_real_title_even_with_a_synthetic_repo_and_url():
+    """Isola a regra do marcador: repo inventado e URL sintética não bastam, o título precisa ser sintético."""
+    card = _card("[Feature] Título copiado do board", f"{ORG}/exemplo", f"https://github.com/{ORG}/exemplo/issues/1001")
+    assert fixture_violations(Path("tests/fixtures/x.json"), json.dumps({"items": [card]}))
+
+
+@pytest.mark.parametrize("text,bad", [
+    ("ver sketchup-mcp-next#76", True),
+    ("ver PLAN2SPACE/engineering-specs#9", True),
+    ("ver agent-runtime#50", False),                                       # repo público
+    ("o next-gen-sketchup-mcp-next#1 não é da org", False),                # nome maior que contém o privado
+])
+def test_doc_guard_without_org_and_any_case(text, bad):
     assert bool(doc_violations(Path("docs/x.md"), text)) is bad
