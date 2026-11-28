@@ -71,11 +71,34 @@ def test_a_theme_round_trips_through_json():
     ({"density": "gigante"}, "density"),
     ({"key": "../../x"}, "key"),
     ({"radius": "5; drop"}, "radius"),
+    # revisão do #157 (MUST): font_family entrava cru no QSS global e um tema injetava regras
+    ({"font_family": 'Segoe UI"; } QPushButton { color:#16161a; background:#16161a; } QX { a:"'}, "font_family"),
+    ({"font_family": "Segoe UI; color:red"}, "font_family"),
+    ({"font_family": "Segoe{UI}"}, "font_family"),
+    ({"font_family": "Segoe\\UI"}, "font_family"),
+    ({"font_family": "@text"}, "font_family"),
+    ({"font_family": "url(file:///C:/x)"}, "font_family"),
+    ({"font_family": "x" * 61}, "font_family"),
+    ({"font_family": ""}, "font_family"),
 ])
 def test_an_imported_theme_is_only_data(bad, why):
     data = C.get("graphite").to_dict() | bad
     with pytest.raises(T.ThemeError, match=why):
         T.from_dict(data)
+
+
+@pytest.mark.parametrize("family", ['Segoe UI"; } QX { a:"', "a;b", "a{b", "a}b", "a\\b", "@bg", "a'b", "url(x)"])
+def test_no_theme_can_carry_qss_syntax_in_its_font_even_when_built_in_code(family):
+    """Defesa na origem: o Theme recusa a fonte perigosa em QUALQUER caminho (catálogo, editor, importação)."""
+    with pytest.raises(T.ThemeError, match="font_family"):
+        replace(C.get("graphite"), font_family=family)
+
+
+@pytest.mark.parametrize("theme", C.THEMES, ids=lambda t: t.key)
+def test_every_textual_value_that_reaches_the_qss_is_safe(theme):
+    from agent_bar.cockpit.ui.theme import qt as Q
+    for name, value in Q.values(theme).items():
+        assert not set(value) & set("\"';{}\\@"), f"{theme.key}: {name}={value!r}"
 
 
 def test_search_and_category_filter():
